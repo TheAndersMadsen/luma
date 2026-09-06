@@ -7,7 +7,7 @@ const root = path.resolve(import.meta.dirname, "../../..");
 const inventory = JSON.parse(fs.readFileSync(path.join(root, "contracts/ambiance-v2.json"), "utf8"));
 const invariantIds = Array.from({ length: 12 }, (_, index) => `invariant-${String(index + 1).padStart(2, "0")}`);
 const paperIds = ["surface-manifest", "origin-provenance", "cognition-authority", "inference-ability", "earned-authority", "concurrency", "recovery", "memory-lifecycle", "content-references", "performance-and-evaluation"];
-const productIds = ["pin-realtime-media", "pin-physical-acceptance", "center-surface", "macos-surface", "android-surface", "pixel-default-digital-assistant", "linux-surface", "shield-playback-context", "movie-list-and-trailer-handoff", "document-explanation-desktop-continuation", "restaurant-pixel-navigation", "private-message-personal-continuation", "release-and-live-verification"];
+const productIds = ["pin-realtime-media", "pin-physical-acceptance", "center-surface", "macos-surface", "android-surface", "thin-client-azure-tts", "integration-continuity", "pixel-default-digital-assistant", "linux-surface", "shield-playback-context", "movie-list-and-trailer-handoff", "document-explanation-desktop-continuation", "restaurant-pixel-navigation", "private-message-personal-continuation", "release-and-live-verification"];
 
 function nonblank(value) {
   assert.equal(typeof value, "string");
@@ -45,7 +45,7 @@ function validate(value, readSource = (file) => {
     assert.ok(!evidence.has(item.id), "duplicate evidence ID");
     assert.ok(["implementation", "test-definition"].includes(item.kind));
     nonblank(item.path);
-    assert.match(item.path, /^(cosmos|center|pin|platform|contracts)\/[A-Za-z0-9_./\[\]-]+$/u);
+    assert.match(item.path, /^(cosmos|center|pin|platform|contracts|clients)\/[A-Za-z0-9_./\[\]-]+$/u);
     assert.ok(!item.path.split("/").some((part) => part === ".." || part === "." || part === ""));
     assert.notEqual(item.path, "contracts/ambiance-v2.json", "inventory is not implementation evidence");
     assert.notEqual(item.path, "platform/deploy/acceptance/ambiance-v2.test.mjs", "metadata tests are not implementation evidence");

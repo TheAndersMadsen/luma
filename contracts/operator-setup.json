@@ -126,6 +126,30 @@
   },
   "commands": [
     {
+      "id": "client.build.macos",
+      "tokens": ["client", "build", "macos"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build a native macOS development app outside the source checkout.",
+      "usage": "revival client build macos",
+      "documentationAnchor": "README.md#development"
+    },
+    {
+      "id": "client.check.macos",
+      "tokens": ["client", "check", "macos"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build and test the native macOS client without launching or installing it.",
+      "usage": "revival client check macos",
+      "documentationAnchor": "README.md#development"
+    },
+    {
       "id": "init",
       "tokens": [
         "init"

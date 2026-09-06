@@ -41,6 +41,22 @@
   ],
   "evidence": [
     {
+      "id": "native-client-core-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/surface-client/src/lib.rs",
+      "anchor": "pub async fn retry_pending",
+      "scope": "Defines the shared native HTTPS/WSS connection client with platform signing and protected journal callbacks, durable exact-request recovery, boot/session fencing and a public-text-only capability ceiling.",
+      "limitation": "Client implementation only. Native output, media, context transfer, physical storage/lifecycle acceptance and installed-device behavior remain separate gates."
+    },
+    {
+      "id": "macos-client-model-test-definition",
+      "kind": "test-definition",
+      "path": "clients/macos/Tests/CosmosMacTests/ClientModelTests.swift",
+      "anchor": "func testExactRetryNeverResendsAnEditedDraft",
+      "scope": "Defines explicit preparation, bound server choice, input limits, exact retry, pending/reconnect controls, preserved drafts and stale-operation fencing for the native macOS panel.",
+      "limitation": "Pure Swift model tests with a synthetic bridge. They do not exercise Keychain, system shortcut delivery, native network transport, audio, document capture or physical device behavior."
+    },
+    {
       "id": "native-installation-manifest-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/surface_registry.rs",
@@ -197,7 +213,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/browser_center_acceptance.rs",
       "anchor": "async fn browser_center_application_acceptance()",
-      "scope": "The Center image driver exercises owner approval, signed native challenge/open and raw-secret room bootstrap, then one native SDK text request and exact retry through the same coordinator as Center. It verifies separate voice policies, actual Chrome DOM acknowledgment, cancellation/payload clearing, native revocation and continued browser heartbeat before leave, using native Cosmos, PostgreSQL, HTTPS/WSS and the SFU.",
+      "scope": "The Center image driver uses the production native Rust client for owner-approved challenge/open, raw-secret room bootstrap and one text request. It requires default-trust TLS rejection before signing, explicit-CA HTTPS/WSS, completion-journal save recovery and same-boot crash/reconnect replay without cursor or lease advancement. It verifies separate voice policies, actual Chrome DOM acknowledgment, cancellation/payload clearing, native revocation, completed SDK shutdown and continued browser heartbeat using native Cosmos, PostgreSQL and the SFU.",
       "limitation": "Authentication is synthetic. The explicit local driver uses synthetic cognition by default; --openrouter-stdin selects one real provider request and labels the result. Ordinary tests ignore this gate. Does not establish production networking, physical Pin playback or full paper conformance."
     },
     {
@@ -761,8 +777,8 @@
       "sourceSections": ["4.1", "6.1"],
       "requirement": "A native macOS client implements the common surface contract with truthful audio, rendering, permissions, lock/sleep and availability constraints.",
       "acceptance": "Required product deliverable: verify native lifecycle, playback stop, local confirmation, protected credential storage and installable packaging; no competing assistant authority. Completion is separate from the first verified Cosmos/Center server rollout.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["native-client-core-definition", "macos-client-model-test-definition"]
     },
     {
       "id": "android-surface",
@@ -774,10 +790,28 @@
       "evidence": []
     },
     {
+      "id": "thin-client-azure-tts",
+      "basis": "cosmos-product",
+      "sourceSections": ["4.3", "4.4", "5.1", "5.2"],
+      "requirement": "All thin clients use Cosmos-mediated Azure TTS whenever synthesized speech is used, including macOS, Omarchy, Pixel, Shield and the Ai Pin. Provider credentials remain in Cosmos.",
+      "acceptance": "Verify authorized Azure audio through each actual client, selected output and local playback evidence. Denied disclosure, unavailable Azure, privacy changes, revocation, interruption and lock must suppress or stop speech without falling back to OS voices or another TTS provider. Listening, processing and speaking indicators reflect their distinct observed states. A current input-only client does not establish speech acceptance.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "integration-continuity",
+      "basis": "cosmos-product",
+      "sourceSections": ["3.4", "4.3", "4.4", "4.6", "5.3"],
+      "requirement": "Preserve the existing Cosmos integrations as conversational product capabilities by reusing their provider adapters through Ambiance-scoped services and typed actions, rather than retaining the old orchestration authority or silently removing useful integrations.",
+      "acceptance": "Inventory every existing integration and distinguish configured, conversationally usable and hardware-dependent states in Center. Prove each migrated path through real request admission, scoped context/provider disclosure, permitted output and exact effect evidence where applicable. Public lookups, personal-data retrieval and consequential actions receive their appropriate independent permissions; a configured provider alone is not evidence that an integration works.",
+      "status": "pending",
+      "evidence": []
+    },
+    {
       "id": "pixel-default-digital-assistant",
       "basis": "cosmos-product",
       "sourceSections": ["4.1", "4.2", "4.3", "4.4", "5.1"],
-      "requirement": "The Pixel client is selectable as Android's default digital assistant and presents a compact on-demand assistant panel over the current app, using the same Cosmos runtime as the other surfaces.",
+      "requirement": "The Pixel client is selectable as Android's default digital assistant and presents a compact on-demand assistant panel over the current app, using the same Cosmos runtime as the other surfaces. Follow the supplied dark/cyan visual reference with native dynamic text, accessible type and distinct listening, processing and observed-speaking states.",
       "acceptance": "Verify supported Android assistant-role selection, actual system invocation, native session UI, microphone permission, cancellation, background/lock cleanup and protected credentials on the owner's Pixel. Current-screen context is user-invoked, source-attributed and permission-scoped; apps that withhold context remain unavailable. No always-on hotword, unrestricted screen/app access or private-memory authority is inferred from the default-assistant role. Responses and device actions pass through Cosmos with exact render/effect evidence; no direct provider-key path in the client.",
       "status": "pending",
       "evidence": []

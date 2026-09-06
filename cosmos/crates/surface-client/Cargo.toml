@@ -1,0 +1,19 @@
+[package]
+name = "cosmos-surface-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+cosmos-rtc = { path = "../rtc" }
+p256 = { version = "0.11", default-features = false, features = ["arithmetic", "ecdsa", "sha256"] }
+rand = "0.8"
+reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror.workspace = true
+tokio.workspace = true
+uuid = { workspace = true, features = ["serde"] }

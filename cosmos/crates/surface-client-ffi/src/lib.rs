@@ -1,0 +1,710 @@
+//! A single worker owns the native client. C sees public configuration,
+//! bounded commands, and redacted snapshots; protected bytes stay in callbacks.
+use cosmos_surface_client::{
+    Client, Config, Error, OperationKind, Pending, Platform, PlatformError, SecureStore, Signer,
+    TransportShutdown,
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::{
+    collections::VecDeque,
+    ffi::c_void,
+    panic::{AssertUnwindSafe, catch_unwind},
+    ptr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc as sync_mpsc,
+    },
+    thread,
+    time::Duration,
+};
+use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
+
+#[cfg(test)]
+mod tests;
+
+const OK: i32 = 0;
+const EMPTY: i32 = 1;
+const BUFFER_TOO_SMALL: i32 = 2;
+const INVALID_ARGUMENT: i32 = -1;
+const QUEUE_FULL: i32 = -2;
+const CLOSED: i32 = -3;
+const PANIC: i32 = -4;
+const UNAVAILABLE: i32 = -5;
+const MAX_CONFIG: usize = 2048;
+const MAX_TEXT: usize = 4000;
+const MAX_JOURNAL: usize = 32768;
+const MAX_EVENT: usize = 4096;
+const COMMAND_CAPACITY: usize = 16;
+const EVENT_CAPACITY: usize = 64;
+static CLIENT_OCCUPIED: AtomicBool = AtomicBool::new(false);
+
+struct ClientPermit;
+
+impl ClientPermit {
+    fn acquire() -> Option<Self> {
+        CLIENT_OCCUPIED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for ClientPermit {
+    fn drop(&mut self) {
+        CLIENT_OCCUPIED.store(false, Ordering::Release);
+    }
+}
+
+struct CallbackBarrier {
+    completed: Option<sync_mpsc::Sender<i32>>,
+    closed: Arc<AtomicBool>,
+}
+
+impl CallbackBarrier {
+    fn finish(&mut self, result: i32) {
+        self.closed.store(true, Ordering::Release);
+        if let Some(completed) = self.completed.take() {
+            let _ = completed.send(result);
+        }
+    }
+}
+
+impl Drop for CallbackBarrier {
+    fn drop(&mut self) {
+        self.finish(PANIC);
+    }
+}
+
+type ReadCallback = unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> i32;
+type SignCallback =
+    unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut u8, usize, *mut usize) -> i32;
+type WriteCallback = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CosmosSurfaceCallbacks {
+    pub context: *mut c_void,
+    pub public_key: Option<ReadCallback>,
+    pub sign_sha256: Option<SignCallback>,
+    pub read_journal: Option<ReadCallback>,
+    pub write_journal_atomically: Option<WriteCallback>,
+}
+
+struct Callbacks(CosmosSurfaceCallbacks);
+// SAFETY: The C contract requires a thread-safe context retained until the
+// callback barrier completes. No callback is spawned or invoked after it.
+unsafe impl Send for Callbacks {}
+unsafe impl Sync for Callbacks {}
+
+impl Signer for Callbacks {
+    fn public_key_sec1(&self) -> Result<[u8; 65], PlatformError> {
+        let callback = self.0.public_key.ok_or(PlatformError)?;
+        let mut output = [0u8; 65];
+        let mut written = 0;
+        // SAFETY: All buffers are initialized, writable, and live for this call.
+        let result = unsafe {
+            callback(
+                self.0.context,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        };
+        if result != OK || written != output.len() || output[0] != 4 {
+            return Err(PlatformError);
+        }
+        Ok(output)
+    }
+
+    fn sign_sha256(&self, message: &[u8]) -> Result<Vec<u8>, PlatformError> {
+        let callback = self.0.sign_sha256.ok_or(PlatformError)?;
+        let mut output = [0u8; 72];
+        let mut written = 0;
+        // SAFETY: The message and output buffers remain borrowed for this call.
+        let result = unsafe {
+            callback(
+                self.0.context,
+                message.as_ptr(),
+                message.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        };
+        if result != OK || written == 0 || written > output.len() {
+            return Err(PlatformError);
+        }
+        Ok(output[..written].to_vec())
+    }
+}
+
+impl SecureStore for Callbacks {
+    fn load(&self) -> Result<Option<Vec<u8>>, PlatformError> {
+        let callback = self.0.read_journal.ok_or(PlatformError)?;
+        let mut output = vec![0u8; MAX_JOURNAL];
+        let mut written = 0;
+        // SAFETY: The initialized output is exclusively writable until return.
+        let result = unsafe {
+            callback(
+                self.0.context,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut written,
+            )
+        };
+        if result == 1 && written == 0 {
+            return Ok(None);
+        }
+        if result != OK || written == 0 || written > output.len() {
+            return Err(PlatformError);
+        }
+        output.truncate(written);
+        Ok(Some(output))
+    }
+
+    fn save_atomically(&self, journal: &[u8]) -> Result<(), PlatformError> {
+        if journal.is_empty() || journal.len() > MAX_JOURNAL {
+            return Err(PlatformError);
+        }
+        let callback = self.0.write_journal_atomically.ok_or(PlatformError)?;
+        // SAFETY: This protected journal is borrowed only during the callback.
+        let result = unsafe { callback(self.0.context, journal.as_ptr(), journal.len()) };
+        if result == OK {
+            Ok(())
+        } else {
+            Err(PlatformError)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PublicConfig {
+    version: u8,
+    server_origin: String,
+    enrollment_id: String,
+    platform: String,
+    boot_epoch: String,
+}
+
+fn config(bytes: &[u8]) -> Result<Config, i32> {
+    let value: PublicConfig = serde_json::from_slice(bytes).map_err(|_| INVALID_ARGUMENT)?;
+    let uuid = |value: &str| {
+        Uuid::parse_str(value)
+            .ok()
+            .filter(|id| !id.is_nil() && id.to_string().eq_ignore_ascii_case(value))
+            .ok_or(INVALID_ARGUMENT)
+    };
+    if value.version != 1 {
+        return Err(INVALID_ARGUMENT);
+    }
+    Ok(Config {
+        server_origin: value.server_origin,
+        enrollment_id: uuid(&value.enrollment_id)?,
+        platform: match value.platform.as_str() {
+            "macos" => Platform::Macos,
+            "linux" => Platform::Linux,
+            "android" => Platform::Android,
+            "android_tv" => Platform::AndroidTv,
+            _ => return Err(INVALID_ARGUMENT),
+        },
+        boot_epoch: uuid(&value.boot_epoch)?,
+    })
+}
+
+enum Command {
+    Connect,
+    Text(String),
+    Retry,
+    Cancel,
+    Disconnect,
+}
+
+#[derive(Default)]
+struct Events {
+    snapshots: VecDeque<Vec<u8>>,
+    skipped: u64,
+}
+
+impl Events {
+    fn push(&mut self, mut snapshot: Value) {
+        if self.snapshots.len() == EVENT_CAPACITY {
+            self.snapshots.pop_front();
+            self.skipped = self.skipped.saturating_add(1);
+        }
+        snapshot["eventsSkipped"] = json!(self.skipped);
+        if let Ok(bytes) = serde_json::to_vec(&snapshot)
+            && bytes.len() <= MAX_EVENT
+        {
+            self.snapshots.push_back(bytes);
+        }
+    }
+}
+
+pub struct CosmosSurface {
+    commands: mpsc::Sender<Command>,
+    shutdown: watch::Sender<bool>,
+    events: Arc<Mutex<Events>>,
+    closed: Arc<AtomicBool>,
+    callbacks_finished: Mutex<Option<sync_mpsc::Receiver<i32>>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl CosmosSurface {
+    fn enqueue(&self, command: Command) -> i32 {
+        if self.closed.load(Ordering::Acquire) || *self.shutdown.borrow() {
+            return CLOSED;
+        }
+        match self.commands.try_send(command) {
+            Ok(()) => OK,
+            Err(mpsc::error::TrySendError::Full(_)) => QUEUE_FULL,
+            Err(mpsc::error::TrySendError::Closed(_)) => CLOSED,
+        }
+    }
+
+    fn stop(&mut self) -> i32 {
+        self.shutdown.send_replace(true);
+        self.closed.store(true, Ordering::Release);
+        let Some(worker) = self.worker.take() else {
+            return OK;
+        };
+        let result = self
+            .callbacks_finished
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .and_then(|finished| finished.recv().ok())
+            .unwrap_or(PANIC);
+        if worker.is_finished() && worker.join().is_err() {
+            return PANIC;
+        }
+        // A still-running thread owns only its runtime, transport cleanup scope,
+        // and process permit. It cannot access platform callbacks again.
+        result
+    }
+}
+
+impl Drop for CosmosSurface {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn push(events: &Mutex<Events>, snapshot: Value) {
+    // Recovery cannot expose poisoned contents outside the same safe schema.
+    events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(snapshot);
+}
+
+fn pending(value: Option<Pending>) -> Value {
+    value.map_or(Value::Null, |value| {
+        json!({
+            "kind": match value.kind {
+                OperationKind::Text => "text",
+                OperationKind::Heartbeat => "heartbeat",
+                OperationKind::Cancel => "cancel",
+            },
+            "instanceId": value.instance_id.to_string(),
+            "sequence": value.sequence,
+            "canRetry": value.can_retry,
+        })
+    })
+}
+
+fn error_code(error: &Error) -> &'static str {
+    match error {
+        Error::Pending => "pending_operation",
+        Error::NoPending => "no_pending_operation",
+        Error::Disconnected => "disconnected",
+        Error::Expired => "expired",
+        Error::InvalidConfig => "invalid_config",
+        Error::InvalidResponse => "invalid_response",
+        Error::InvalidSignature => "invalid_signature",
+        Error::Persistence => "persistence",
+        Error::InvalidJournal => "invalid_journal",
+        Error::Unavailable => "unavailable",
+        Error::InvalidInput => "invalid_input",
+        Error::Denied => "denied",
+        Error::Stale => "stale",
+        Error::Busy => "busy",
+    }
+}
+
+fn snapshot(
+    client: Option<&Client>,
+    descriptor: &Value,
+    operation: &str,
+    error: Option<&str>,
+) -> Value {
+    let status = client.map(Client::status);
+    let admission = status.as_ref().and_then(|s| s.last_admission);
+    json!({
+        "version": 1,
+        "kind": "state",
+        "operation": operation,
+        "outcome": if error.is_some() { "error" } else { "ok" },
+        "error": error,
+        "connected": status.as_ref().is_some_and(|s| s.connected),
+        "pendingOpen": status.as_ref().is_some_and(|s| s.pending_open),
+        "needsReconnect": status.as_ref().is_some_and(|s| s.needs_reconnect),
+        "descriptor": descriptor,
+        "pending": status.as_ref().map_or(Value::Null, |s| pending(s.pending)),
+        "lastUnknown": status.as_ref().map_or(Value::Null, |s| pending(s.last_unknown)),
+        "admission": admission.map(|a| json!({
+            "turnId": a.turn_id.to_string(), "generation": a.generation,
+            "duplicate": a.duplicate,
+        })),
+    })
+}
+
+async fn run(
+    config: Config,
+    callbacks: Arc<Callbacks>,
+    mut commands: mpsc::Receiver<Command>,
+    mut shutdown: watch::Receiver<bool>,
+    events: Arc<Mutex<Events>>,
+    shutdown_scope: &mut Option<TransportShutdown>,
+) {
+    let mut client = match Client::new(config, callbacks.clone(), callbacks) {
+        Ok(client) => client,
+        Err(error) => {
+            push(
+                &events,
+                snapshot(None, &Value::Null, "prepare", Some(error_code(&error))),
+            );
+            return;
+        }
+    };
+    *shutdown_scope = Some(client.transport_shutdown());
+    let descriptor = match serde_json::to_value(client.descriptor()) {
+        Ok(descriptor) => descriptor,
+        Err(_) => {
+            push(
+                &events,
+                snapshot(
+                    Some(&client),
+                    &Value::Null,
+                    "prepare",
+                    Some("invalid_response"),
+                ),
+            );
+            return;
+        }
+    };
+    push(
+        &events,
+        snapshot(Some(&client), &descriptor, "prepare", None),
+    );
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(15),
+        Duration::from_secs(15),
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        let command = tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            _ = heartbeat.tick() => None,
+            command = commands.recv() => match command { Some(command) => Some(command), None => break },
+        };
+        let operation = match &command {
+            Some(Command::Connect) => "connect",
+            Some(Command::Text(_)) => "send_text",
+            Some(Command::Retry) => "retry_pending",
+            Some(Command::Cancel) => "cancel",
+            Some(Command::Disconnect) => "disconnect",
+            None => "heartbeat",
+        };
+        // An uncertain RPC remains reserved until explicit retry/reconnect.
+        // Automatic heartbeats must not create, retry, or replace that request.
+        if command.is_none() {
+            let state = client.status();
+            if !state.connected || state.pending.is_some() || state.pending_open {
+                continue;
+            }
+        }
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            result = async {
+                match command {
+                    Some(Command::Connect) => {
+                        client.connect().await
+                    }
+                    Some(Command::Text(text)) => client.send_text(&text).await.map(|_| ()),
+                    Some(Command::Retry) => client.retry_pending().await.map(|_| ()),
+                    Some(Command::Cancel) => match client.status().last_admission {
+                        Some(value) => client.cancel(value).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_admission")));
+                            return None;
+                        }
+                    },
+                    Some(Command::Disconnect) => {
+                        client.disconnect().await
+                    }
+                    None => client.heartbeat().await,
+                }.map_or_else(|error| Some(Err(error)), |_| Some(Ok(())))
+            } => result,
+        };
+        if let Some(result) = result {
+            push(
+                &events,
+                snapshot(
+                    Some(&client),
+                    &descriptor,
+                    operation,
+                    result.as_ref().err().map(error_code),
+                ),
+            );
+        }
+    }
+    // The client journals before side effects; dropping an in-flight future
+    // leaves recoverable uncertainty. Shutdown never retries the saved input.
+    let _ = tokio::time::timeout(Duration::from_secs(5), client.disconnect()).await;
+}
+
+fn boundary(action: impl FnOnce() -> i32) -> i32 {
+    catch_unwind(AssertUnwindSafe(action)).unwrap_or(PANIC)
+}
+
+/// # Safety
+/// Pointers must satisfy the lifetimes, capacities, and callback rules in
+/// cosmos_surface.h; output and callbacks must be properly aligned and valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_create(
+    bytes: *const u8,
+    length: usize,
+    callbacks: *const CosmosSurfaceCallbacks,
+    output: *mut *mut CosmosSurface,
+) -> i32 {
+    boundary(|| {
+        if output.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: Caller supplies a writable handle slot.
+        unsafe {
+            *output = ptr::null_mut();
+        }
+        if bytes.is_null() || callbacks.is_null() || length == 0 || length > MAX_CONFIG {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: The caller guarantees readable configuration/callback storage.
+        let (bytes, callbacks) = unsafe { (std::slice::from_raw_parts(bytes, length), *callbacks) };
+        if callbacks.public_key.is_none()
+            || callbacks.sign_sha256.is_none()
+            || callbacks.read_journal.is_none()
+            || callbacks.write_journal_atomically.is_none()
+        {
+            return INVALID_ARGUMENT;
+        }
+        let config = match config(bytes) {
+            Ok(config) => config,
+            Err(code) => return code,
+        };
+        let Some(permit) = ClientPermit::acquire() else {
+            return QUEUE_FULL;
+        };
+        let (commands, receiver) = mpsc::channel(COMMAND_CAPACITY);
+        let (shutdown, stop) = watch::channel(false);
+        let (finished, callbacks_finished) = sync_mpsc::channel();
+        let events = Arc::new(Mutex::new(Events::default()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let mut handle = Box::new(CosmosSurface {
+            commands,
+            shutdown,
+            events: events.clone(),
+            closed: closed.clone(),
+            callbacks_finished: Mutex::new(Some(callbacks_finished)),
+            worker: None,
+        });
+        let callbacks = Arc::new(Callbacks(callbacks));
+        let worker = thread::Builder::new()
+            .name("cosmos-surface".into())
+            .spawn(move || {
+                let mut barrier = CallbackBarrier {
+                    completed: Some(finished),
+                    closed,
+                };
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(_) => {
+                        drop(callbacks);
+                        drop(receiver);
+                        push(
+                            &events,
+                            snapshot(None, &Value::Null, "prepare", Some("unavailable")),
+                        );
+                        drop(permit);
+                        barrier.finish(UNAVAILABLE);
+                        return;
+                    }
+                };
+                let mut shutdown_scope = None;
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    runtime.block_on(run(
+                        config,
+                        callbacks,
+                        receiver,
+                        stop,
+                        events.clone(),
+                        &mut shutdown_scope,
+                    ))
+                }));
+                if result.is_err() {
+                    push(
+                        &events,
+                        snapshot(None, &Value::Null, "prepare", Some("panic")),
+                    );
+                }
+                let outcome = if result.is_err() { PANIC } else { OK };
+                if !shutdown_scope
+                    .as_ref()
+                    .is_some_and(TransportShutdown::pending)
+                {
+                    drop(shutdown_scope);
+                    drop(runtime);
+                    drop(permit);
+                    barrier.finish(outcome);
+                    return;
+                }
+                // run has dropped Client and every platform callback and queued
+                // text. Network cleanup below cannot access callback context.
+                barrier.finish(outcome);
+                if let Some(scope) = shutdown_scope {
+                    // Retain the runtime until SDK close finishes. The process
+                    // permit bounds this callback-free tail to one worker.
+                    runtime.block_on(async {
+                        if scope.finish().await.is_err() && scope.pending() {
+                            // An unobserved completion cannot release the permit
+                            // or destroy a runtime still owning SDK work.
+                            std::future::pending::<()>().await;
+                        }
+                    });
+                }
+                drop(runtime);
+                drop(permit);
+            });
+        handle.worker = match worker {
+            Ok(worker) => Some(worker),
+            Err(_) => return UNAVAILABLE,
+        };
+        // SAFETY: Transfer ownership only after the join guard is installed.
+        unsafe {
+            *output = Box::into_raw(handle);
+        }
+        OK
+    })
+}
+
+unsafe fn enqueue(surface: *mut CosmosSurface, command: Command) -> i32 {
+    // SAFETY: Caller retains this live handle until all non-destroy calls finish.
+    unsafe { surface.as_ref() }.map_or(INVALID_ARGUMENT, |surface| surface.enqueue(command))
+}
+
+macro_rules! command {
+    ($name:ident, $command:expr) => {
+        /// # Safety
+        /// The handle must be live and cannot be concurrently destroyed.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(surface: *mut CosmosSurface) -> i32 {
+            boundary(|| unsafe { enqueue(surface, $command) })
+        }
+    };
+}
+command!(cosmos_surface_connect, Command::Connect);
+command!(cosmos_surface_retry_pending, Command::Retry);
+command!(cosmos_surface_cancel, Command::Cancel);
+command!(cosmos_surface_disconnect, Command::Disconnect);
+
+/// # Safety
+/// The handle must be live; text must be readable for length bytes until return.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_send_text(
+    surface: *mut CosmosSurface,
+    text: *const u8,
+    length: usize,
+) -> i32 {
+    boundary(|| {
+        if text.is_null() || length == 0 || length > MAX_TEXT {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: Length is bounded and caller guarantees a live readable slice.
+        let bytes = unsafe { std::slice::from_raw_parts(text, length) };
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return INVALID_ARGUMENT;
+        };
+        if text.trim().is_empty() {
+            return INVALID_ARGUMENT;
+        }
+        unsafe { enqueue(surface, Command::Text(text.to_owned())) }
+    })
+}
+
+/// # Safety
+/// The handle must be live, written must be writable, and output must be writable
+/// for capacity bytes. Output may be null only when capacity is zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_poll(
+    surface: *mut CosmosSurface,
+    output: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> i32 {
+    boundary(|| {
+        if written.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        unsafe {
+            *written = 0;
+        }
+        if output.is_null() && capacity != 0 {
+            return INVALID_ARGUMENT;
+        }
+        let Some(surface) = (unsafe { surface.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        let mut events = surface.events.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(event) = events.snapshots.front() else {
+            return EMPTY;
+        };
+        unsafe {
+            *written = event.len();
+        }
+        if capacity < event.len() {
+            return BUFFER_TOO_SMALL;
+        }
+        // SAFETY: Caller owns enough writable bytes, disjoint from Rust storage.
+        unsafe {
+            ptr::copy_nonoverlapping(event.as_ptr(), output, event.len());
+        }
+        events.snapshots.pop_front();
+        OK
+    })
+}
+
+/// # Safety
+/// Destroy a live handle exactly once, exclusively from other API calls. Keep
+/// callback context alive until return. Never call from a worker callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_destroy(surface: *mut CosmosSurface) -> i32 {
+    boundary(|| {
+        if surface.is_null() {
+            return OK;
+        }
+        // SAFETY: The caller exclusively returns the handle created by this API.
+        let mut surface = unsafe { Box::from_raw(surface) };
+        surface.stop()
+    })
+}

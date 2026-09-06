@@ -16,7 +16,7 @@ const KEY_ENV: &str = "COSMOS_AZURE_SPEECH_KEY";
 const REGION_ENV: &str = "COSMOS_AZURE_SPEECH_REGION";
 const VOICE_ENV: &str = "COSMOS_AZURE_SPEECH_VOICE";
 const DEFAULT_VOICE: &str = "en-US-AvaMultilingualNeural";
-static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+static HTTP: OnceLock<Result<reqwest::Client, AzureSpeechError>> = OnceLock::new();
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_UNARY_AUDIO_BYTES: usize = 4 * 1024 * 1024 - 128;
 const MAX_STREAM_AUDIO_BYTES: usize = 16 * 1024 * 1024;
@@ -146,9 +146,9 @@ impl AzureSpeechClient {
                     .timeout(Duration::from_secs(30))
                     .redirect(Policy::none())
                     .build()
-                    .unwrap_or_default()
+                    .map_err(|_| AzureSpeechError::Unavailable)
             })
-            .clone();
+            .clone()?;
         Ok(Self {
             http,
             endpoint,
@@ -857,6 +857,92 @@ mod tests {
             .await
             .expect("synthesize fixture");
         assert_eq!(audio, [1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn azure_speech_rejects_redirects_without_disclosing_to_another_endpoint() {
+        use axum::{extract::Path, http::Response, routing::any};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let target_calls = Arc::new(AtomicUsize::new(0));
+        let observed_target = target_calls.clone();
+        let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}/receive", target_listener.local_addr().unwrap());
+        let target = tokio::spawn(async move {
+            axum::serve(
+                target_listener,
+                Router::new().route(
+                    "/receive",
+                    any(move || {
+                        let calls = target_calls.clone();
+                        async move {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            Bytes::from_static(b"\x01\x02\x03\x04")
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let source_calls = Arc::new(AtomicUsize::new(0));
+        let observed_source = source_calls.clone();
+        let source_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source_address = source_listener.local_addr().unwrap();
+        let source = tokio::spawn(async move {
+            axum::serve(
+                source_listener,
+                Router::new().route(
+                    "/speech/:status",
+                    post(
+                        move |Path(status): Path<u16>, headers: HeaderMap, body: String| {
+                            let calls = source_calls.clone();
+                            let destination = destination.clone();
+                            async move {
+                                calls.fetch_add(1, Ordering::SeqCst);
+                                assert_eq!(headers["ocp-apim-subscription-key"], "test-key");
+                                assert!(body.contains(">Redirect disclosure fixture.</voice>"));
+                                Response::builder()
+                                    .status(status)
+                                    .header("location", destination)
+                                    .body(Body::empty())
+                                    .unwrap()
+                            }
+                        },
+                    ),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+
+        for status in [301, 302, 303, 307, 308] {
+            let client =
+                AzureSpeechClient::for_test(format!("http://{source_address}/speech/{status}"));
+            assert_eq!(
+                client
+                    .synthesize(
+                        "Redirect disclosure fixture.",
+                        SpeechAudioFormat::Raw24Khz16BitMonoPcm,
+                    )
+                    .await,
+                Err(AzureSpeechError::Unavailable),
+            );
+            assert_eq!(
+                client
+                    .synthesize_stream(
+                        "Redirect disclosure fixture.",
+                        SpeechAudioFormat::Raw48Khz16BitMonoPcm,
+                    )
+                    .await
+                    .err(),
+                Some(AzureSpeechError::Unavailable),
+            );
+        }
+        assert_eq!(observed_source.load(Ordering::SeqCst), 10);
+        assert_eq!(observed_target.load(Ordering::SeqCst), 0);
+        source.abort();
+        target.abort();
     }
 
     #[tokio::test]

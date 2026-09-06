@@ -139,6 +139,23 @@ device sequencing or observed completion rules. Clients execute specific
 authorized actions through local APIs, hold no provider keys, and cannot gain
 unrestricted desktop access by joining the room.
 
+The Pixel assistant follows the owner's [visual reference](assets/pixel/assistant-reference.png):
+a dark, rounded response panel with a cyan outline and a separate voice indicator.
+Render live text with native controls, accessible contrast and scalable type;
+the reference image's sample headlines are illustrative content. Listening,
+processing and speaking are distinct states, and the voice indicator may show
+speaking only while local playback is observed. Reduce decorative motion when
+the system requests it.
+
+All thin-client speech must use Cosmos to synthesize authorized text with
+Azure TTS and deliver audio to the selected client. This applies to macOS,
+Omarchy, Pixel, Shield and the Pin. Clients hold no Azure credentials and do not
+substitute operating-system voices or another TTS provider. The existing
+provider-disclosure and output-privacy gates still apply; unavailable or denied
+speech remains unavailable. Audio delivery alone is not evidence of playback.
+The native voice loop and remaining legacy Pin speech paths still require
+migration and device acceptance before this requirement is established everywhere.
+
 ### Ambiance v2 work in progress
 
 The `codex/ambiance-v2-production` branch continues the Cosmos-first work from
@@ -151,9 +168,9 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.4` and deployed at
+The current server preview is published as `v0.2.0-ambiance.5` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`5d30ebb5f8670497b00e2f80dc3ad7d882012e20` and environment `production`.
+`a9e0e114feba6e0d15f0c8e77273c61293034ba1` and environment `production`.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. External browser RPC passed over direct TCP
 7881 with observed ICE selection and increasing byte counters. UDP 7882 and
@@ -170,6 +187,15 @@ coexistence on the development branch is not the release architecture: remove
 bypasses and superseded control paths before deployment. Existing regression
 tests prove compatibility only; paper-derived behavioral tests define
 architectural acceptance.
+
+Existing integrations remain product capabilities to preserve. Move their
+provider adapters behind the shared runtime's scoped services and typed actions,
+then verify the conversational path for each one. Public information lookups,
+authorized personal-data retrieval and device/external actions have different
+permission and completion requirements. A saved connection is configuration;
+Center must also make its current conversational availability clear. Replacing
+the old orchestrator must not silently turn working integrations into settings
+that the assistant cannot use.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:
@@ -367,8 +393,8 @@ lease, never the connection's fixed expiry. Native peers cannot report browser
 visibility or render acknowledgments. Closing or revoking a native connection
 fences its work while preserving an independently valid browser connection.
 There are no native REST input, control, state or close routes. Focused native,
-built-Center and full repository checks passed for this increment; it is not part
-of the deployed server preview.
+built-Center and full repository checks passed for this increment, which is
+included in the deployed `v0.2.0-ambiance.5` server preview.
 A native client must verify the configured HTTPS audience before signing and
 retain its pending attempt before sending it. Private keys and raw session
 secrets never pass through Center.
@@ -671,11 +697,15 @@ evidence that those dependencies exist.
    native Cosmos, isolated PostgreSQL and a local SFU through a same-origin HTTPS
    gateway with `/livekit` WebSocket forwarding. In Chrome it approves and revokes
    a native installation and verifies that enrollment alone grants no room or
-   input authority. A signed native connection then joins the same room as the
-   approved browser. The fixture checks native heartbeat and text retries with
-   one total cognition call, the actual Center DOM acknowledgment, native
-   cancellation and DOM clearing, then revocation and a fresh browser heartbeat
-   after native shutdown. It also grants and revokes separate local voice and
+   input authority. The production Rust client joins the same room as the
+   approved browser over certificate-verified HTTPS/WSS using a disposable CA
+   and server certificate. The default-trust client must reject that CA before
+   signing. The fixture recovers a failed admission-journal save with one total
+   cognition call, checks the actual Center DOM acknowledgment and cancellation,
+   then reconstructs the client after a crash and retries its exact pending
+   heartbeat without advancing the server cursor or lease. Revocation and a
+   fresh browser heartbeat follow completed native SDK shutdown. It also grants
+   and revokes separate local voice and
    speech permissions through the owner UI. Authentication and the cognition response are
    synthetic; no provider, real account, Pin, external-network or media acceptance
    is implied. Supply `COSMOS_TEST_DATABASE_URL` pointing to isolated loopback
@@ -688,13 +718,14 @@ evidence that those dependencies exist.
    The SFU JSON supplies `url`, `key` and `secret` for an isolated loopback SFU.
    The driver creates disposable local authentication and TLS credentials, writes
    bounded status and screenshot artifacts outside the checkout, and removes its
-   container and transient credentials. Native shared-room acceptance passed on
+   container and transient credentials. Native client-library acceptance passed on
    the unchanged built Center image
    `sha256:309c0ceb752bf30aa01c016f0ec5aadb66f52a5eec757756b096371a87e5726d`,
    including independently observed native approval/revocation revisions 1/2,
-   both voice policy revisions 2, signed room access, exact retries, render
-   acknowledgment, cancellation clearing and continued browser heartbeat after
-   native shutdown. The focused 40-test native gate also passed against isolated
+   both voice policy revisions 2, strict TLS, persisted admission recovery,
+   crash/reconnect recovery, render acknowledgment, cancellation clearing and
+   continued browser heartbeat after native shutdown. The preceding 40-test
+   native server gate also passed against isolated
    PostgreSQL and the local SFU, including both peer join orders and reconnect.
    Its ignored native test fails if those
    dependencies are absent; an ordinary unit-test pass does not run this gate.
@@ -1745,6 +1776,32 @@ Run only what your change needs:
 ./revival check platform
 ./revival pin check
 ```
+
+On an Apple Silicon Mac with full Xcode installed, build the native desktop
+preview through the same CLI:
+
+```sh
+./revival client check macos
+./revival client build macos
+```
+
+The builder uses `/Applications/Xcode.app`; `DEVELOPER_DIR` may select an
+installed `/Applications/Xcode_VERSION.app/Contents/Developer`. It leaves the
+system's developer-tool selection unchanged. Command Line Tools alone omit
+the XCTest framework needed by the client tests.
+
+The check compiles and tests the Rust core, C bridge and Swift shell. The build
+prints an external `Cosmos.app` path and verifies its local ad-hoc signature;
+neither command launches or installs the app. Distribution signing, notarization
+and physical permission/lifecycle acceptance remain separate. This first client
+accepts explicitly submitted public text and uses an approved Center tab for
+responses. Native response display, audio, document capture and handoff are
+later capability increments; installation approval does not grant them.
+
+Move the development app to a stable location before using Prepare. Its Keychain
+access binds to the app's executable path and signing identity; preparing from a
+temporary build directory can require repairing trust when a later build moves.
+The app never substitutes plaintext storage when Keychain access is unavailable.
 
 For a broad change:
 

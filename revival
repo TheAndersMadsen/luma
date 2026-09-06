@@ -42,6 +42,7 @@ const { PKI_TOOL, fail, initialize, resolveTool, run } = require('./platform/cli
 const { developmentCommand, localDoctor, stack } = require('./platform/cli/stack');
 const { repositoryCheck } = require('./platform/cli/gates');
 const { checkCommand } = require('./platform/cli/checks');
+const { clientCommand } = require('./platform/cli/clients');
 const {
   deployProduction,
   evaluateAssistant,
@@ -80,6 +81,8 @@ runTimedBoundary(() => {
     developmentCommand(args);
   } else if (command === 'check') {
     checkCommand(args);
+  } else if (command === 'client') {
+    clientCommand(args);
   } else if (['build', 'up', 'down', 'status', 'logs'].includes(command)) {
     stack(command, args);
   } else if (command === 'config') {

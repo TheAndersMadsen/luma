@@ -76,6 +76,9 @@ const PLATFORM_CANDIDATES = Object.freeze({
     ? ['/opt/homebrew/bin/sha256sum', '/usr/local/bin/sha256sum']
     : ['/usr/bin/sha256sum', '/bin/sha256sum'],
   shasum: ['/usr/bin/shasum'],
+  xcrun: process.platform === 'darwin' ? ['/usr/bin/xcrun'] : [],
+  install_name_tool: process.platform === 'darwin' ? ['/usr/bin/install_name_tool'] : [],
+  codesign: process.platform === 'darwin' ? ['/usr/bin/codesign'] : [],
   awk: ['/usr/bin/awk'],
   tar: ['/usr/bin/tar', '/bin/tar'],
   sh: ['/bin/sh', '/usr/bin/sh'],

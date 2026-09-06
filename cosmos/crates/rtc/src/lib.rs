@@ -1,6 +1,8 @@
 //! LiveKit is transport, never policy. Only this crate imports its SDKs.
 //! The caller binds identities to current enrollment before admitting work.
 pub mod audio;
+#[cfg(feature = "test-loopback-tls")]
+pub mod testing;
 
 use livekit::{
     ConnectionState, Room, RoomEvent, RoomOptions,

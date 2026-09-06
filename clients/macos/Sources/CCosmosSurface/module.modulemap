@@ -1,0 +1,5 @@
+module CCosmosSurface {
+    header "include/cosmos_surface.h"
+    link "cosmos_surface_client_ffi"
+    export *
+}

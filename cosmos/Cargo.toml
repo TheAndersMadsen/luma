@@ -5,6 +5,8 @@ members = [
     "crates/protocol",
     "crates/rtc",
     "crates/stt",
+    "crates/surface-client",
+    "crates/surface-client-ffi",
     "crates/cosmos",
 ]
 resolver = "2"

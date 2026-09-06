@@ -3,11 +3,7 @@
 //! APIs, PostgreSQL authority, SFU, BFF, React render and DOM acknowledgment run.
 use super::*;
 use crate::{
-    ambiance::{
-        ActionStatus, Channel, InputStamp, NativeProof, RuntimeOperation, RuntimeState,
-        SemanticIntent,
-        native_connection::{Challenge, OpenRequest, signing_message},
-    },
+    ambiance::{ActionStatus, Channel, RuntimeState, SemanticIntent},
     assistant::llm::{ChatMessage, ChatModel, ChatResponse, LlmError, ToolCall, ToolDef},
     enrollment::{EnrollmentStore, MemoryEnrollmentStore},
     store::Store,
@@ -16,15 +12,111 @@ use crate::{
     },
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use cosmos_surface_client::{
+    Client as NativeClient, Config as NativeConfig, Error as NativeClientError, OperationKind,
+    OperationResult, Platform, PlatformError, SecureStore, Signer as NativeSigner,
+};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
-use rand::RngCore;
 use serde::Deserialize;
 use std::{
     io::{Read, Write},
     os::unix::fs::OpenOptionsExt,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
+
+/// Synthetic platform implementations only. The production client owns every
+/// wire request; fixture keys and protected journal bytes stay in Rust memory.
+struct FixtureSigner {
+    key: SigningKey,
+    calls: AtomicUsize,
+}
+
+impl NativeSigner for FixtureSigner {
+    fn public_key_sec1(&self) -> Result<[u8; 65], PlatformError> {
+        self.key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .try_into()
+            .map_err(|_| PlatformError)
+    }
+
+    fn sign_sha256(&self, message: &[u8]) -> Result<Vec<u8>, PlatformError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let signature: Signature = self.key.sign(message);
+        Ok(signature.to_der().as_bytes().to_vec())
+    }
+}
+
+#[derive(Default)]
+struct FixtureJournal {
+    bytes: Mutex<Option<Vec<u8>>>,
+    saves_until_failure: AtomicUsize,
+    failures: AtomicUsize,
+}
+
+impl FixtureJournal {
+    fn fail_completion_save(&self) {
+        // First persist the exact pending envelope; fail the second save,
+        // after its real runtime response, without replacing those bytes.
+        assert_eq!(self.saves_until_failure.swap(2, Ordering::SeqCst), 0);
+    }
+}
+
+impl SecureStore for FixtureJournal {
+    fn load(&self) -> Result<Option<Vec<u8>>, PlatformError> {
+        self.bytes
+            .lock()
+            .map_err(|_| PlatformError)
+            .map(|bytes| bytes.clone())
+    }
+
+    fn save_atomically(&self, bytes: &[u8]) -> Result<(), PlatformError> {
+        if bytes.is_empty() || bytes.len() > cosmos_surface_client::MAX_JOURNAL_BYTES {
+            return Err(PlatformError);
+        }
+        let mut stored = self.bytes.lock().map_err(|_| PlatformError)?;
+        if self
+            .saves_until_failure
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .ok()
+            == Some(1)
+        {
+            self.failures.fetch_add(1, Ordering::SeqCst);
+            return Err(PlatformError);
+        }
+        *stored = Some(bytes.to_vec());
+        Ok(())
+    }
+}
+
+async fn retry_client_pending(client: &mut NativeClient) -> OperationResult {
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            match client.retry_pending().await {
+                Ok(result) => return result,
+                Err(NativeClientError::Unavailable | NativeClientError::Busy) => {
+                    assert!(
+                        client
+                            .status()
+                            .pending
+                            .is_some_and(|pending| pending.can_retry)
+                    );
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("native client pending reconciliation failed: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("native client must reconcile its exact pending envelope")
+}
 
 struct Model {
     calls: AtomicUsize,
@@ -160,26 +252,6 @@ fn assert_cancelled_payload(state: &RuntimeState, turn_id: Uuid, generation: u64
     }));
 }
 
-async fn native_rpc(session: &cosmos_rtc::Session, runtime: &str, message: &Value) -> Value {
-    serde_json::from_str(
-        &session
-            .invoke(runtime, message.to_string())
-            .await
-            .expect("native room RPC failed"),
-    )
-    .expect("invalid native room RPC response")
-}
-
-fn heartbeat(epoch: Uuid, sequence: u64, instance_id: Uuid) -> Value {
-    let stamp = InputStamp {
-        epoch,
-        sequence,
-        instance_id,
-    };
-    json!({"kind":"control","stamp":stamp,
-        "control":{"kind":"heartbeat"}})
-}
-
 fn assert_approval_only(state: &RuntimeState, model: &Model) {
     assert!(state.native_connections.is_empty());
     assert!(state.ingress.is_empty());
@@ -283,8 +355,21 @@ async fn browser_center_application_acceptance() {
     .unwrap();
     let url = input["url"].as_str().unwrap();
     let public_url = input["publicUrl"].as_str().unwrap();
+    let tls_certificate = std::fs::read(input["tlsCertificatePath"].as_str().unwrap()).unwrap();
+    let mut audience_url = reqwest::Url::parse(public_url).unwrap();
+    audience_url.set_scheme("https").unwrap();
+    let audience = audience_url.origin().ascii_serialization();
     let database = std::env::var("COSMOS_TEST_DATABASE_URL").unwrap();
     assert!(url.starts_with("ws://127.0.0.1:") && public_url.starts_with("wss://127.0.0.1:"));
+    cosmos_rtc::testing::install_loopback_tls_transport(
+        &audience,
+        &reqwest::Url::parse(url)
+            .unwrap()
+            .origin()
+            .ascii_serialization(),
+        &tls_certificate,
+    )
+    .expect("install the explicit loopback TLS trust before any SDK joins");
     assert_eq!(
         reqwest::Url::parse(&database).unwrap().host_str(),
         Some("127.0.0.1")
@@ -304,18 +389,33 @@ async fn browser_center_application_acceptance() {
     let bearer = super::tests::bearer(&subject);
     let native_enrollment = Uuid::new_v4();
     let native_id = native_surface_id(&principal, native_enrollment);
-    let Mutation::ApproveNative {
-        public_key,
-        platform,
-        ..
-    } = crate::store::native_test_approval(native_enrollment, 0)
-    else {
-        unreachable!()
+    let mut scalar = [0u8; 32];
+    scalar[31] = 1;
+    let signer = Arc::new(FixtureSigner {
+        key: SigningKey::from_bytes(&scalar).unwrap(),
+        calls: AtomicUsize::new(0),
+    });
+    let journal = Arc::new(FixtureJournal::default());
+    let epoch = Uuid::new_v4();
+    let native_config = NativeConfig {
+        server_origin: audience.clone(),
+        enrollment_id: native_enrollment,
+        platform: Platform::Macos,
+        boot_epoch: epoch,
     };
+    let mut native = NativeClient::new_with_root_certificate(
+        native_config.clone(),
+        signer.clone(),
+        journal.clone(),
+        &tls_certificate,
+    )
+    .unwrap();
+    let native_shutdown = native.transport_shutdown();
+    let native_descriptor = serde_json::to_value(native.descriptor()).unwrap();
+    let public_key = native_descriptor["publicKey"].as_str().unwrap().to_owned();
+    let platform = native_descriptor["platform"].as_str().unwrap().to_owned();
     let native_fingerprint =
         crate::surface_registry::hash(&URL_SAFE_NO_PAD.decode(&public_key).unwrap());
-    let native_descriptor = json!({"enrollmentId":native_enrollment,"publicKey":public_key,
-        "platform":platform,"approval":crate::surface_registry::NATIVE_APPROVAL});
     let native_binding = Binding::Native {
         enrollment_id: native_enrollment,
         public_key,
@@ -373,9 +473,6 @@ async fn browser_center_application_acceptance() {
         input["secret"].as_str().unwrap().into(),
     )
     .unwrap();
-    let mut audience_url = reqwest::Url::parse(public_url).unwrap();
-    audience_url.set_scheme("https").unwrap();
-    let audience = audience_url.origin().ascii_serialization();
     let rooms = Arc::new(crate::browser_rooms::Rooms::new(
         runtime.clone(),
         Some(config),
@@ -406,7 +503,10 @@ async fn browser_center_application_acceptance() {
         "nativeApproved":false,"enrollmentOnlyNoRoomAuthority":false,
         "nativeRoomJoined":false,"nativeHeartbeatVerified":false,"nativeTextRetried":false,
         "nativeCancelled":false,"payloadCleared":false,"nativeRevoked":false,
-        "nativeDisconnected":false,"browserPreservedAfterNative":false});
+        "nativeDisconnected":false,"browserPreservedAfterNative":false,
+        "nativeClientLibrary":false,"nativeUntrustedTlsRejected":false,
+        "nativeCompletionSaveRecovered":false,
+        "nativeCrashPendingRecovered":false});
     write_private(status_path, &status, true);
     write_private(
         input["bootstrapPath"].as_str().unwrap(),
@@ -424,7 +524,8 @@ async fn browser_center_application_acceptance() {
                 assert_native_record(&record, native_id, &native_binding, &native_fingerprint);
                 assert_eq!((record.revision, record.revoked), (1, false));
                 assert_approval_only(&committed_runtime(&audit, &principal).await, &model);
-                assert_native_transport_denied(address, &bearer, native_enrollment, native_id).await;
+                assert_native_transport_denied(address, &bearer, native_enrollment, native_id)
+                    .await;
                 assert_approval_only(&committed_runtime(&audit, &principal).await, &model);
                 status["nativeApproved"] = true.into();
                 status["enrollmentOnlyNoRoomAuthority"] = true.into();
@@ -448,195 +549,308 @@ async fn browser_center_application_acceptance() {
         }
 
         let surfaces = store.surfaces(&principal).await.unwrap();
-        let browsers: Vec<_> = surfaces.iter().filter(|surface| matches!(surface.binding, Binding::Browser)).collect();
+        let browsers: Vec<_> = surfaces
+            .iter()
+            .filter(|surface| matches!(surface.binding, Binding::Browser))
+            .collect();
         assert_eq!(browsers.len(), 1);
         let browser_id = browsers[0].surface_id;
         assert!(browsers[0].connected && browsers[0].available && !browsers[0].revoked);
-        let browser_record = committed_record(&audit, &principal, browser_id).await.unwrap();
+        let browser_record = committed_record(&audit, &principal, browser_id)
+            .await
+            .unwrap();
         let browser_incarnation = browser_record.incarnation;
 
-        // This fixture owns the scalar-one installation key used by its public
-        // enrollment descriptor. The fresh session secret, signature and SFU
-        // token stay in Rust memory; none enter bootstrap or status files.
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(20))
-            .build()
+        // The same real client with platform-default trust must reject this
+        // disposable CA before signing or creating any native runtime state.
+        let mut untrusted = NativeClient::new(
+            native_config.clone(),
+            signer.clone(),
+            Arc::new(FixtureJournal::default()),
+        )
+        .unwrap();
+        let untrusted_shutdown = untrusted.transport_shutdown();
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(8), untrusted.connect())
+                .await
+                .expect("untrusted native TLS rejection must be bounded"),
+            Err(NativeClientError::Unavailable)
+        ));
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 0);
+        let rejected = untrusted.status();
+        assert!(!rejected.connected && !rejected.pending_open);
+        assert!(rejected.pending.is_none() && rejected.last_admission.is_none());
+        let rejected_state = committed_runtime(&audit, &principal).await;
+        assert!(rejected_state.native_connections.is_empty());
+        assert!(!rejected_state.ingress.contains_key(&native_id));
+        assert!(rejected_state.turn.is_none() && rejected_state.actions.is_empty());
+        assert_eq!(rejected_state.generation, 0);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+        drop(untrusted);
+        untrusted_shutdown
+            .finish()
+            .await
+            .expect("untrusted client has no remaining transport");
+        status["nativeUntrustedTlsRejected"] = true.into();
+        write_private(status_path, &status, false);
+
+        // The shipped client independently validates challenges, signs, opens
+        // HTTPS admission and joins the public WSS endpoint with explicit trust.
+        native
+            .connect()
+            .await
+            .expect("production native client must connect");
+        assert!(native.status().connected);
+        assert_eq!(signer.calls.load(Ordering::SeqCst), 1);
+        let connected_state = committed_runtime(&audit, &principal).await;
+        let connection = connected_state.native_connections[&native_id]
+            .connection
+            .as_ref()
             .unwrap();
-        let response = client
-            .post(format!("http://{address}/runtime-api/v1/native/challenge"))
-            .json(&json!({"enrollmentId":native_enrollment}))
-            .send().await.unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
-        let challenge: Challenge = serde_json::from_value(response.json::<Value>().await.unwrap()["challenge"].take()).unwrap();
-        assert_eq!(challenge.version, 1);
-        assert_eq!(challenge.audience, audience);
-        assert_eq!(challenge.enrollment_id, native_enrollment);
-        assert_eq!(challenge.surface_id, native_id);
-        assert_eq!(challenge.approval_revision, 1);
-        assert_eq!(challenge.public_key_fingerprint, native_fingerprint);
-        assert!(challenge.current_incarnation.is_none());
-        assert!(challenge.expires_at_ms > crate::surface_registry::now_ms());
-        let mut scalar = [0u8; 32];
-        scalar[31] = 1;
-        let signing_key = SigningKey::from_bytes(&scalar).unwrap();
-        let mut raw_secret = [0u8; 32];
-        rand::rngs::OsRng.try_fill_bytes(&mut raw_secret).unwrap();
-        let epoch = Uuid::new_v4();
-        let mut open = OpenRequest {
-            enrollment_id: native_enrollment,
-            challenge_id: challenge.challenge_id,
-            epoch,
-            expected_incarnation: challenge.current_incarnation,
-            session_token_hash: crate::surface_registry::hash(&raw_secret),
-            signature: String::new(),
-        };
-        let signature: Signature = signing_key.sign(&signing_message(&challenge, &open).unwrap());
-        open.signature = URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes());
-        let response = client
-            .post(format!("http://{address}/runtime-api/v1/native/open"))
-            .json(&json!({"enrollmentId":open.enrollment_id,"challengeId":open.challenge_id,
-                "epoch":open.epoch,"expectedIncarnation":open.expected_incarnation,
-                "sessionTokenHash":open.session_token_hash,"signature":open.signature}))
-            .send().await.unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
-        let opened = response.json::<Value>().await.unwrap();
-        assert_eq!(opened["duplicate"].as_bool(), Some(false));
-        let connection = &opened["connection"];
-        assert_eq!(connection["surfaceId"].as_str(), Some(native_id.to_string().as_str()));
-        assert_eq!(connection["approvalRevision"].as_u64(), Some(1));
-        assert_eq!(connection["epoch"].as_str(), Some(epoch.to_string().as_str()));
-        let incarnation = Uuid::parse_str(connection["incarnation"].as_str().unwrap()).unwrap();
+        let incarnation = connection.incarnation;
         assert!(!incarnation.is_nil());
-        let proof = NativeProof { surface_id: native_id, incarnation, token_hash: open.session_token_hash.clone() };
-        let response = client
-            .post(format!("http://{address}/runtime-api/v1/native/room"))
-            .bearer_auth(URL_SAFE_NO_PAD.encode(raw_secret))
-            .json(&json!({"enrollmentId":native_enrollment,"approvalRevision":1,
-                "incarnation":incarnation,"epoch":epoch}))
-            .send().await.unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::OK);
-        let room = response.json::<Value>().await.unwrap();
-        assert_eq!(room["version"].as_u64(), Some(1));
-        assert_eq!(room["url"].as_str(), Some(public_url));
-        assert_eq!(room["epoch"].as_str(), Some(epoch.to_string().as_str()));
-        assert!(!Uuid::parse_str(room["runtimeEpoch"].as_str().unwrap()).unwrap().is_nil());
-        assert!(!Uuid::parse_str(room["participant"].as_str().unwrap()).unwrap().is_nil());
-        let runtime_participant = room["runtimeParticipant"].as_str().unwrap().to_owned();
-        assert_eq!(runtime_participant, "runtime");
-        // The public URL above identifies this same SFU. The Rust SDK uses the
-        // verified loopback endpoint, without relaxing public TLS validation.
-        let (native, mut incoming) = cosmos_rtc::Session::connect(url, room["token"].as_str().unwrap()).await.unwrap();
-        drop(room);
-        drop(open);
+        assert_eq!((connection.approval_revision, connection.epoch), (1, epoch));
 
         let scenario = async {
-            let initial_heartbeat = heartbeat(epoch, 1, Uuid::new_v4());
-            // Client-side presence alone does not prove the runtime observed
-            // the native participant SID. Retry this exact idempotent control,
-            // never a fresh input, until the application accepts it.
-            let first_heartbeat = tokio::time::timeout(Duration::from_secs(6), async {
-                loop {
-                    if let Ok(reply) = native.invoke(&runtime_participant, initial_heartbeat.to_string()).await {
-                        break serde_json::from_str::<Value>(&reply).unwrap();
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+            match native.heartbeat().await {
+                Ok(()) => {}
+                Err(NativeClientError::Unavailable | NativeClientError::Busy) => {
+                    assert!(matches!(
+                        retry_client_pending(&mut native).await,
+                        OperationResult::Heartbeat
+                    ));
                 }
-            }).await.expect("runtime must observe native SFU membership");
-            assert_eq!(first_heartbeat["version"].as_u64(), Some(1));
-            assert_eq!(first_heartbeat["kind"].as_str(), Some("accepted"));
-            assert!(first_heartbeat["duplicate"].is_boolean());
+                Err(error) => panic!("native client heartbeat failed: {error}"),
+            }
             let heartbeat_state = committed_runtime(&audit, &principal).await;
-            let current = heartbeat_state.native_connections[&native_id].connection.as_ref().unwrap();
-            assert_eq!((current.approval_revision, current.incarnation, current.epoch), (1, incarnation, epoch));
-            assert!(!current.closed && current.lease_expires_at_ms > crate::surface_registry::now_ms());
-            let lease_after_heartbeat = current.lease_expires_at_ms;
+            let current = heartbeat_state.native_connections[&native_id]
+                .connection
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                (
+                    current.approval_revision,
+                    current.incarnation,
+                    current.epoch
+                ),
+                (1, incarnation, epoch)
+            );
+            assert!(
+                !current.closed && current.lease_expires_at_ms > crate::surface_registry::now_ms()
+            );
             let cursor = &heartbeat_state.ingress[&native_id];
-            assert_eq!((cursor.epoch, cursor.incarnation, cursor.high_water), (epoch, incarnation, 1));
+            assert_eq!((cursor.epoch, cursor.incarnation), (epoch, incarnation));
+            assert!(cursor.high_water >= 1 && !cursor.controls.is_empty());
             assert!(cursor.receipts.is_empty());
-            assert_eq!(cursor.controls.len(), 1);
+            let text_sequence = cursor.high_water + 1;
             assert_eq!(model.calls.load(Ordering::SeqCst), 0);
-            let duplicate = native_rpc(&native, &runtime_participant, &initial_heartbeat).await;
-            assert_eq!(duplicate, json!({"version":1,"kind":"accepted","duplicate":true}));
-            let duplicate_state = committed_runtime(&audit, &principal).await;
-            assert_eq!(duplicate_state.native_connections[&native_id].connection.as_ref().unwrap().lease_expires_at_ms, lease_after_heartbeat);
-            assert_eq!(duplicate_state.ingress[&native_id].high_water, 1);
-            assert_eq!(duplicate_state.ingress[&native_id].controls.len(), 1);
             status["nativeRoomJoined"] = true.into();
             status["nativeHeartbeatVerified"] = true.into();
+            status["nativeClientLibrary"] = true.into();
             write_private(status_path, &status, false);
 
-            let turn_id = Uuid::new_v4();
-            let text_stamp = InputStamp { epoch, sequence: 2, instance_id: turn_id };
-            let text = json!({"kind":"input","stamp":text_stamp,
-                "text":"Display a public text card containing exactly: Center acceptance card"});
-            let admitted = native_rpc(&native, &runtime_participant, &text).await;
-            assert_eq!(admitted["version"].as_u64(), Some(1));
-            assert_eq!(admitted["kind"].as_str(), Some("admitted"));
-            assert_eq!(admitted["turnId"].as_str(), Some(turn_id.to_string().as_str()));
-            assert_eq!(admitted["duplicate"].as_bool(), Some(false));
-            let generation = admitted["generation"].as_u64().unwrap();
+            journal.fail_completion_save();
+            assert!(matches!(
+                native
+                    .send_text(
+                        "Display a public text card containing exactly: Center acceptance card"
+                    )
+                    .await,
+                Err(NativeClientError::Persistence)
+            ));
+            assert_eq!(journal.failures.load(Ordering::SeqCst), 1);
+            // The server has admitted the turn, but the secure journal still
+            // preserves its pending envelope. The in-process client already
+            // knows the response and must retry its exact completion save.
+            let admitted_state = committed_runtime(&audit, &principal).await;
+            let admitted_turn = admitted_state.turn.as_ref().unwrap();
+            let turn_id = admitted_turn.fence.turn_id;
+            let generation = admitted_turn.fence.generation;
+            let pending_text = native
+                .status()
+                .pending
+                .expect("failed text completion remains pending");
+            assert_eq!(pending_text.kind, OperationKind::Text);
+            assert_eq!(
+                (pending_text.instance_id, pending_text.sequence),
+                (turn_id, text_sequence)
+            );
+            assert!(pending_text.can_retry);
             assert_eq!(generation, 1);
-            let retried = native_rpc(&native, &runtime_participant, &text).await;
-            assert_eq!(retried, json!({"version":1,"kind":"admitted","turnId":turn_id,"generation":generation,"duplicate":true}));
+            assert_eq!(admitted_turn.fence.origin_surface, native_id);
+            assert_eq!(admitted_state.ingress[&native_id].high_water, text_sequence);
+            assert_eq!(admitted_state.ingress[&native_id].receipts.len(), 1);
+            let OperationResult::Text(admission) = retry_client_pending(&mut native).await else {
+                panic!("pending text must recover its actual admission")
+            };
+            assert_eq!(
+                (admission.turn_id, admission.generation),
+                (turn_id, generation)
+            );
+            assert!(
+                !admission.duplicate,
+                "saving a known response does not send another wire request"
+            );
+            assert!(native.status().pending.is_none());
             tokio::time::timeout(Duration::from_secs(5), async {
                 while model.calls.load(Ordering::SeqCst) == 0 {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
-            }).await.expect("admitted native text must reach the model");
+            })
+            .await
+            .expect("admitted native text must reach the model");
             assert_eq!(model.calls.load(Ordering::SeqCst), 1);
             let retried_state = committed_runtime(&audit, &principal).await;
             let turn = retried_state.turn.as_ref().unwrap();
-            assert_eq!((turn.fence.turn_id, turn.fence.generation, turn.fence.origin_surface), (turn_id, generation, native_id));
-            assert_eq!((turn.origin_incarnation, turn.origin_revision), (incarnation, 1));
-            assert_eq!(retried_state.ingress[&native_id].high_water, 2);
+            assert_eq!(
+                (
+                    turn.fence.turn_id,
+                    turn.fence.generation,
+                    turn.fence.origin_surface
+                ),
+                (turn_id, generation, native_id)
+            );
+            assert_eq!(
+                (turn.origin_incarnation, turn.origin_revision),
+                (incarnation, 1)
+            );
+            assert_eq!(retried_state.ingress[&native_id].high_water, text_sequence);
             assert_eq!(retried_state.ingress[&native_id].receipts.len(), 1);
             status["nativeTextRetried"] = true.into();
+            status["nativeCompletionSaveRecovered"] = true.into();
             write_private(status_path, &status, false);
 
-            let mut next_sequence = 3;
             let mut heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
             let mut acknowledged = false;
             loop {
                 let state = committed_runtime(&audit, &principal).await;
                 assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-                assert!(state.actions.values().all(|action| action.surface_id != native_id));
-                if !acknowledged && state.actions.values().any(|action| {
-                    action.status == ActionStatus::Acknowledged
-                        && action.turn_id == turn_id && action.generation == generation
-                        && action.worker == turn.fence.worker
-                        && action.channel == Channel::VisualCard
-                        && action.surface_id == browser_id && action.incarnation == browser_incarnation
-                        && action.intent.text() == "Center acceptance card"
-                        && action.content_digest == crate::surface_registry::hash(b"Center acceptance card")
-                }) {
+                assert!(
+                    state
+                        .actions
+                        .values()
+                        .all(|action| action.surface_id != native_id)
+                );
+                if !acknowledged
+                    && state.actions.values().any(|action| {
+                        action.status == ActionStatus::Acknowledged
+                            && action.turn_id == turn_id
+                            && action.generation == generation
+                            && action.worker == turn.fence.worker
+                            && action.channel == Channel::VisualCard
+                            && action.surface_id == browser_id
+                            && action.incarnation == browser_incarnation
+                            && action.intent.text() == "Center acceptance card"
+                            && action.content_digest
+                                == crate::surface_registry::hash(b"Center acceptance card")
+                    })
+                {
                     acknowledged = true;
                     status["acknowledged"] = true.into();
                     write_private(status_path, &status, false);
                 }
                 match coordination_stage(coordination_path) {
-                    Some(Stage::RenderObserved) => { assert!(acknowledged); break; }
+                    Some(Stage::RenderObserved) => {
+                        assert!(acknowledged);
+                        break;
+                    }
                     Some(Stage::BrowserReady) => {}
                     _ => panic!("Center render checkpoint is missing or out of order"),
                 }
                 if tokio::time::Instant::now() >= heartbeat_due {
-                    let reply = native_rpc(&native, &runtime_participant, &heartbeat(epoch, next_sequence, Uuid::new_v4())).await;
-                    assert_eq!(reply, json!({"version":1,"kind":"accepted","duplicate":false}));
-                    next_sequence += 1;
+                    native
+                        .heartbeat()
+                        .await
+                        .expect("native client heartbeat while rendering");
                     heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
 
-            let cancel_stamp = InputStamp { epoch, sequence: next_sequence, instance_id: turn_id };
-            let cancel = json!({"kind":"control","stamp":cancel_stamp,
-                "control":{"kind":"cancel","turnId":turn_id,"generation":generation}});
-            let cancelled = native_rpc(&native, &runtime_participant, &cancel).await;
-            assert_eq!(cancelled, json!({"version":1,"kind":"accepted","duplicate":false}));
-            next_sequence += 1;
+            native
+                .cancel(admission)
+                .await
+                .expect("native client cancels its admitted turn");
             let state = committed_runtime(&audit, &principal).await;
             assert_cancelled_payload(&state, turn_id, generation);
+
+            // A separate crash-recovery phase occurs only after the original
+            // card was observed and explicitly cancelled. Losing a process
+            // replaces its room incarnation; that must not be hidden while
+            // claiming the original card still has a live origin.
+            journal.fail_completion_save();
+            assert!(matches!(
+                native.heartbeat().await,
+                Err(NativeClientError::Persistence)
+            ));
+            assert_eq!(journal.failures.load(Ordering::SeqCst), 2);
+            let pending = native
+                .status()
+                .pending
+                .expect("failed completion preserves pending heartbeat");
+            assert_eq!(pending.kind, OperationKind::Heartbeat);
+            let before_crash = committed_runtime(&audit, &principal).await;
+            let before_cursor = &before_crash.ingress[&native_id];
+            assert_eq!(before_cursor.high_water, pending.sequence);
+            let controls_before_crash = before_cursor.controls.len();
+            drop(native);
+            native_shutdown
+                .finish()
+                .await
+                .expect("crashed client SDK shutdown completes");
+            let mut native = NativeClient::new_with_root_certificate(
+                native_config.clone(),
+                signer.clone(),
+                journal.clone(),
+                &tls_certificate,
+            )
+            .unwrap();
+            let native_shutdown = native.transport_shutdown();
+            assert!(!native.status().connected);
+            assert_eq!(native.status().pending, Some(pending));
+            native
+                .connect()
+                .await
+                .expect("reconstructed production client reconnects explicitly");
+            assert!(native.status().connected);
+            assert_eq!(native.status().pending, Some(pending));
+            let reconnected = committed_runtime(&audit, &principal).await;
+            assert_eq!(reconnected.ingress[&native_id].high_water, pending.sequence);
+            assert_eq!(
+                reconnected.ingress[&native_id].controls.len(),
+                controls_before_crash
+            );
+            let connection = reconnected.native_connections[&native_id]
+                .connection
+                .as_ref()
+                .unwrap();
+            assert_ne!(connection.incarnation, incarnation);
+            assert_eq!(connection.epoch, epoch);
+            let lease_before_retry = connection.lease_expires_at_ms;
+            assert!(matches!(
+                retry_client_pending(&mut native).await,
+                OperationResult::Heartbeat
+            ));
+            assert!(native.status().pending.is_none());
+            let recovered = committed_runtime(&audit, &principal).await;
+            assert_eq!(recovered.ingress[&native_id].high_water, pending.sequence);
+            assert_eq!(
+                recovered.ingress[&native_id].controls.len(),
+                controls_before_crash
+            );
+            assert_eq!(
+                recovered.native_connections[&native_id]
+                    .connection
+                    .as_ref()
+                    .unwrap()
+                    .lease_expires_at_ms,
+                lease_before_retry,
+                "retry of the committed heartbeat must not renew the new connection lease"
+            );
+            assert_cancelled_payload(&recovered, turn_id, generation);
+            assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+            status["nativeCrashPendingRecovered"] = true.into();
             status["nativeCancelled"] = true.into();
             status["payloadCleared"] = true.into();
             write_private(status_path, &status, false);
@@ -647,16 +861,19 @@ async fn browser_center_application_acceptance() {
                     _ => panic!("Center clear checkpoint is missing or out of order"),
                 }
                 if tokio::time::Instant::now() >= heartbeat_due {
-                    let reply = native_rpc(&native, &runtime_participant, &heartbeat(epoch, next_sequence, Uuid::new_v4())).await;
-                    assert_eq!(reply, json!({"version":1,"kind":"accepted","duplicate":false}));
-                    next_sequence += 1;
+                    native
+                        .heartbeat()
+                        .await
+                        .expect("native client heartbeat after clearing");
                     heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
 
             loop {
-                let record = committed_record(&audit, &principal, native_id).await.unwrap();
+                let record = committed_record(&audit, &principal, native_id)
+                    .await
+                    .unwrap();
                 assert_native_record(&record, native_id, &native_binding, &native_fingerprint);
                 if record.revoked {
                     assert_eq!(record.revision, 2);
@@ -667,15 +884,15 @@ async fn browser_center_application_acceptance() {
                 // heartbeat denial is valid only if the next committed read
                 // proves that revocation, never a reason to hide a room failure.
                 if tokio::time::Instant::now() >= heartbeat_due {
-                    let reply = native.invoke(&runtime_participant, heartbeat(epoch, next_sequence, Uuid::new_v4()).to_string()).await;
-                    match reply {
-                        Ok(reply) => assert_eq!(serde_json::from_str::<Value>(&reply).unwrap(), json!({"version":1,"kind":"accepted","duplicate":false})),
+                    match native.heartbeat().await {
+                        Ok(()) => {}
                         Err(_) => {
-                            let revoked = committed_record(&audit, &principal, native_id).await.unwrap();
+                            let revoked = committed_record(&audit, &principal, native_id)
+                                .await
+                                .unwrap();
                             assert_eq!((revoked.revision, revoked.revoked), (2, true));
                         }
                     }
-                    next_sequence += 1;
                     heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -684,20 +901,28 @@ async fn browser_center_application_acceptance() {
             assert!(state.native_connections.is_empty());
             assert!(!state.ingress.contains_key(&native_id));
             assert_cancelled_payload(&state, turn_id, generation);
-            assert!(store.runtime(&principal, RuntimeOperation::CheckNative { connection: proof.clone() }).await.is_err());
-            assert!(native.invoke(&runtime_participant, heartbeat(epoch, next_sequence, Uuid::new_v4()).to_string()).await.is_err());
+            assert!(native.heartbeat().await.is_err());
             // Revocation removes application authority; it is not an SFU kick.
             // Explicitly close this fixture's native SDK before claiming it left.
-            let mut native_connected = native.connected();
-            native.shutdown().await.expect("native SDK shutdown failed");
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while *native_connected.borrow_and_update() {
-                    native_connected.changed().await.unwrap();
-                }
-            }).await.expect("native SDK must disconnect");
-            let browser = store.surface(&principal, browser_id).await.unwrap().unwrap();
+            native
+                .disconnect()
+                .await
+                .expect("native client shutdown failed");
+            assert!(!native.status().connected);
+            drop(native);
+            native_shutdown
+                .finish()
+                .await
+                .expect("native SDK shutdown completes before browser continuity check");
+            let browser = store
+                .surface(&principal, browser_id)
+                .await
+                .unwrap()
+                .unwrap();
             assert!(browser.connected && browser.available && !browser.revoked);
-            let preserved = committed_record(&audit, &principal, browser_id).await.unwrap();
+            let preserved = committed_record(&audit, &principal, browser_id)
+                .await
+                .unwrap();
             assert_eq!(preserved.incarnation, browser_incarnation);
             assert_eq!(preserved.binding, Binding::Browser);
             // Center's normal visibility heartbeats advance its registry
@@ -706,7 +931,9 @@ async fn browser_center_application_acceptance() {
             let browser_sequence_after_native_close = preserved.sequence;
             tokio::time::timeout(Duration::from_secs(20), async {
                 loop {
-                    let current = committed_record(&audit, &principal, browser_id).await.unwrap();
+                    let current = committed_record(&audit, &principal, browser_id)
+                        .await
+                        .unwrap();
                     assert_eq!(current.incarnation, browser_incarnation);
                     assert_eq!(current.binding, Binding::Browser);
                     let view = current.view(crate::surface_registry::now_ms());
@@ -719,7 +946,9 @@ async fn browser_center_application_acceptance() {
                     }
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-            }).await.expect("browser must commit another room heartbeat after native shutdown");
+            })
+            .await
+            .expect("browser must commit another room heartbeat after native shutdown");
             status["nativeRevoked"] = true.into();
             status["nativeDisconnected"] = true.into();
             status["browserPreservedAfterNative"] = true.into();
@@ -731,10 +960,22 @@ async fn browser_center_application_acceptance() {
                 assert!(!state.ingress.contains_key(&native_id));
                 assert_cancelled_payload(&state, turn_id, generation);
                 assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-                let speech_revoked = state.disclosure_policies.get(&pin_id).is_some_and(|approval| approval.revision == 2 && approval.policy.is_none());
-                let voice_revoked = state.voice_policies.get(&pin_id).is_some_and(|approval| approval.revision == 2 && approval.policy.is_none());
+                let speech_revoked = state
+                    .disclosure_policies
+                    .get(&pin_id)
+                    .is_some_and(|approval| approval.revision == 2 && approval.policy.is_none());
+                let voice_revoked = state
+                    .voice_policies
+                    .get(&pin_id)
+                    .is_some_and(|approval| approval.revision == 2 && approval.policy.is_none());
                 let surfaces = store.surfaces(&principal).await.unwrap();
-                if speech_revoked && voice_revoked && surfaces.iter().filter(|surface| surface.surface_id != pin_id).all(|surface| !surface.connected) {
+                if speech_revoked
+                    && voice_revoked
+                    && surfaces
+                        .iter()
+                        .filter(|surface| surface.surface_id != pin_id)
+                        .all(|surface| !surface.connected)
+                {
                     status["complete"] = true.into();
                     status["modelCalls"] = 1.into();
                     status["modelMode"] = model_mode.into();
@@ -748,12 +989,9 @@ async fn browser_center_application_acceptance() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         };
-        tokio::select! {
-            biased;
-            Some(_) = incoming.recv() => panic!("native text-only participant received an output RPC"),
-            _ = scenario => {}
-        }
-    }).await;
+        scenario.await;
+    })
+    .await;
     server.abort();
     let _ = server.await;
     audit.close().await;

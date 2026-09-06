@@ -40,11 +40,24 @@ const input = path.join(directory, "input.json");
 const logs = fs.openSync(path.join(directory, "native.log"), "w", 0o600);
 const certificate = path.join(directory, "loopback.pem");
 const privateKey = path.join(directory, "loopback.key");
-const tls = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-  "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", privateKey, "-out", certificate], { stdio: "ignore" });
-assert.equal(tls.status, 0, "Create an ephemeral loopback TLS certificate");
-fs.chmodSync(privateKey, 0o600);
-let child, browser, centerPort, page;
+const trustRoot = path.join(directory, "loopback-ca.pem");
+const caKey = path.join(directory, "loopback-ca.key");
+const requestPath = path.join(directory, "loopback.csr");
+const extensions = path.join(directory, "loopback.ext");
+function openssl(args) {
+  assert.equal(spawnSync("openssl", args, { stdio: "ignore", timeout: 10000 }).status, 0,
+    "Create the disposable loopback CA and server certificate");
+}
+openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=Cosmos acceptance CA",
+  "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+  "-keyout", caKey, "-out", trustRoot]);
+openssl(["req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=127.0.0.1",
+  "-keyout", privateKey, "-out", requestPath]);
+fs.writeFileSync(extensions, "subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n", { mode: 0o600 });
+openssl(["x509", "-req", "-in", requestPath, "-CA", trustRoot, "-CAkey", caKey, "-set_serial", "1",
+  "-days", "1", "-extfile", extensions, "-out", certificate]);
+for (const file of [privateKey, caKey]) fs.chmodSync(file, 0o600);
+let child, browser, centerPort, nativePort, page;
 let stage = "native fixture startup";
 const sockets = new Set();
 const sfu = new URL(configured.url);
@@ -52,14 +65,16 @@ const diagnostics = [];
 function recordStatus(request, status, cacheControl) {
   const pathname = new URL(request.url, "https://127.0.0.1").pathname;
   if (diagnostics.length < 128 && (pathname === "/api/runtime/room" || pathname === "/api/runtime/input"
-    || pathname.startsWith("/api/surfaces/native") || pathname.startsWith("/livekit/"))) {
+    || pathname.startsWith("/api/surfaces/native") || pathname.startsWith("/runtime-api/v1/native/")
+    || pathname.startsWith("/livekit/"))) {
     diagnostics.push({ path: pathname, status, ...(cacheControl ? { cacheControl } : {}) });
   }
 }
 const gateway = https.createServer({ key: fs.readFileSync(privateKey), cert: fs.readFileSync(certificate) }, (request, response) => {
   if (request.headers.host !== `127.0.0.1:${gateway.address().port}`) { response.writeHead(400); response.end(); return; }
   const media = request.url.startsWith("/livekit");
-  const port = media ? Number(sfu.port) : centerPort;
+  const native = ["challenge", "open", "room"].some(operation => request.url === `/runtime-api/v1/native/${operation}`);
+  const port = media ? Number(sfu.port) : native ? nativePort : centerPort;
   if (!port) { response.writeHead(503); response.end(); return; }
   const upstream = http.request({ host: "127.0.0.1", port, method: request.method,
     path: media ? request.url.slice("/livekit".length) || "/" : request.url,
@@ -107,7 +122,7 @@ function checkpoint(stage) {
 try {
   await new Promise(resolve => gateway.listen(0, "127.0.0.1", resolve));
   const origin = `https://127.0.0.1:${gateway.address().port}`;
-  fs.writeFileSync(input, JSON.stringify({ ...configured, publicUrl: origin.replace("https:", "wss:") + "/livekit", bootstrapPath, statusPath, coordinationPath }), { mode: 0o600 });
+  fs.writeFileSync(input, JSON.stringify({ ...configured, publicUrl: origin.replace("https:", "wss:") + "/livekit", tlsCertificatePath: trustRoot, bootstrapPath, statusPath, coordinationPath }), { mode: 0o600 });
   // The native fixture links the same pinned, verified cancellation fix as the
   // normal Cosmos checks. Never compile against a registry/cache modification.
   const testEnvironment = cosmosTestEnvironment();
@@ -127,6 +142,8 @@ try {
   child.stdin.end(providerConfiguration);
   fs.closeSync(logs);
   const native = await until(() => readJson(bootstrapPath), 300000);
+  assert(Number.isSafeInteger(native.port) && native.port > 0 && native.port <= 65535);
+  nativePort = native.port;
   process.env.KEYCLOAK_BASE_URL = `http://host.docker.internal:${native.port}`;
   process.env.AUTH_SESSION_SECRET = crypto.randomBytes(48).toString("hex");
   const { signSession, sealTokens, SESSION_COOKIE, TOKENS_COOKIE } = await import("../src/server/auth.ts");
@@ -226,15 +243,15 @@ try {
   await page.getByRole("button", { name: "Confirm shared display", exact: true }).click();
   await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
   checkpoint("browserReady");
-  // The real native SDK supplies the only model request and retries its exact
-  // input stamp. Center's actual DOM commit must acknowledge that routed reply.
+  // The production native client supplies the only model request and recovers
+  // its persisted admission. Center must acknowledge the actual DOM commit.
   await page.getByLabel("Cosmos display", { exact: true }).getByText("Center acceptance card", { exact: true }).waitFor();
   await until(() => { const status = readJson(statusPath); return status?.acknowledged && status.nativeTextRetried; }, 10000);
   await page.screenshot({ path: path.join(directory, "rendered-card.png"), fullPage: true });
   checkpoint("renderObserved");
   stage = "native cancellation and durable render clear";
   await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
-  await until(() => { const status = readJson(statusPath); return status?.nativeCancelled && status.payloadCleared; }, 10000);
+  await until(() => { const status = readJson(statusPath); return status?.nativeCancelled && status.payloadCleared && status.nativeCrashPendingRecovered; }, 45000);
   checkpoint("clearObserved");
   stage = "owner native installation revocation";
   await page.getByRole("button", { name: `Revoke installation ${descriptor.enrollmentId}`, exact: true }).click();
@@ -269,6 +286,10 @@ try {
   assert.equal(result.nativeApprovalRevision, 1);
   assert.equal(result.nativeRevocationRevision, 2);
   assert.equal(result.enrollmentOnlyNoRoomAuthority, true);
+  assert.equal(result.nativeClientLibrary, true);
+  assert.equal(result.nativeUntrustedTlsRejected, true);
+  assert.equal(result.nativeCompletionSaveRecovered, true);
+  assert.equal(result.nativeCrashPendingRecovered, true);
   assert.equal(result.nativeRoomJoined, true);
   assert.equal(result.nativeTextRetried, true);
   assert.equal(result.nativeHeartbeatVerified, true);
@@ -281,7 +302,7 @@ try {
   assert.deepEqual(errors, [], "No browser runtime exceptions");
   const exit = await new Promise(resolve => child.exitCode !== null ? resolve(child.exitCode) : child.once("exit", resolve));
   assert.equal(exit, 0);
-  process.stdout.write(`PASS: actual Center owner controls, signed native room text and retry, shared Cosmos routing, DOM acknowledgment, native cancellation/revocation and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
+  process.stdout.write(`PASS: actual native client over HTTPS/WSS, Center owner controls, persisted text recovery, shared Cosmos routing, DOM acknowledgment, native cancellation/revocation and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
   fs.writeFileSync(path.join(directory, "result.json"), JSON.stringify(result) + "\n", { mode: 0o600 });
 } catch (error) {
   if (page && !page.isClosed()) {
@@ -300,5 +321,5 @@ try {
   for (const socket of sockets) socket.destroy();
   await new Promise(resolve => gateway.close(resolve));
   fs.writeFileSync(path.join(directory, "transport-status.json"), JSON.stringify(diagnostics) + "\n", { mode: 0o600 });
-  for (const file of [input, bootstrapPath, coordinationPath, coordinationPendingPath, path.join(directory, "center.env"), certificate, privateKey]) fs.rmSync(file, { force: true });
+  for (const file of [input, bootstrapPath, coordinationPath, coordinationPendingPath, path.join(directory, "center.env"), certificate, privateKey, trustRoot, caKey, requestPath, extensions]) fs.rmSync(file, { force: true });
 }

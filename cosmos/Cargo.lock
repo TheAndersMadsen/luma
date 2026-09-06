@@ -561,6 +561,7 @@ dependencies = [
  "cosmos-protocol",
  "cosmos-rtc",
  "cosmos-stt",
+ "cosmos-surface-client",
  "futures-util",
  "h2",
  "image",
@@ -628,12 +629,18 @@ dependencies = [
 name = "cosmos-rtc"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "futures-util",
  "livekit",
+ "livekit-net",
  "livekit-token",
+ "reqwest",
+ "rustls",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite 0.29.0",
+ "url",
  "uuid",
 ]
 
@@ -646,6 +653,34 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "whisper-rs",
+]
+
+[[package]]
+name = "cosmos-surface-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cosmos-rtc",
+ "p256",
+ "rand 0.8.7",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "cosmos-surface-client-ffi"
+version = "0.1.0"
+dependencies = [
+ "cosmos-surface-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

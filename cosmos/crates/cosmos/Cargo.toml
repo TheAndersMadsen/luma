@@ -65,6 +65,8 @@ uuid = { workspace = true, features = ["serde"] }
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+cosmos-surface-client = { path = "../surface-client" }
+cosmos-rtc = { path = "../rtc", features = ["test-loopback-tls"] }
 h2.workspace = true
 tower.workspace = true
 # Client-side TLS, for the live enrollment test only. The server never needs it —
