@@ -6,7 +6,10 @@ mod center_acceptance;
 #[path = "browser_runtime_api_tests.rs"]
 mod tests;
 use crate::{
-    ambiance::{Action, BrowserProof, RoomProof, RuntimeError, runtime::AmbianceRuntime},
+    ambiance::{
+        Action, BrowserProof, Channel, RoomProof, RuntimeError, SemanticIntent,
+        runtime::AmbianceRuntime, visual::Card,
+    },
     web_auth::JwtVerifier,
 };
 use axum::{
@@ -179,8 +182,31 @@ async fn room(
     })?;
     Ok(Json(opened))
 }
-pub(crate) fn command(action: &Action) -> Value {
-    json!({"version":1,"actionId":action.id,"turnId":action.turn_id,"generation":action.generation,"surfaceId":action.surface_id,"incarnation":action.incarnation,"channel":"visual.card","contentDigest":action.content_digest,"content":{"kind":"text","text":action.intent.text()},"expiresAt":action.display_expires_at_ms})
+/// Serialization only. The room dispatcher must first obtain current delivery
+/// authority and resolve any transient content for that exact action.
+pub(crate) fn command(action: &Action, card: Option<&Card>) -> Option<Value> {
+    if action.channel != Channel::VisualCard
+        || !action.intent.valid()
+        || action.content_digest != action.intent.content_digest()
+    {
+        return None;
+    }
+    let content = match &action.intent {
+        SemanticIntent::VisualTextCard { text } => json!({"kind":"text","text":text}),
+        SemanticIntent::PlaceAddressCard { content } => {
+            let card = card?;
+            if card.digest() != content.digest
+                || action.display_expires_at_ms != content.expires_at_ms
+            {
+                return None;
+            }
+            card.value()
+        }
+        SemanticIntent::InformationalSpeech { .. } => return None,
+    };
+    Some(
+        json!({"version":1,"actionId":action.id,"turnId":action.turn_id,"generation":action.generation,"surfaceId":action.surface_id,"incarnation":action.incarnation,"channel":"visual.card","contentDigest":action.content_digest,"content":content,"expiresAt":action.display_expires_at_ms}),
+    )
 }
 async fn status(State(api): State<ApiState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     let principal = owner(&headers, &api)?;

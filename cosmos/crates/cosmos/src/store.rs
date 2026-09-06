@@ -1174,6 +1174,18 @@ impl MemoryStore {
             .map_or_else(Vec::new, |registry| registry.events.clone())
     }
 
+    #[cfg(test)]
+    pub(crate) async fn ambiance_runtime_state(
+        &self,
+        principal: &str,
+    ) -> crate::ambiance::RuntimeState {
+        self.surfaces
+            .lock()
+            .expect("surface registry lock poisoned")
+            .get(principal)
+            .map_or_else(Default::default, |registry| registry.runtime.clone())
+    }
+
     /// A ready-to-share handle, for wiring at service-registration time.
     /// Build the store, restoring any snapshot this workload previously wrote.
     ///

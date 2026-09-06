@@ -89,7 +89,7 @@ test("Pin setup instructions stay direct", async () => {
 
 test("Ai Mic shows answers without suggestions, tool traces, or reasoning labels", async () => {
   const chat = withoutComments(await source("src/components/BrowserDisplay.tsx"));
-  assert.match(chat, /<article\b[^>]* aria-label="Cosmos display"><p ref=\{node\}>\{command\.content\.text\}<\/p><\/article>/);
+  assert.match(chat, /<article\b[^>]* aria-label="Cosmos display">\{content\.kind === "text" \? <p>\{content\.text\}<\/p> :/);
   assert.match(chat, /aria-label="Ask Cosmos"/);
   assert.match(chat, /role="status"/);
   assert.doesNotMatch(chat, /Try asking|suggestion|reasoningOf|Used \{.*tool|styles\.trace/i);

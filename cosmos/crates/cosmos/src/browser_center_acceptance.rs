@@ -132,6 +132,9 @@ impl ChatModel for Model {
         tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        for message in messages {
+            assert_no_places_content(&message.content);
+        }
         if messages
             .last()
             .is_some_and(|message| message.content == LOOKUP_PROMPT)
@@ -140,6 +143,19 @@ impl ChatModel for Model {
                 tool_call: Some(ToolCall {
                     name: "propose_information".into(),
                     arguments: json!({"web_lookup":{"query":LOOKUP_QUERY},"privacy":"public"})
+                        .to_string(),
+                }),
+                ..Default::default()
+            });
+        }
+        if messages
+            .last()
+            .is_some_and(|message| message.content == PLACES_PROMPT)
+        {
+            return Ok(ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "propose_information".into(),
+                    arguments: json!({"place_lookup":{"query":PLACES_QUERY},"privacy":"public"})
                         .to_string(),
                 }),
                 ..Default::default()
@@ -176,6 +192,8 @@ enum Stage {
     ClearObserved,
     LookupRenderObserved,
     LookupClearObserved,
+    PlacesRenderObserved,
+    PlacesClearObserved,
 }
 
 const LOOKUP_PROMPT: &str = "Find public web sources about the Denmark national football team.";
@@ -183,6 +201,66 @@ const LOOKUP_QUERY: &str = "Denmark national football team";
 const LOOKUP_TITLE: &str = "Denmark national football team";
 const LOOKUP_SNIPPET: &str = "Official team information from the Danish Football Association.";
 const LOOKUP_SOURCE_URL: &str = "https://www.dbu.dk/landshold/herrelandshold/";
+const PLACES_PROMPT: &str = "Find cafes in Copenhagen.";
+const PLACES_QUERY: &str = "cafes in Copenhagen";
+const PLACES_KEY: &str = "synthetic-places-key";
+const PLACES_ID: &str = "ChIJCosmosAcceptanceCafe";
+const PLACES_NAME: &str = "Cosmos Fixture Cafe";
+const PLACES_ADDRESS: &str = "7 Fixture Quay, Copenhagen";
+const PLACES_SOURCE_URL: &str = "https://maps.google.com/?cid=900000000000000001";
+const PLACES_ATTRIBUTION: &str =
+    r#"<a href="https://attribution.example.test/catalog">Fixture catalog credit</a>"#;
+const PLACES_ROW_ATTRIBUTION: &str =
+    r#"<a href="https://attribution.example.test/venue">Fixture venue credit</a>"#;
+
+fn assert_no_places_content(value: &str) {
+    for content in [
+        PLACES_KEY,
+        PLACES_ID,
+        PLACES_NAME,
+        PLACES_ADDRESS,
+        PLACES_SOURCE_URL,
+        "attribution.example.test",
+        "Fixture catalog credit",
+        "Fixture venue credit",
+        "55.6789123",
+        "12.5432198",
+    ] {
+        assert!(
+            !value.contains(content),
+            "provider-returned Places content must remain transient and outside model input"
+        );
+    }
+}
+
+fn places_evidence() -> crate::backends::places::LookupEvidence {
+    crate::backends::places::LookupEvidence {
+        places: vec![crate::backends::places::LookupPlace {
+            place_id: PLACES_ID.into(),
+            name: PLACES_NAME.into(),
+            address: PLACES_ADDRESS.into(),
+            latitude: 55.6789123,
+            longitude: 12.5432198,
+            source_url: Some(PLACES_SOURCE_URL.into()),
+        }],
+        html_attributions: vec![PLACES_ATTRIBUTION.into(), PLACES_ROW_ATTRIBUTION.into()],
+        privacy_floor: PrivacyClass::SharedRoom,
+    }
+}
+
+async fn assert_places_not_persisted(audit: &sqlx::PgPool, principal: &str) {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT state::text FROM cosmos_ambiance_runtime WHERE principal=$1 UNION ALL SELECT event::text FROM cosmos_surface_event WHERE principal=$1",
+    ).bind(principal).fetch_all(audit).await.unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert_no_places_content(&row);
+    }
+    // The durable action map is the runtime outbox. It may contain references
+    // and matching digests, never the provider's address card or coordinates.
+    let state = committed_runtime(audit, principal).await;
+    assert_no_places_content(&serde_json::to_string(&state.actions).unwrap());
+}
 
 fn lookup_card_text() -> String {
     format!(
@@ -206,7 +284,7 @@ async fn committed_lookup_events(
     principal: &str,
 ) -> Vec<crate::ambiance::ledger::RuntimeEvent> {
     let events: Vec<String> = sqlx::query_scalar(
-        "SELECT event::text FROM cosmos_surface_event WHERE principal=$1 AND event->>'version'='3' AND event->'data'->>'kind' LIKE 'lookup_%' ORDER BY sequence",
+        "SELECT event::text FROM cosmos_surface_event WHERE principal=$1 AND event->>'version'='3' AND (event->'data'->>'kind' LIKE 'lookup_%' OR event->'data'->>'kind'='place_lookup_policy_changed') ORDER BY sequence",
     ).bind(principal).fetch_all(audit).await.unwrap();
     events
         .into_iter()
@@ -222,7 +300,7 @@ async fn lookup_server(
     native_id: Uuid,
 ) -> (
     crate::integrations::SearchConfig,
-    crate::backends::search::LookupProviderIdentity,
+    crate::backends::lookup::LookupProviderIdentity,
     Arc<AtomicUsize>,
     tokio::task::JoinHandle<()>,
 ) {
@@ -280,6 +358,76 @@ async fn lookup_server(
         axum::serve(listener, app).await.unwrap();
     });
     (config, provider, calls, server)
+}
+
+/// One real HTTP Text Search call with synthetic Google response bytes. This
+/// fixture proves the granted request and renderer contract, not live Places.
+async fn places_server(
+    audit: sqlx::PgPool,
+    principal: String,
+    native_id: Uuid,
+) -> (
+    crate::integrations::MapsConfig,
+    String,
+    crate::backends::lookup::LookupProviderIdentity,
+    Arc<AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/maps/api/place/textsearch/json",
+        listener.local_addr().unwrap()
+    );
+    let config = crate::integrations::MapsConfig {
+        google_maps_key: Some(PLACES_KEY.into()),
+    };
+    let mut providers = crate::backends::places::lookup_providers_for_test(&config, &endpoint);
+    assert_eq!(providers.len(), 1);
+    let provider = providers.remove(0);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let received = calls.clone();
+    let expected_provider = provider.clone();
+    let app = axum::Router::new().route("/maps/api/place/textsearch/json", axum::routing::get(move |axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>, headers: axum::http::HeaderMap| {
+        let audit = audit.clone(); let principal = principal.clone();
+        let received = received.clone(); let expected_provider = expected_provider.clone();
+        async move {
+            assert_eq!(received.fetch_add(1, Ordering::SeqCst), 0, "Places admission recovery must not repeat the provider request");
+            assert_eq!(query, BTreeMap::from([("query".into(), PLACES_QUERY.into()), ("key".into(), PLACES_KEY.into())]));
+            assert_eq!(headers.get("accept").unwrap(), "application/json");
+            let mut payload = reqwest::Url::parse(&expected_provider.endpoint).unwrap();
+            payload.query_pairs_mut().append_pair("query", PLACES_QUERY);
+            let payload_digest = crate::surface_registry::hash(format!("GET\n{payload}\naccept:application/json\n").as_bytes());
+            let state = committed_runtime(&audit, &principal).await;
+            let turn = state.turn.as_ref().unwrap();
+            assert_eq!(turn.fence.origin_surface, native_id);
+            let lookup = turn.lookup.as_ref().expect("Places admission must commit before provider I/O");
+            assert_eq!(lookup.policy_revision, 1);
+            assert_eq!(lookup.request.provider, expected_provider);
+            assert_eq!(lookup.request.query_digest, crate::surface_registry::hash(PLACES_QUERY.as_bytes()));
+            assert_eq!(lookup.request.payload_digest, payload_digest);
+            assert_eq!(lookup.request.privacy, PrivacyClass::SharedRoom);
+            assert!(lookup.receipt.is_none());
+            let events = committed_lookup_events(&audit, &principal).await;
+            assert_eq!(events.len(), 6);
+            assert!(matches!(&events[4].data, RuntimeData::PlaceLookupPolicyChanged { surface_id, approval }
+                if *surface_id == native_id && approval.approval_revision == 1 && approval.revision == 1
+                    && approval.policy.as_ref().is_some_and(|policy| policy.provider == expected_provider && policy.maximum_class == PrivacyClass::SharedRoom)));
+            assert!(matches!(&events[5].data, RuntimeData::LookupStarted { fence, lookup: started }
+                if fence.turn_id == turn.fence.turn_id && fence.generation == turn.fence.generation
+                    && fence.origin_surface == native_id && fence.worker == turn.fence.worker && started == lookup));
+            assert!(events[4].sequence < events[5].sequence);
+            assert_places_not_persisted(&audit, &principal).await;
+            axum::Json(json!({"status":"OK","results":[{
+                "place_id":PLACES_ID,"name":PLACES_NAME,"formatted_address":PLACES_ADDRESS,
+                "geometry":{"location":{"lat":55.6789123,"lng":12.5432198}},"url":PLACES_SOURCE_URL,
+                "html_attributions":[PLACES_ROW_ATTRIBUTION]
+            }],"html_attributions":[PLACES_ATTRIBUTION]}))
+        }
+    }));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (config, endpoint, provider, calls, server)
 }
 
 #[derive(Deserialize)]
@@ -513,6 +661,8 @@ async fn browser_center_application_acceptance() {
     let native_id = native_surface_id(&principal, native_enrollment);
     let (lookup_config, lookup_provider, lookup_calls, lookup_server) =
         lookup_server(audit.clone(), principal.clone(), native_id).await;
+    let (places_config, places_endpoint, places_provider, places_calls, places_server) =
+        places_server(audit.clone(), principal.clone(), native_id).await;
     let mut scalar = [0u8; 32];
     scalar[31] = 1;
     let signer = Arc::new(FixtureSigner {
@@ -588,7 +738,8 @@ async fn browser_center_application_acceptance() {
     });
     let runtime = Arc::new(
         AmbianceRuntime::new(store.clone(), model.clone(), Some(pairing.clone()))
-            .with_lookup_config_for_test(lookup_config.clone()),
+            .with_lookup_config_for_test(lookup_config.clone())
+            .with_places_config_for_test(places_config.clone(), places_endpoint.clone()),
     );
     let config = crate::browser_rooms::Config::new(
         url.into(),
@@ -611,6 +762,7 @@ async fn browser_center_application_acceptance() {
         Some(super::tests::verifier()),
         Some(pairing),
         lookup_config,
+        Some((places_config, places_endpoint)),
     ))
     .merge(crate::native_runtime_api::with_audience(
         store.clone(),
@@ -633,7 +785,10 @@ async fn browser_center_application_acceptance() {
         "nativeCompletionSaveRecovered":false,
         "nativeCrashPendingRecovered":false,
         "webLookupApproved":false,"webLookupAcknowledged":false,"webLookupRetried":false,"webLookupLedgerVerified":false,
-        "webLookupCancelled":false,"webLookupPayloadCleared":false,"webLookupRevoked":false});
+        "webLookupCancelled":false,"webLookupPayloadCleared":false,"webLookupRevoked":false,
+        "placesLookupApproved":false,"placesLookupAcknowledged":false,"placesLookupRetried":false,
+        "placesLookupLedgerVerified":false,"placesLookupContentTransient":false,
+        "placesLookupCancelled":false,"placesLookupPayloadCleared":false,"placesLookupRevoked":false});
     write_private(status_path, &status, true);
     write_private(
         input["bootstrapPath"].as_str().unwrap(),
@@ -641,6 +796,7 @@ async fn browser_center_application_acceptance() {
             "port":address.port(),"subject":subject,"bearer":bearer,"pinId":pin_id,
             "nativeDescriptor":native_descriptor,"nativeId":native_id,"nativePublicKeyFingerprint":native_fingerprint,
             "lookupProvider":lookup_provider,
+            "placesProvider":places_provider,
         }),
         true,
     );
@@ -1122,6 +1278,152 @@ async fn browser_center_application_acceptance() {
             status["webLookupRevoked"] = true.into();
             write_private(status_path, &status, false);
 
+            // Places requires its own provider approval and returns a typed,
+            // transient card. Web permission cannot authorize this request.
+            loop {
+                assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(places_calls.load(Ordering::SeqCst), 0);
+                let events = committed_lookup_events(&audit, &principal).await;
+                if events.len() == 5 {
+                    assert!(matches!(&events[4].data, RuntimeData::PlaceLookupPolicyChanged { surface_id, approval }
+                        if *surface_id == native_id && approval.approval_revision == 1 && approval.revision == 1
+                            && approval.policy.as_ref().is_some_and(|policy| policy.provider == places_provider && policy.maximum_class == PrivacyClass::SharedRoom)));
+                    break;
+                }
+                assert_eq!(events.len(), 4);
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat while owner reviews Places");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            status["placesLookupApproved"] = true.into();
+            write_private(status_path, &status, false);
+            native.heartbeat().await.expect("native heartbeat before Places request");
+            heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+            journal.fail_completion_save();
+            assert!(matches!(native.send_text(PLACES_PROMPT).await, Err(NativeClientError::Persistence)));
+            assert_eq!(journal.failures.load(Ordering::SeqCst), 4);
+            let places_pending = native.status().pending.expect("Places admission remains pending");
+            assert_eq!(places_pending.kind, OperationKind::Text);
+            let OperationResult::Text(places_admission) = retry_client_pending(&mut native).await else {
+                panic!("Places input must recover its exact admitted turn")
+            };
+            assert_eq!(places_admission.turn_id, places_pending.instance_id);
+            assert!(!places_admission.duplicate);
+            assert!(native.status().pending.is_none());
+            let turn_id = places_admission.turn_id;
+            let generation = places_admission.generation;
+            let expected_evidence_digest = crate::surface_registry::hash(&serde_json::to_vec(&places_evidence()).unwrap());
+            let expected_card = crate::ambiance::visual::Card::from_lookup(PLACES_QUERY, &places_evidence()).unwrap();
+            let expected_digest = expected_card.digest();
+            let mut places_acknowledged = None;
+            loop {
+                let state = committed_runtime(&audit, &principal).await;
+                assert!(model.calls.load(Ordering::SeqCst) <= 3);
+                assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                assert!(places_calls.load(Ordering::SeqCst) <= 1);
+                let current = state.turn.as_ref().unwrap();
+                assert_eq!((current.fence.turn_id, current.fence.generation, current.fence.origin_surface), (turn_id, generation, native_id));
+                assert_eq!(state.ingress[&native_id].receipts.len(), 3);
+                assert!(state.actions.values().all(|action| action.surface_id != native_id));
+                if places_acknowledged.is_none() && let Some(action) = state.actions.values().find(|action| {
+                    action.status == ActionStatus::Acknowledged && action.turn_id == turn_id && action.generation == generation
+                        && action.worker == current.fence.worker && action.channel == Channel::VisualCard
+                        && action.surface_id == browser_id && action.incarnation == browser_incarnation
+                        && action.content_digest == expected_digest
+                        && matches!(&action.intent, SemanticIntent::PlaceAddressCard { content }
+                            if content.digest == expected_digest && action.display_expires_at_ms == content.expires_at_ms)
+                }) {
+                    assert!(action.intent.text().is_empty());
+                    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+                    assert_eq!(places_calls.load(Ordering::SeqCst), 1);
+                    let SemanticIntent::PlaceAddressCard { content } = &action.intent else { unreachable!() };
+                    let lookup = current.lookup.as_ref().unwrap();
+                    let receipt = lookup.receipt.as_ref().expect("Places evidence commits before rendering");
+                    assert_eq!(lookup.policy_revision, 1);
+                    assert_eq!(lookup.request.provider, places_provider);
+                    assert_eq!(receipt.evidence_digest, expected_evidence_digest);
+                    assert_eq!(receipt.privacy, PrivacyClass::SharedRoom);
+                    assert!(receipt.received_at_ms >= lookup.started_at_ms);
+                    assert!(receipt.received_at_ms < lookup.started_at_ms + crate::ambiance::lookup::LOOKUP_MS);
+                    assert_eq!(receipt.visual.as_ref(), Some(content));
+                    let payload = runtime.visual_card(&principal, action).expect("acknowledged Places payload remains transiently available");
+                    assert_eq!(payload.value(), expected_card.value());
+                    assert_eq!(payload.digest(), expected_digest);
+                    let events = committed_lookup_events(&audit, &principal).await;
+                    assert_eq!(events.len(), 7);
+                    assert!(matches!(&events[6].data, RuntimeData::LookupCompleted { fence, id, policy_revision, receipt: committed }
+                        if fence.turn_id == turn_id && fence.generation == generation && fence.origin_surface == native_id
+                            && fence.worker == current.fence.worker && *id == lookup.id && *policy_revision == 1 && committed == receipt));
+                    assert!(events[5].sequence < events[6].sequence);
+                    assert_places_not_persisted(&audit, &principal).await;
+                    places_acknowledged = Some(action.clone());
+                    status["placesLookupAcknowledged"] = true.into();
+                    status["placesLookupRetried"] = true.into();
+                    status["placesLookupLedgerVerified"] = true.into();
+                    status["placesLookupContentTransient"] = true.into();
+                    status["placesCardDigest"] = expected_digest.clone().into();
+                    write_private(status_path, &status, false);
+                }
+                match coordination_stage(coordination_path) {
+                    Some(Stage::PlacesRenderObserved) => { assert!(places_acknowledged.is_some()); break; }
+                    Some(Stage::LookupClearObserved) => {}
+                    _ => panic!("Places render checkpoint is missing or out of order"),
+                }
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat while Places card renders");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            native.cancel(places_admission).await.expect("native cancels Places turn");
+            assert_cancelled_payload(&committed_runtime(&audit, &principal).await, turn_id, generation);
+            let acknowledged_places_action = places_acknowledged.unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while runtime.visual_card(&principal, &acknowledged_places_action).is_some() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }).await.expect("cancellation must retire the transient Places payload");
+            assert_places_not_persisted(&audit, &principal).await;
+            status["placesLookupCancelled"] = true.into();
+            status["placesLookupPayloadCleared"] = true.into();
+            write_private(status_path, &status, false);
+            loop {
+                match coordination_stage(coordination_path) {
+                    Some(Stage::PlacesClearObserved) => break,
+                    Some(Stage::PlacesRenderObserved) => {}
+                    _ => panic!("Places clear checkpoint is missing or out of order"),
+                }
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat after Places clear");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            loop {
+                assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+                assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(places_calls.load(Ordering::SeqCst), 1);
+                let events = committed_lookup_events(&audit, &principal).await;
+                if events.len() == 8 {
+                    assert!(matches!(&events[7].data, RuntimeData::PlaceLookupPolicyChanged { surface_id, approval }
+                        if *surface_id == native_id && approval.approval_revision == 1 && approval.revision == 2 && approval.policy.is_none()));
+                    assert_cancelled_payload(&committed_runtime(&audit, &principal).await, turn_id, generation);
+                    assert_places_not_persisted(&audit, &principal).await;
+                    break;
+                }
+                assert_eq!(events.len(), 7);
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat while owner revokes Places");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            status["placesLookupRevoked"] = true.into();
+            write_private(status_path, &status, false);
+
             loop {
                 let record = committed_record(&audit, &principal, native_id)
                     .await
@@ -1190,8 +1492,9 @@ async fn browser_center_application_acceptance() {
                     assert_eq!(current.binding, Binding::Browser);
                     let view = current.view(crate::surface_registry::now_ms());
                     assert!(view.connected && view.available && !view.revoked);
-                    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
                     assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(places_calls.load(Ordering::SeqCst), 1);
                     if current.sequence > browser_sequence_after_native_close {
                         // This state sequence was committed after native SDK
                         // shutdown, so cached browser availability cannot pass.
@@ -1212,8 +1515,9 @@ async fn browser_center_application_acceptance() {
                 assert!(state.native_connections.is_empty());
                 assert!(!state.ingress.contains_key(&native_id));
                 assert_cancelled_payload(&state, turn_id, generation);
-                assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                assert_eq!(model.calls.load(Ordering::SeqCst), 3);
                 assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(places_calls.load(Ordering::SeqCst), 1);
                 let speech_revoked = state
                     .disclosure_policies
                     .get(&pin_id)
@@ -1231,11 +1535,14 @@ async fn browser_center_application_acceptance() {
                         .all(|surface| !surface.connected)
                 {
                     status["complete"] = true.into();
-                    status["modelCalls"] = 2.into();
+                    status["modelCalls"] = 3.into();
                     status["modelProviderCalls"] = model.provider_calls.load(Ordering::SeqCst).into();
                     status["lookupProviderCalls"] = 1.into();
                     status["lookupProviderMode"] = "local-searxng-fixture".into();
                     status["webLookupPolicyRevision"] = 2.into();
+                    status["placesProviderCalls"] = 1.into();
+                    status["placesProviderMode"] = "local-google-places-fixture".into();
+                    status["placesLookupPolicyRevision"] = 2.into();
                     status["modelMode"] = model_mode.into();
                     status["speechPolicyRevision"] = 2.into();
                     status["localVoicePolicyRevision"] = 2.into();
@@ -1254,6 +1561,8 @@ async fn browser_center_application_acceptance() {
     let _ = server.await;
     lookup_server.abort();
     let _ = lookup_server.await;
+    places_server.abort();
+    let _ = places_server.await;
     audit.close().await;
-    accepted.expect("Center must verify native client recovery, approved sourced web lookup with one committed provider call, exact DOM acknowledgments and cancellation clears, native revocation with browser continuity, and separate speech and local voice revocations");
+    accepted.expect("Center must verify native client recovery, separately approved Web and transient Places lookups with one committed call each, exact DOM acknowledgments and cancellation clears, native revocation with browser continuity, and separate speech and local voice revocations");
 }

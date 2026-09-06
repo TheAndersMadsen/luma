@@ -222,6 +222,36 @@ query text. A SearXNG grant names its Bing request profile; a SerpApi grant name
 Google search. Cosmos does not switch providers when a lookup fails. Saving a
 provider key alone leaves every device's lookup permission off.
 
+The next development increment adds conversational named-place lookup with an
+independent Google Maps permission while preserving Web grants. It accepts one
+explicitly named place/locality query and displays a basic address list on the
+approved Center screen, with Google Maps and supplied third-party attribution.
+This permission covers query text and visual output, not wearer location,
+navigation, spoken place results or personal history. Validation and deployment
+of this increment remain pending; the live v6 preview retains Web lookup only.
+
+Place results use a bounded process-local cache and expire after 60 seconds.
+The durable action contains only an expiring content reference and digest;
+results never enter model messages, stored conversation text or browser storage.
+Cancellation, revocation and expiry retire the display. A periodic cleanup
+removes expired entries; database waits are bounded so they cannot indefinitely
+delay cleanup. Process loss makes a
+pending result unavailable and never repeats its provider request. Center
+acknowledges the complete address card and its attribution only after DOM
+commit; unsupported attribution rejects the card without hiding required credit.
+The
+[Maps terms](https://cloud.google.com/maps-platform/terms) and
+[service terms](https://cloud.google.com/maps-platform/terms/maps-service-terms)
+do not permit treating names and addresses as reusable stored conversation
+content; the explicit 30-day caching exception covers coordinates, and place
+IDs may be retained indefinitely. The existing durable text outbox therefore
+cannot carry these results. Applicable
+[EEA uses](https://cloud.google.com/terms/maps-platform/eea-places-api-permitted-uses)
+depend on the billing account and integration, which remain unverified.
+Google Maps content must not enter the Azure speech path under the standard
+terms. Keep these provider limits separate from Ambiance's origin and output
+permissions; a disclosure grant does not resolve either limitation.
+
 The runtime admits one bounded query from the current request, commits its
 provider disclosure before network access and records a result digest before
 proposing a sourced text card. Sources are actual provider URLs and plain text;
@@ -235,7 +265,7 @@ have no stable input identity and each admission creates a separate turn.
 Privacy classification covers the full bounded provider response before source
 filtering, truncation or card-size limits, including empty result sets.
 The first output is the existing approved Center display. Native rendering,
-spoken search summaries, weather/places/music services and personal-data integrations remain separate
+spoken search summaries, weather/music services and personal-data integrations remain separate
 increments. This source path does not establish a live provider conversation.
 
 Validation for this increment passed 43 focused Cosmos tests and the built
@@ -592,7 +622,7 @@ evidence that those dependencies exist.
    A real synthetic request through that endpoint passed. It also caught the
    provider's rejection of root-level schema unions: the shared tool schema now
    lists its optional branches, while the strict runtime parser still requires
-   exactly one of `intent` and `analysis`. This is provider compatibility evidence,
+   exactly one of `intent`, `analysis`, `web_lookup` and `place_lookup`. This is provider compatibility evidence,
    not a voice loop, latency result or full paper conformance.
 
    In **Settings → Services → Cosmos → Ambiance conversation**, explicitly select

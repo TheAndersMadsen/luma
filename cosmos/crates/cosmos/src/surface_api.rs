@@ -1,11 +1,12 @@
 //! Strict bearer-authenticated owner registry, separate from public projections.
 use crate::{
+    backends::lookup::{LookupProviderIdentity, LookupService},
     store::SharedStore,
     surface_registry::{self, Mutation, RegistryError},
     web_auth::JwtVerifier,
 };
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -24,15 +25,28 @@ struct ApiState {
     pairing: Option<crate::enrollment::SharedEnrollmentStore>,
     #[cfg(test)]
     lookup_config: Option<crate::integrations::SearchConfig>,
+    #[cfg(test)]
+    places_lookup_config: Option<(crate::integrations::MapsConfig, String)>,
 }
 
 impl ApiState {
-    fn lookup_providers(&self) -> Vec<crate::backends::search::LookupProviderIdentity> {
-        #[cfg(test)]
-        if let Some(config) = &self.lookup_config {
-            return crate::backends::search::lookup_providers_for_test(config);
+    fn lookup_providers(&self, service: LookupService) -> Vec<LookupProviderIdentity> {
+        match service {
+            LookupService::Web => {
+                #[cfg(test)]
+                if let Some(config) = &self.lookup_config {
+                    return crate::backends::search::lookup_providers_for_test(config);
+                }
+                crate::backends::search::lookup_providers()
+            }
+            LookupService::Places => {
+                #[cfg(test)]
+                if let Some((config, endpoint)) = &self.places_lookup_config {
+                    return crate::backends::places::lookup_providers_for_test(config, endpoint);
+                }
+                crate::backends::places::lookup_providers()
+            }
         }
-        crate::backends::search::lookup_providers()
     }
 }
 
@@ -55,6 +69,8 @@ pub(crate) fn with_pairing(
         pairing,
         #[cfg(test)]
         lookup_config: None,
+        #[cfg(test)]
+        places_lookup_config: None,
     })
 }
 
@@ -87,6 +103,14 @@ fn routes(api: ApiState) -> Router {
             "/surface-api/v1/surfaces/:surface_id/web-lookup",
             get(lookup_policy)
                 .post(set_lookup_policy)
+                .route_layer(Extension(LookupService::Web))
+                .layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/surface-api/v1/surfaces/:surface_id/places-lookup",
+            get(lookup_policy)
+                .post(set_lookup_policy)
+                .route_layer(Extension(LookupService::Places))
                 .layer(DefaultBodyLimit::max(4096)),
         )
         .layer(axum::middleware::map_response(no_store))
@@ -99,12 +123,14 @@ pub(crate) fn with_lookup_config_for_test(
     verifier: Option<Arc<JwtVerifier>>,
     pairing: Option<crate::enrollment::SharedEnrollmentStore>,
     config: crate::integrations::SearchConfig,
+    places: Option<(crate::integrations::MapsConfig, String)>,
 ) -> Router {
     routes(ApiState {
         store,
         verifier,
         pairing,
         lookup_config: Some(config),
+        places_lookup_config: places,
     })
 }
 
@@ -386,6 +412,7 @@ where
 
 async fn lookup_policy(
     State(api): State<ApiState>,
+    Extension(service): Extension<LookupService>,
     Path(surface_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -395,6 +422,7 @@ async fn lookup_policy(
         .runtime(
             &principal,
             crate::ambiance::RuntimeOperation::LookupPolicy {
+                service,
                 surface_id: id(&surface_id)?,
             },
         )
@@ -405,12 +433,13 @@ async fn lookup_policy(
     Ok(Json(json!({
         "approval": approval,
         "binding": binding,
-        "providers": api.lookup_providers(),
+        "providers": api.lookup_providers(service),
     })))
 }
 
 async fn set_lookup_policy(
     State(api): State<ApiState>,
+    Extension(service): Extension<LookupService>,
     Path(surface_id): Path<String>,
     headers: HeaderMap,
     request: Result<Json<LookupApproval>, JsonRejection>,
@@ -418,14 +447,14 @@ async fn set_lookup_policy(
     let principal = owner(&headers, &api)?;
     let surface_id = id(&surface_id)?;
     let request = body(request)?;
-    if request.approval != crate::ambiance::lookup::OWNER_APPROVAL {
+    if request.approval != crate::ambiance::lookup::owner_approval(service) {
         return Err(invalid());
     }
-    let providers = api.lookup_providers();
+    let providers = api.lookup_providers(service);
     if let Some(policy) = &request.policy {
         // The owner approves the exact displayed destination and request
         // profile. A provider key or an old configuration is not that grant.
-        if !providers.contains(&policy.provider) {
+        if policy.provider.provider.service() != service || !providers.contains(&policy.provider) {
             return Err(ApiError(StatusCode::CONFLICT, "provider_changed"));
         }
         let current = api
@@ -444,6 +473,7 @@ async fn set_lookup_policy(
         .runtime(
             &principal,
             crate::ambiance::RuntimeOperation::SetLookupPolicy {
+                service,
                 surface_id,
                 approval_revision: request.approval_revision,
                 approval_incarnation: request.approval_incarnation,

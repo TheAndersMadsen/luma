@@ -23,7 +23,7 @@ test("the global Shell opens one route-persistent floating assistant", async () 
 
 test("assistant answers stay primary and implementation traces stay out of the UI", async () => {
   const display = await source("src/components/BrowserDisplay.tsx");
-  assert.match(display, /<p ref=\{node\}>\{command\.content\.text\}<\/p>/);
+  assert.match(display, /\{content\.kind === "text" \? <p>\{content\.text\}<\/p> :/);
   assert.match(display, /runtime\?\.committed\(command\)/);
   assert.doesNotMatch(display, /dangerouslySetInnerHTML|<audio|<details|trace\/stream/);
 });

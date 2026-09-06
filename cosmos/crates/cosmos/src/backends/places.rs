@@ -13,13 +13,699 @@
 
 use cosmos_protocol::aibus as pb;
 use cosmos_protocol::aibus::GeoLocateRequest;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{self, json};
 
+use super::lookup::{
+    LookupError, LookupProvider, LookupProviderIdentity, LookupQuery, bounded_body,
+    get_payload_digest, lookup_endpoint, lookup_http, lookup_response_privacy,
+};
 use super::{BackendError, http, key};
 
 const KEY_VAR: &str = "COSMOS_GOOGLE_MAPS_KEY";
 const DEFAULT_NEARBY_RADIUS_M: f64 = 1_000.0;
+const LOOKUP_ENDPOINT: &str = "https://maps.googleapis.com/maps/api/place/textsearch/json";
+const MAX_LOOKUP_PLACES: usize = 4;
+const MAX_ATTRIBUTIONS: usize = 16;
+const MAX_ATTRIBUTION_BYTES: usize = 2048;
+
+/// Actual provider identities and content. No missing ratings, hours or contact
+/// data are synthesized. A source URL is present only if the provider supplied it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookupPlace {
+    pub place_id: String,
+    pub name: String,
+    pub address: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+}
+
+/// Transient service evidence, not a durable text action or model context.
+/// Attribution HTML is preserved as untrusted data; no caller may execute it or
+/// silently omit required attribution. A compliant transient renderer is separate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookupEvidence {
+    pub places: Vec<LookupPlace>,
+    pub html_attributions: Vec<String>,
+    pub privacy_floor: crate::ambiance::PrivacyClass,
+}
+
+/// Private immutable request snapshot. Preparing is network-free; execute may
+/// run only after the runtime commits a matching Places disclosure. No Debug,
+/// Clone or Serialize implementation can expose its credential-bearing URL.
+pub struct PreparedLookup {
+    identity: LookupProviderIdentity,
+    query: LookupQuery,
+    query_digest: String,
+    payload_digest: String,
+    url: reqwest::Url,
+}
+
+impl PreparedLookup {
+    pub fn identity(&self) -> &LookupProviderIdentity {
+        &self.identity
+    }
+    pub fn query(&self) -> &str {
+        self.query.as_str()
+    }
+    pub fn query_digest(&self) -> &str {
+        &self.query_digest
+    }
+    pub fn payload_digest(&self) -> &str {
+        &self.payload_digest
+    }
+
+    pub async fn execute(self) -> Result<LookupEvidence, LookupError> {
+        let response = lookup_http()?
+            .get(self.url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| LookupError::Unavailable)?;
+        if !response.status().is_success() {
+            return Err(LookupError::Unavailable);
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next());
+        if !content_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+        {
+            return Err(LookupError::Malformed);
+        }
+        let body = bounded_body(response).await?;
+        let privacy_floor = lookup_response_privacy(&body)?;
+        let response: LookupResponse =
+            serde_json::from_slice(&body).map_err(|_| LookupError::Malformed)?;
+        let mut html_attributions = Vec::new();
+        append_attributions(response.html_attributions.as_ref(), &mut html_attributions)?;
+        let rows = match response.status.as_str() {
+            "OK" | "ZERO_RESULTS" => response.results.ok_or(LookupError::Malformed)?,
+            "REQUEST_DENIED" | "OVER_QUERY_LIMIT" | "UNKNOWN_ERROR" | "INVALID_REQUEST" => {
+                return Err(LookupError::Unavailable);
+            }
+            _ => return Err(LookupError::Malformed),
+        };
+        if response.status == "ZERO_RESULTS" {
+            if !rows.is_empty() {
+                return Err(LookupError::Malformed);
+            }
+            return Ok(LookupEvidence {
+                places: Vec::new(),
+                html_attributions,
+                privacy_floor,
+            });
+        }
+        let mut places = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            append_attributions(row.html_attributions.as_ref(), &mut html_attributions)?;
+            if places.len() == MAX_LOOKUP_PLACES {
+                continue;
+            }
+            let Ok(raw) =
+                serde_json::from_value::<LookupPlaceResponse>(serde_json::Value::Object(row.place))
+            else {
+                continue;
+            };
+            let Some(place) = checked_lookup_place(raw) else {
+                continue;
+            };
+            if seen.insert(place.place_id.clone()) {
+                places.push(place);
+            }
+        }
+        if places.is_empty() {
+            return Err(LookupError::Malformed);
+        }
+        Ok(LookupEvidence {
+            places,
+            html_attributions,
+            privacy_floor,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct LookupResponse {
+    status: String,
+    results: Option<Vec<LookupRow>>,
+    html_attributions: Option<serde_json::Value>,
+}
+
+/// Attribution is a known field so duplicate entries are rejected during the
+/// complete response decode, before a row limit can discard required credit.
+#[derive(Deserialize)]
+struct LookupRow {
+    html_attributions: Option<serde_json::Value>,
+    #[serde(flatten)]
+    place: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct LookupPlaceResponse {
+    place_id: String,
+    name: String,
+    formatted_address: String,
+    geometry: LookupGeometry,
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LookupGeometry {
+    location: LookupCoordinates,
+}
+
+#[derive(Deserialize)]
+struct LookupCoordinates {
+    lat: f64,
+    lng: f64,
+}
+
+fn checked_lookup_place(raw: LookupPlaceResponse) -> Option<LookupPlace> {
+    fn text(value: &str, maximum: usize) -> bool {
+        !value.trim().is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
+    }
+    if !text(&raw.place_id, 1024)
+        || raw.place_id.chars().any(char::is_whitespace)
+        || !text(&raw.name, 256)
+        || !text(&raw.formatted_address, 512)
+        || !raw.geometry.location.lat.is_finite()
+        || !(-90.0..=90.0).contains(&raw.geometry.location.lat)
+        || !raw.geometry.location.lng.is_finite()
+        || !(-180.0..=180.0).contains(&raw.geometry.location.lng)
+    {
+        return None;
+    }
+    let source_url = match raw.url {
+        None => None,
+        Some(value) => {
+            if value.len() > 2048
+                || value.chars().any(|c| c.is_whitespace() || c.is_control())
+                || value.contains('\\')
+            {
+                return None;
+            }
+            let parsed = reqwest::Url::parse(&value).ok()?;
+            if parsed.scheme() != "https"
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.port().is_some()
+                || !matches!(
+                    parsed.host_str(),
+                    Some("maps.google.com" | "www.google.com")
+                )
+                || (parsed.host_str() == Some("www.google.com")
+                    && parsed.path() != "/maps"
+                    && !parsed.path().starts_with("/maps/"))
+            {
+                return None;
+            }
+            Some(value)
+        }
+    };
+    Some(LookupPlace {
+        place_id: raw.place_id,
+        name: raw.name,
+        address: raw.formatted_address,
+        latitude: raw.geometry.location.lat,
+        longitude: raw.geometry.location.lng,
+        source_url,
+    })
+}
+
+fn append_attributions(
+    value: Option<&serde_json::Value>,
+    output: &mut Vec<String>,
+) -> Result<(), LookupError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let entries = value.as_array().ok_or(LookupError::Malformed)?;
+    if entries.len() > MAX_ATTRIBUTIONS {
+        return Err(LookupError::Oversized);
+    }
+    for entry in entries {
+        let text = entry.as_str().ok_or(LookupError::Malformed)?;
+        if text.len() > MAX_ATTRIBUTION_BYTES {
+            return Err(LookupError::Oversized);
+        }
+        if !output.iter().any(|existing| existing == text) {
+            if output.len() == MAX_ATTRIBUTIONS {
+                return Err(LookupError::Oversized);
+            }
+            output.push(text.to_owned());
+        }
+    }
+    Ok(())
+}
+
+pub fn lookup_providers() -> Vec<LookupProviderIdentity> {
+    lookup_providers_from(
+        &crate::integrations::active().snapshot().maps,
+        LOOKUP_ENDPOINT,
+    )
+}
+
+pub fn prepare_lookup(
+    identity: &LookupProviderIdentity,
+    query: LookupQuery,
+) -> Result<PreparedLookup, LookupError> {
+    prepare_lookup_from(
+        identity,
+        query,
+        &crate::integrations::active().snapshot().maps,
+        LOOKUP_ENDPOINT,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn lookup_providers_for_test(
+    config: &crate::integrations::MapsConfig,
+    endpoint: &str,
+) -> Vec<LookupProviderIdentity> {
+    lookup_providers_from(config, endpoint)
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_lookup_for_test(
+    identity: &LookupProviderIdentity,
+    query: LookupQuery,
+    config: &crate::integrations::MapsConfig,
+    endpoint: &str,
+) -> Result<PreparedLookup, LookupError> {
+    prepare_lookup_from(identity, query, config, endpoint)
+}
+
+fn lookup_providers_from(
+    config: &crate::integrations::MapsConfig,
+    endpoint: &str,
+) -> Vec<LookupProviderIdentity> {
+    if config
+        .google_maps_key
+        .as_deref()
+        .is_none_or(|key| key.trim().is_empty())
+        || lookup_endpoint(endpoint).is_err()
+    {
+        return Vec::new();
+    }
+    vec![LookupProviderIdentity {
+        provider: LookupProvider::GooglePlaces,
+        endpoint: endpoint.to_owned(),
+        configuration_digest: lookup_configuration_digest(endpoint),
+    }]
+}
+
+pub(super) fn lookup_configuration_digest(endpoint: &str) -> String {
+    let profile = json!([
+        "cosmos.places-lookup",
+        1,
+        LookupProvider::GooglePlaces,
+        endpoint,
+        "GET",
+        "query"
+    ]);
+    crate::surface_registry::hash(profile.to_string().as_bytes())
+}
+
+fn prepare_lookup_from(
+    identity: &LookupProviderIdentity,
+    query: LookupQuery,
+    config: &crate::integrations::MapsConfig,
+    endpoint: &str,
+) -> Result<PreparedLookup, LookupError> {
+    if identity.provider != LookupProvider::GooglePlaces || !identity.valid() {
+        return Err(LookupError::InvalidProvider);
+    }
+    let current = lookup_providers_from(config, endpoint)
+        .pop()
+        .ok_or(LookupError::NotConfigured)?;
+    if &current != identity {
+        return Err(LookupError::StaleProvider);
+    }
+    let mut url = lookup_endpoint(endpoint)?;
+    url.query_pairs_mut().append_pair("query", query.as_str());
+    let query_digest = crate::surface_registry::hash(query.as_str().as_bytes());
+    let payload_digest = get_payload_digest(&url);
+    url.query_pairs_mut().append_pair(
+        "key",
+        config
+            .google_maps_key
+            .as_deref()
+            .ok_or(LookupError::NotConfigured)?,
+    );
+    Ok(PreparedLookup {
+        identity: current,
+        query,
+        query_digest,
+        payload_digest,
+        url,
+    })
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+    use crate::backends::lookup::{LookupService, MAX_RESPONSE_BYTES};
+    use std::time::Duration;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::oneshot,
+    };
+
+    fn config() -> crate::integrations::MapsConfig {
+        crate::integrations::MapsConfig {
+            google_maps_key: Some("synthetic-places-key".into()),
+        }
+    }
+
+    fn row(id: &str) -> serde_json::Value {
+        json!({"place_id":id,"name":"Named restaurant","formatted_address":"Example street 1, Copenhagen",
+            "geometry":{"location":{"lat":55.6761,"lng":12.5683}}})
+    }
+
+    async fn serve(
+        status: &str,
+        body: String,
+        location: Option<String>,
+    ) -> (String, oneshot::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/maps/api/place/textsearch/json",
+            listener.local_addr().unwrap()
+        );
+        let status = status.to_owned();
+        let (sender, receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let count = socket.read(&mut chunk).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                assert!(request.len() + count <= 8192);
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let _ = sender.send(String::from_utf8(request).unwrap());
+            let location = location
+                .map(|url| format!("Location: {url}\r\n"))
+                .unwrap_or_default();
+            let reply = format!(
+                "HTTP/1.1 {status}\r\n{location}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(reply.as_bytes()).await;
+        });
+        (endpoint, receiver)
+    }
+
+    async fn execute(body: String) -> Result<LookupEvidence, LookupError> {
+        let (endpoint, request) = serve("200 OK", body, None).await;
+        let provider = lookup_providers_for_test(&config(), &endpoint).remove(0);
+        let prepared = prepare_lookup_for_test(
+            &provider,
+            LookupQuery::new("Named restaurant Copenhagen").unwrap(),
+            &config(),
+            &endpoint,
+        )
+        .unwrap();
+        let result = prepared.execute().await;
+        assert!(
+            request
+                .await
+                .unwrap()
+                .starts_with("GET /maps/api/place/textsearch/json?")
+        );
+        result
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_exact_named_query_excludes_location_and_credentials_from_digests() {
+        let attribution = r#"<a href="https://example.org/attribution">Provider attribution</a>"#;
+        let mut place = row("actual-place-id");
+        place["url"] = json!("https://maps.google.com/?cid=123");
+        let (endpoint, request) = serve(
+            "200 OK",
+            json!({"status":"OK","results":[place],"html_attributions":[attribution]}).to_string(),
+            None,
+        )
+        .await;
+        let provider = lookup_providers_for_test(&config(), &endpoint).remove(0);
+        assert_eq!(provider.provider.service(), LookupService::Places);
+        assert!(provider.valid());
+        let prepared = prepare_lookup_for_test(
+            &provider,
+            LookupQuery::new(" Named\nrestaurant Copenhagen ").unwrap(),
+            &config(),
+            &endpoint,
+        )
+        .unwrap();
+        assert_eq!(prepared.query(), "Named restaurant Copenhagen");
+        assert_eq!(
+            prepared.query_digest(),
+            crate::surface_registry::hash(b"Named restaurant Copenhagen")
+        );
+        let digest = prepared.payload_digest().to_owned();
+        let mut rotated = config();
+        rotated.google_maps_key = Some("rotated-places-key".into());
+        let other = prepare_lookup_for_test(
+            &provider,
+            LookupQuery::new("Named restaurant Copenhagen").unwrap(),
+            &rotated,
+            &endpoint,
+        )
+        .unwrap();
+        assert_eq!(other.payload_digest(), digest);
+        let evidence = prepared.execute().await.unwrap();
+        assert_eq!(evidence.places.len(), 1);
+        assert_eq!(evidence.places[0].place_id, "actual-place-id");
+        assert_eq!(evidence.places[0].latitude, 55.6761);
+        assert_eq!(evidence.places[0].longitude, 12.5683);
+        assert_eq!(
+            evidence.places[0].source_url.as_deref(),
+            Some("https://maps.google.com/?cid=123")
+        );
+        assert_eq!(evidence.html_attributions, [attribution]);
+        let serialized = serde_json::to_value(&evidence.places[0]).unwrap();
+        assert!(serialized.get("rating").is_none() && serialized.get("open_now").is_none());
+        let request = request.await.unwrap();
+        let target = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap();
+        let mut actual = reqwest::Url::parse(&endpoint)
+            .unwrap()
+            .join(target)
+            .unwrap();
+        let parameters: std::collections::BTreeMap<_, _> =
+            actual.query_pairs().into_owned().collect();
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters["query"], "Named restaurant Copenhagen");
+        assert_eq!(parameters["key"], "synthetic-places-key");
+        actual.set_query(None);
+        actual
+            .query_pairs_mut()
+            .append_pair("query", &parameters["query"]);
+        assert_eq!(digest, get_payload_digest(&actual));
+        assert!(
+            !serde_json::to_string(&provider)
+                .unwrap()
+                .contains("synthetic-places-key")
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_preserves_privacy_before_invalid_rows_and_attribution_projection() {
+        let mut rows: Vec<_> = (0..4).map(|i| row(&format!("place-{i}"))).collect();
+        rows.push(json!({"place_id":"ignored","name":"password","geometry":{"location":{"lat":99,"lng":12}},"html_attributions":["Fifth row credit"]}));
+        let body = json!({"status":"OK","results":rows,"html_attributions":["Attribution"]})
+            .to_string()
+            .replace("password", "\\u0070assword");
+        let evidence = execute(body).await.unwrap();
+        assert_eq!(evidence.places.len(), 4);
+        assert_eq!(
+            evidence.html_attributions,
+            ["Attribution", "Fifth row credit"]
+        );
+        assert_eq!(
+            evidence.privacy_floor,
+            crate::ambiance::PrivacyClass::Sensitive
+        );
+        assert!(
+            evidence
+                .places
+                .iter()
+                .all(|place| place.source_url.is_none())
+        );
+        let empty = execute(r#"{"status":"ZERO_RESULTS","results":[],"ignored":"\u0070assword","ignored":"ordinary","html_attributions":["Attribution"]}"#.into()).await.unwrap();
+        assert!(empty.places.is_empty());
+        assert_eq!(
+            empty.privacy_floor,
+            crate::ambiance::PrivacyClass::Sensitive
+        );
+        assert_eq!(empty.html_attributions, ["Attribution"]);
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_duplicate_row_attribution_is_rejected_even_beyond_result_cap() {
+        for preceding in [0, MAX_LOOKUP_PLACES] {
+            let mut rows: Vec<_> = (0..preceding)
+                .map(|index| row(&format!("place-{index}")).to_string())
+                .collect();
+            let duplicate = row("duplicate-attribution").to_string();
+            rows.push(format!(
+                "{},\"html_attributions\":[\"Required credit\"],\"html_attributions\":[],\"ignored\":\"\\u0070assword\"}}",
+                duplicate.strip_suffix('}').unwrap(),
+            ));
+            let body = format!("{{\"status\":\"OK\",\"results\":[{}]}}", rows.join(","));
+            assert_eq!(execute(body).await, Err(LookupError::Malformed));
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_invalid_nonempty_content_is_not_empty_success() {
+        let mut missing = row("missing-coordinate");
+        missing["geometry"]["location"]
+            .as_object_mut()
+            .unwrap()
+            .remove("lat");
+        let mut outside = row("outside-range");
+        outside["geometry"]["location"]["lng"] = json!(181);
+        let mut oversized_id = row(&"x".repeat(1025));
+        oversized_id["name"] = json!("Existing name");
+        let mut false_source = row("wrong-source");
+        false_source["url"] = json!("https://other.example/source");
+        for invalid in [missing, outside, oversized_id, false_source, json!({})] {
+            assert_eq!(
+                execute(json!({"status":"OK","results":[invalid]}).to_string()).await,
+                Err(LookupError::Malformed)
+            );
+        }
+        for body in [
+            r#"{"status":"OK","results":[]}"#,
+            r#"{"status":"ZERO_RESULTS","results":[{}]}"#,
+            r#"{"status":"OK"}"#,
+            r#"{"status":"OK","results":[],"html_attributions":null}"#,
+            "{}",
+        ] {
+            assert_eq!(execute(body.into()).await, Err(LookupError::Malformed));
+        }
+        assert_eq!(
+            execute(r#"{"status":"REQUEST_DENIED","error_message":"Not enabled"}"#.into()).await,
+            Err(LookupError::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_redirects_never_disclose_to_a_second_endpoint() {
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        for status in [
+            "301 Moved",
+            "302 Found",
+            "303 Other",
+            "307 Temporary",
+            "308 Permanent",
+        ] {
+            let (endpoint, request) = serve(
+                status,
+                String::new(),
+                Some(format!(
+                    "http://{}/must-not-receive-query",
+                    target.local_addr().unwrap()
+                )),
+            )
+            .await;
+            let provider = lookup_providers_for_test(&config(), &endpoint).remove(0);
+            let prepared = prepare_lookup_for_test(
+                &provider,
+                LookupQuery::new("Named place").unwrap(),
+                &config(),
+                &endpoint,
+            )
+            .unwrap();
+            assert_eq!(prepared.execute().await, Err(LookupError::Unavailable));
+            assert!(request.await.unwrap().contains("query=Named+place"));
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), target.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_stale_identity_and_missing_configuration_make_no_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/textsearch", listener.local_addr().unwrap());
+        let provider = lookup_providers_for_test(&config(), &endpoint).remove(0);
+        assert_eq!(
+            prepare_lookup_for_test(
+                &provider,
+                LookupQuery::new("Named place").unwrap(),
+                &config(),
+                &format!("{endpoint}/changed")
+            )
+            .err(),
+            Some(LookupError::StaleProvider)
+        );
+        assert_eq!(
+            prepare_lookup_for_test(
+                &provider,
+                LookupQuery::new("Named place").unwrap(),
+                &crate::integrations::MapsConfig::default(),
+                &endpoint
+            )
+            .err(),
+            Some(LookupError::NotConfigured)
+        );
+        let web =
+            super::super::search::lookup_providers_for_test(&crate::integrations::SearchConfig {
+                searxng_base_url: Some("https://search.example".into()),
+                ..Default::default()
+            })
+            .remove(0);
+        assert_eq!(
+            prepare_lookup_for_test(
+                &web,
+                LookupQuery::new("Named place").unwrap(),
+                &config(),
+                &endpoint
+            )
+            .err(),
+            Some(LookupError::InvalidProvider)
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_places_response_and_attributions_are_bounded_without_dropping_credit() {
+        assert_eq!(execute(json!({"status":"ZERO_RESULTS","results":[],"padding":"x".repeat(MAX_RESPONSE_BYTES)}).to_string()).await, Err(LookupError::Oversized));
+        assert_eq!(execute(json!({"status":"OK","results":[row("place")],"html_attributions":["x".repeat(MAX_ATTRIBUTION_BYTES+1)]}).to_string()).await, Err(LookupError::Oversized));
+        assert_eq!(
+            execute(
+                json!({"status":"OK","results":[row("place")],"html_attributions":[17]})
+                    .to_string()
+            )
+            .await,
+            Err(LookupError::Malformed)
+        );
+    }
+}
 
 // --- places ---------------------------------------------------------------
 

@@ -540,9 +540,6 @@ async fn deliver(
                     ) => continue,
                     _ => return Err(Error::Unavailable),
                 };
-                if action.intent.text().is_empty() || action.intent.text().len() > 4000 {
-                    return Err(Error::Invalid);
-                }
                 let stamp = if let Some(last) = sent.get(&key) {
                     last.stamp.clone()
                 } else {
@@ -559,9 +556,13 @@ async fn deliver(
                 // Poll committed the exact claim before this invocation. The
                 // receiver returns transport receipt, then separately submits
                 // its sequenced DOM acknowledgment after render commit.
-                let payload = serde_json::json!({"version":1,"kind":"render","stamp":stamp,"command":crate::browser_runtime_api::command(&action)});
-                let delivered =
-                    received(session.invoke(identity, payload.to_string()).await, &stamp);
+                let delivered = match render_payload(runtime, principal, &action, &stamp) {
+                    Some(payload) => received(session.invoke(identity, payload).await, &stamp),
+                    // A lost transient card or an oversized envelope cannot be
+                    // rendered. Use the same bounded failure lifecycle as a
+                    // failed invocation; never refetch or substitute text.
+                    None => false,
+                };
                 sent.insert(
                     key,
                     Sent {
@@ -590,6 +591,21 @@ async fn deliver(
             _ = wake.notified() => {}
         }
     }
+}
+
+fn render_payload(
+    runtime: &AmbianceRuntime,
+    principal: &str,
+    action: &crate::ambiance::Action,
+    stamp: &InputStamp,
+) -> Option<String> {
+    // Cache availability grants no authority. The only production caller has
+    // already committed Poll and successfully rechecked CheckDelivery.
+    let card = runtime.visual_card(principal, action);
+    let command = crate::browser_runtime_api::command(action, card.as_deref())?;
+    let payload = serde_json::json!({"version":1,"kind":"render","stamp":stamp,"command":command})
+        .to_string();
+    (payload.len() <= cosmos_rtc::MAX_PAYLOAD).then_some(payload)
 }
 
 fn received(result: Result<String, Error>, stamp: &InputStamp) -> bool {

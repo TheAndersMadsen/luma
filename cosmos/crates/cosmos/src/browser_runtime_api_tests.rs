@@ -8,6 +8,101 @@ use axum::{body::Body, http::Request};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header};
 use tower::ServiceExt;
 
+fn render_action(intent: SemanticIntent) -> Action {
+    Action {
+        id: Uuid::new_v4(),
+        root_id: Uuid::new_v4(),
+        confirmation_root: None,
+        turn_id: Uuid::new_v4(),
+        generation: 3,
+        worker: Uuid::new_v4(),
+        surface_id: Uuid::new_v4(),
+        channel: intent.channel(),
+        incarnation: Uuid::new_v4(),
+        content_digest: intent.content_digest(),
+        intent,
+        privacy: crate::ambiance::PrivacyClass::SharedRoom,
+        status: crate::ambiance::ActionStatus::Dispatched,
+        deadline_ms: 10_000,
+        display_expires_at_ms: 20_000,
+        attempts: 1,
+        fallbacks: Vec::new(),
+    }
+}
+
+fn place_card(query: &str) -> Card {
+    Card::from_lookup(
+        query,
+        &crate::backends::places::LookupEvidence {
+            places: vec![crate::backends::places::LookupPlace {
+                place_id: "synthetic-place-id".into(),
+                name: "Fixture Café".into(),
+                address: "Example Street 1, Copenhagen".into(),
+                latitude: 55.67,
+                longitude: 12.56,
+                source_url: Some("https://maps.google.com/?cid=123".into()),
+            }],
+            html_attributions: vec![
+                "<a href=\"https://credit.test/\">Fixture &amp; Co</a>".into(),
+                "Synthetic provider credit".into(),
+            ],
+            privacy_floor: crate::ambiance::PrivacyClass::SharedRoom,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn browser_runtime_command_preserves_text_wire_and_requires_matching_transient_places() {
+    let text = render_action(SemanticIntent::VisualTextCard {
+        text: "Existing text \"wire\"\nwith Unicode æøå".into(),
+    });
+    assert_eq!(
+        command(&text, None),
+        Some(
+            json!({"version":1,"actionId":text.id,"turnId":text.turn_id,"generation":text.generation,"surfaceId":text.surface_id,"incarnation":text.incarnation,"channel":"visual.card","contentDigest":text.content_digest,"content":{"kind":"text","text":text.intent.text()},"expiresAt":text.display_expires_at_ms})
+        )
+    );
+    let card = place_card("cafes in Copenhagen");
+    assert_eq!(command(&text, Some(&card)), command(&text, None));
+    let reference = crate::ambiance::visual::Reference {
+        id: Uuid::new_v4(),
+        digest: card.digest(),
+        expires_at_ms: 20_000,
+    };
+    let action = render_action(SemanticIntent::PlaceAddressCard { content: reference });
+    assert!(command(&action, None).is_none());
+    let rendered = command(&action, Some(&card)).unwrap();
+    assert_eq!(rendered["content"], card.value());
+    assert_eq!(rendered["content"]["kind"], "places");
+    assert_eq!(
+        rendered["content"]["attributions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        rendered["content"]["attributions"][0],
+        "<a href=\"https://credit.test/\">Fixture &amp; Co</a>"
+    );
+    assert!(rendered["content"].get("text").is_none());
+    assert!(rendered["content"]["items"][0].get("latitude").is_none());
+    assert_eq!(rendered["contentDigest"], card.digest());
+    let other = place_card("restaurants in Copenhagen");
+    assert!(command(&action, Some(&other)).is_none());
+    let mut wrong_digest = action.clone();
+    wrong_digest.content_digest = surface_registry::hash(b"different digest");
+    assert!(command(&wrong_digest, Some(&card)).is_none());
+    let mut nonvisual = action;
+    nonvisual.channel = Channel::AudioTts;
+    assert!(command(&nonvisual, Some(&card)).is_none());
+    let speech = render_action(SemanticIntent::InformationalSpeech {
+        text: "speech".into(),
+    });
+    assert!(command(&speech, None).is_none());
+}
+
 #[test]
 fn realtime_readiness_never_uses_assistant_or_codex_credentials() {
     let mut config = crate::integrations::IntegrationsConfig::default();

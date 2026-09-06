@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod speech;
 pub mod state;
 pub mod stock;
+pub mod visual;
 pub mod voice;
 pub use native_connection::NativeProof;
 pub use pin_connection::{PinConnection, PinProof};

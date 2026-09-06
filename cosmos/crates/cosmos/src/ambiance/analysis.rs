@@ -19,14 +19,45 @@ pub struct AnalysisRequest {
 /// A query suggestion carries no provider, account, URL or output authority.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WebLookupRequest {
+pub struct LookupRequest {
+    #[serde(deserialize_with = "lookup_query")]
     pub query: String,
+}
+
+fn lookup_query<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let query = String::deserialize(deserializer)?;
+    if query.trim().is_empty()
+        || query.len() > 512
+        || query.chars().any(|c| c.is_control() && !c.is_whitespace())
+    {
+        return Err(serde::de::Error::custom("invalid bounded lookup query"));
+    }
+    Ok(query)
+}
+
+/// Models may propose ordinary text. Transient provider references are minted
+/// by the runtime after lookup completion and are never model output authority.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum TextIntent {
+    InformationalSpeech { text: String },
+    VisualTextCard { text: String },
+}
+
+fn text_intent<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<SemanticIntent, D::Error> {
+    Ok(match TextIntent::deserialize(deserializer)? {
+        TextIntent::InformationalSpeech { text } => SemanticIntent::InformationalSpeech { text },
+        TextIntent::VisualTextCard { text } => SemanticIntent::VisualTextCard { text },
+    })
 }
 
 #[derive(Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Proposal {
     Information {
+        #[serde(deserialize_with = "text_intent")]
         intent: SemanticIntent,
         privacy: PrivacyClass,
     },
@@ -35,7 +66,11 @@ pub enum Proposal {
         privacy: PrivacyClass,
     },
     Lookup {
-        web_lookup: WebLookupRequest,
+        web_lookup: LookupRequest,
+        privacy: PrivacyClass,
+    },
+    Places {
+        place_lookup: LookupRequest,
         privacy: PrivacyClass,
     },
 }
@@ -43,9 +78,10 @@ pub enum Proposal {
 pub fn proposal_tool() -> ToolDef {
     let privacy =
         json!({"type":"string","enum":["public","shared_room","near_user","private","sensitive"]});
+    let lookup_request = json!({"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512}}});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, one bounded larger-model analysis, or one web lookup of the current request. Supply exactly one of intent, analysis or web_lookup; omit the others. Web lookup requires the origin's separate provider permission and returns a sourced visual card. No option grants device authority or proves an outcome.".into(),
+        description: "Propose informational text, one bounded larger-model analysis, one web lookup, or one named-place address lookup of the current request. Supply exactly one of intent, analysis, web_lookup or place_lookup; omit the others. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. No option grants device authority or proves an outcome.".into(),
         // Provider function schemas prohibit root unions. Optional branches
         // describe the shapes; Proposal's strict parser enforces XOR before
         // any runtime work, including against a provider that ignores the schema.
@@ -55,7 +91,8 @@ pub fn proposal_tool() -> ToolDef {
                 {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"enum":["visual_text_card"]},"text":{"type":"string","minLength":1,"maxLength":4000}}}
             ]},
             "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},
-            "web_lookup":{"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512}}},
+            "web_lookup":lookup_request.clone(),
+            "place_lookup":lookup_request,
             "privacy":privacy
         }}),
     }
@@ -303,6 +340,166 @@ mod tests {
             json!({"web_lookup":{"query":"weather"},"analysis":{"question":"Compare","channel":"visual.card"},"privacy":"public"}),
         ] {
             assert!(serde_json::from_value::<Proposal>(args).is_err());
+        }
+    }
+
+    #[test]
+    fn ambiance_lookup_proposals_preserve_text_analysis_web_and_named_place_wire_shapes() {
+        for (kind, expected) in [
+            (
+                "informational_speech",
+                SemanticIntent::InformationalSpeech {
+                    text: "Exact informational text.".into(),
+                },
+            ),
+            (
+                "visual_text_card",
+                SemanticIntent::VisualTextCard {
+                    text: "Exact informational text.".into(),
+                },
+            ),
+        ] {
+            let Proposal::Information { intent, privacy } = serde_json::from_value(json!({
+                "intent": {"kind": kind, "text": "Exact informational text."},
+                "privacy": "shared_room",
+            }))
+            .unwrap() else {
+                panic!("original information proposal")
+            };
+            assert_eq!(intent, expected);
+            assert_eq!(privacy, PrivacyClass::SharedRoom);
+        }
+        let Proposal::Analysis { analysis, privacy } = serde_json::from_value(json!({
+            "analysis": {"question": "Compare these ideas", "channel": "visual.card"},
+            "privacy": "public",
+        }))
+        .unwrap() else {
+            panic!("original analysis proposal")
+        };
+        assert_eq!(analysis.question, "Compare these ideas");
+        assert_eq!(analysis.channel, Channel::VisualCard);
+        assert_eq!(privacy, PrivacyClass::Public);
+        let Proposal::Lookup {
+            web_lookup,
+            privacy,
+        } = serde_json::from_value(json!({
+            "web_lookup": {"query": "  public\tsearch query  "}, "privacy": "public",
+        }))
+        .unwrap()
+        else {
+            panic!("original web proposal")
+        };
+        assert_eq!(web_lookup.query, "  public\tsearch query  ");
+        assert_eq!(privacy, PrivacyClass::Public);
+        let Proposal::Places { place_lookup, privacy } = serde_json::from_value(json!({
+            "place_lookup": {"query": "Statens Museum for Kunst, København"}, "privacy": "shared_room",
+        })).unwrap() else { panic!("one named-address proposal") };
+        assert_eq!(place_lookup.query, "Statens Museum for Kunst, København");
+        assert_eq!(privacy, PrivacyClass::SharedRoom);
+    }
+
+    #[test]
+    fn ambiance_lookup_proposals_require_exactly_one_branch_even_for_null_or_mixed_fields() {
+        let branches = [
+            (
+                "intent",
+                json!({"kind":"visual_text_card","text":"An answer"}),
+            ),
+            (
+                "analysis",
+                json!({"question":"Compare","channel":"visual.card"}),
+            ),
+            ("web_lookup", json!({"query":"public facts"})),
+            ("place_lookup", json!({"query":"Named Museum, Copenhagen"})),
+        ];
+        assert!(serde_json::from_value::<Proposal>(json!({"privacy":"public"})).is_err());
+        for (index, (key, value)) in branches.iter().enumerate() {
+            let mut single = json!({"privacy":"public"});
+            single[*key] = value.clone();
+            assert!(serde_json::from_value::<Proposal>(single.clone()).is_ok());
+            for (other_index, (other_key, other_value)) in branches.iter().enumerate() {
+                if index == other_index {
+                    continue;
+                }
+                for extra in [serde_json::Value::Null, other_value.clone()] {
+                    let mut mixed = single.clone();
+                    mixed[*other_key] = extra;
+                    assert!(serde_json::from_value::<Proposal>(mixed).is_err());
+                }
+            }
+            single["permission"] = json!("approved");
+            assert!(serde_json::from_value::<Proposal>(single).is_err());
+        }
+    }
+
+    #[test]
+    fn ambiance_lookup_proposals_cannot_forge_transient_place_references_or_provider_authority() {
+        let reference = json!({
+            "id": uuid::Uuid::new_v4(),
+            "digest": crate::surface_registry::hash(b"synthetic transient content"),
+            "expiresAtMs": 60_000,
+        });
+        let internal = json!({"kind":"place_address_card","content":reference});
+        assert!(
+            serde_json::from_value::<SemanticIntent>(internal.clone())
+                .unwrap()
+                .valid()
+        );
+        assert!(
+            serde_json::from_value::<Proposal>(json!({"intent":internal,"privacy":"public"}))
+                .is_err()
+        );
+        for kind in ["informational_speech", "visual_text_card"] {
+            assert!(
+                serde_json::from_value::<Proposal>(json!({
+                    "intent":{"kind":kind,"text":"Answer","content":reference},"privacy":"public",
+                }))
+                .is_err()
+            );
+        }
+        for extra in [
+            json!({"provider":"google_places"}),
+            json!({"endpoint":"https://maps.example.test/"}),
+            json!({"latitude":55.68,"longitude":12.57}),
+            json!({"permission":"approved"}),
+            json!({"content":reference}),
+            json!({"queries":["one","two"]}),
+        ] {
+            let mut request = json!({"query":"Named Museum, Copenhagen"});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(
+                serde_json::from_value::<Proposal>(
+                    json!({"place_lookup":request,"privacy":"public"})
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn ambiance_lookup_proposals_bound_one_scalar_query_by_utf8_bytes() {
+        for branch in ["web_lookup", "place_lookup"] {
+            for query in [
+                json!(""),
+                json!(" \n\t "),
+                json!("address\u{0000}suffix"),
+                json!("x".repeat(513)),
+                json!("ø".repeat(257)),
+                json!(["one", "two"]),
+                json!(null),
+            ] {
+                let mut args = json!({"privacy":"public"});
+                args[branch] = json!({"query":query});
+                assert!(serde_json::from_value::<Proposal>(args).is_err());
+            }
+            for query in ["x".repeat(512), "ø".repeat(256)] {
+                let mut args = json!({"privacy":"public"});
+                args[branch] = json!({"query":query});
+                assert!(serde_json::from_value::<Proposal>(args).is_ok());
+            }
         }
     }
 

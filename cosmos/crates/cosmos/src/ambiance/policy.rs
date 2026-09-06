@@ -27,21 +27,36 @@ pub enum Channel {
 pub enum SemanticIntent {
     InformationalSpeech { text: String },
     VisualTextCard { text: String },
+    PlaceAddressCard { content: super::visual::Reference },
 }
 impl SemanticIntent {
     pub fn text(&self) -> &str {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text,
+            Self::PlaceAddressCard { .. } => "",
         }
     }
     pub fn channel(&self) -> Channel {
         match self {
             Self::InformationalSpeech { .. } => Channel::AudioTts,
-            Self::VisualTextCard { .. } => Channel::VisualCard,
+            Self::VisualTextCard { .. } | Self::PlaceAddressCard { .. } => Channel::VisualCard,
         }
     }
     pub fn valid(&self) -> bool {
-        !self.text().trim().is_empty() && self.text().len() <= 4000
+        match self {
+            Self::PlaceAddressCard { content } => content.valid(),
+            Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
+                !self.text().trim().is_empty() && self.text().len() <= 4000
+            }
+        }
+    }
+    pub fn content_digest(&self) -> String {
+        match self {
+            Self::PlaceAddressCard { content } => content.digest.clone(),
+            Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
+                crate::surface_registry::hash(self.text().as_bytes())
+            }
+        }
     }
 }
 impl std::fmt::Debug for SemanticIntent {

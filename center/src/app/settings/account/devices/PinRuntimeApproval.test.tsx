@@ -59,6 +59,9 @@ it("fresh multi-Pin approval list maps revoke to the correct Pin and exact surfa
   expect(screen.getAllByRole("button", { name: "Speech provider permission" })).toHaveLength(2);
   expect(screen.getAllByRole("button", { name: "Web lookup permission" })).toHaveLength(2);
   expect(screen.getByRole("group", { name: "Web lookup permission for Pin ccdd" })).toBeVisible();
+  expect(screen.getAllByRole("button", { name: "Place lookup permission" })).toHaveLength(2);
+  expect(screen.getByRole("group", { name: "Place lookup permission for Pin ccdd" })).toBeVisible();
+  expect(mock.mock.calls.every(([url]) => url === "/api/devices/runtime" || url === "/api/devices/pair")).toBe(true);
   const row = within(screen.getByLabelText("Runtime approval for Pin ccdd"));
   fireEvent.click(row.getByRole("button", { name: "Revoke runtime approval" }));
   fireEvent.click(row.getByRole("button", { name: "Confirm revoke" }));

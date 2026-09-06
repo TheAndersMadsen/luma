@@ -1,8 +1,11 @@
 use super::policy::{self, Candidate, Channel, PrivacyClass, SemanticIntent};
-use crate::surface_registry::{Binding, Record};
+use crate::{
+    backends::lookup::LookupService,
+    surface_registry::{Binding, Record},
+};
 use cosmos_core::AuthenticatedDeviceIdentity;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const ACK_MS: i64 = 3_000;
@@ -138,9 +141,11 @@ pub enum RuntimeOperation {
         surface_id: Uuid,
     },
     LookupPolicy {
+        service: LookupService,
         surface_id: Uuid,
     },
     SetLookupPolicy {
+        service: LookupService,
         surface_id: Uuid,
         approval_revision: u64,
         approval_incarnation: Option<Uuid>,
@@ -161,6 +166,7 @@ pub enum RuntimeOperation {
         lookup: super::lookup::Lookup,
         evidence_digest: String,
         privacy: PrivacyClass,
+        visual: Option<super::visual::Reference>,
     },
     SetDisclosurePolicy {
         surface_id: Uuid,
@@ -225,6 +231,11 @@ pub enum RuntimeOperation {
         worker: Uuid,
         intent: SemanticIntent,
         privacy: PrivacyClass,
+    },
+    ConfirmDisplay {
+        action_id: Uuid,
+        generation: u64,
+        worker: Uuid,
     },
     CheckCognition {
         fence: TurnFence,
@@ -389,6 +400,13 @@ impl Turn {
             .as_ref()
             .is_some_and(|lookup| lookup.receipt.is_none())
     }
+
+    fn completed_places_lookup(&self) -> bool {
+        self.lookup.as_ref().is_some_and(|lookup| {
+            lookup.request.provider.provider.service() == LookupService::Places
+                && lookup.receipt.is_some()
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -425,6 +443,20 @@ pub struct Action {
     pub display_expires_at_ms: i64,
     pub attempts: u8,
     pub fallbacks: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation_root: Option<Uuid>,
+}
+
+struct DisplayConfirmation {
+    root_id: Uuid,
+    acknowledged_action: Uuid,
+    expires_at_ms: i64,
+}
+
+struct OutputProposal {
+    intent: SemanticIntent,
+    privacy: PrivacyClass,
+    confirmation: Option<DisplayConfirmation>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -446,6 +478,8 @@ pub struct RuntimeState {
     pub voice_policies: BTreeMap<Uuid, super::voice::Approval>,
     #[serde(default)]
     pub lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
+    #[serde(default)]
+    pub place_lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -602,6 +636,10 @@ pub enum RuntimeData {
         surface_id: Uuid,
         approval: super::lookup::Approval,
     },
+    PlaceLookupPolicyChanged {
+        surface_id: Uuid,
+        approval: super::lookup::Approval,
+    },
     LookupStarted {
         fence: TurnFence,
         lookup: super::lookup::Lookup,
@@ -728,6 +766,11 @@ pub enum RuntimeData {
     PayloadCleared {
         action_id: Uuid,
         content_digest: String,
+    },
+    DisplayConfirmationProposed {
+        visual_root: Uuid,
+        visual_action: Uuid,
+        action_id: Uuid,
     },
     Repair {
         previous_action: Uuid,
@@ -875,6 +918,14 @@ impl RuntimeState {
             if let Some(lookup) = turn.lookup.as_ref().filter(|_| turn.lookup_pending()) {
                 due = due.min(lookup.deadline_ms());
             }
+            if let Some(visual) = turn
+                .lookup
+                .as_ref()
+                .and_then(|lookup| lookup.receipt.as_ref())
+                .and_then(|receipt| receipt.visual.as_ref())
+            {
+                due = due.min(visual.expires_at_ms);
+            }
             if let Some(origin) = records.get(&turn.fence.origin_surface) {
                 if matches!(origin.binding, Binding::Browser) {
                     due = due
@@ -928,6 +979,7 @@ impl RuntimeState {
                 match &mut action.intent {
                     SemanticIntent::InformationalSpeech { text }
                     | SemanticIntent::VisualTextCard { text } => text.clear(),
+                    SemanticIntent::PlaceAddressCard { .. } => {}
                 }
                 events.push(RuntimeData::PayloadCleared {
                     action_id: action.id,
@@ -1027,11 +1079,7 @@ impl RuntimeState {
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
-        self.lookup_policies.retain(|id, approval| {
-            records
-                .get(id)
-                .is_some_and(|record| approval.current(record))
-        });
+        self.reconcile_lookup_policies(records);
         self.ingress.retain(|id, cursor| {
             records.get(id).is_some_and(|r| {
                 !r.revoked
@@ -1075,6 +1123,12 @@ impl RuntimeState {
                 });
             }
         }
+        let confirmed_roots: BTreeSet<_> = self
+            .actions
+            .values()
+            .filter_map(|action| action.confirmation_root)
+            .filter(|root| self.acknowledged_visual(records, *root, now).is_some())
+            .collect();
         for action in self.actions.values_mut() {
             if matches!(
                 action.status,
@@ -1083,6 +1137,9 @@ impl RuntimeState {
                 continue;
             }
             let valid = origin_valid
+                && action
+                    .confirmation_root
+                    .is_none_or(|root| confirmed_roots.contains(&root))
                 && now < action.display_expires_at_ms
                 && self.turn.as_ref().is_some_and(|t| {
                     t.fence.generation == action.generation && t.privacy <= PrivacyClass::SharedRoom
@@ -1135,7 +1192,8 @@ impl RuntimeState {
                     // Retry only on this exact surface/key. Poll reclaims under
                     // policy, then gives the same key another bounded deadline.
                     action.status = ActionStatus::Proposed;
-                    action.deadline_ms = now.saturating_add(ACK_MS);
+                    action.deadline_ms =
+                        now.saturating_add(ACK_MS).min(action.display_expires_at_ms);
                 } else {
                     action.status = ActionStatus::OutcomeUnknown;
                     if action.channel == Channel::VisualCard {
@@ -1163,7 +1221,7 @@ impl RuntimeState {
                 action.incarnation = records[&selected.surface_id].incarnation;
                 action.status = ActionStatus::Proposed;
                 action.attempts = 0;
-                action.deadline_ms = now.saturating_add(ACK_MS);
+                action.deadline_ms = now.saturating_add(ACK_MS).min(action.display_expires_at_ms);
                 action.fallbacks.retain(|id| *id != selected.surface_id);
                 events.push(RuntimeData::Repair {
                     previous_action: previous.id,
@@ -1264,7 +1322,9 @@ impl RuntimeState {
         action.deadline_ms = if native_speech {
             action.display_expires_at_ms
         } else {
-            now.checked_add(ACK_MS).ok_or(RuntimeError::Unavailable)?
+            now.checked_add(ACK_MS)
+                .ok_or(RuntimeError::Unavailable)?
+                .min(action.display_expires_at_ms)
         };
         action.status = if action.channel == Channel::AudioTts && !native_speech {
             ActionStatus::OutcomeUnknown
@@ -1274,6 +1334,202 @@ impl RuntimeState {
         events.push(action_event(action));
         Ok((action.clone(), events))
     }
+    fn acknowledged_visual(
+        &self,
+        records: &BTreeMap<Uuid, Record>,
+        root_id: Uuid,
+        now: i64,
+    ) -> Option<&Action> {
+        let turn = self.turn.as_ref()?;
+        let root = self.actions.get(&root_id)?;
+        if turn.cancelled
+            || now >= turn.lease_until_ms
+            || !self.origin_valid(turn, records, now)
+            || turn.privacy > PrivacyClass::SharedRoom
+            || root.id != root.root_id
+            || root.channel != Channel::VisualCard
+            || root.turn_id != turn.fence.turn_id
+            || root.generation != turn.fence.generation
+            || root.worker != turn.fence.worker
+        {
+            return None;
+        }
+        self.actions.values().find(|action| {
+            action.status == ActionStatus::Acknowledged
+                && action.channel == Channel::VisualCard
+                && action.root_id == root.id
+                && action.content_digest == root.content_digest
+                && action.intent.valid()
+                && action.intent.content_digest() == root.content_digest
+                && action.turn_id == root.turn_id
+                && action.generation == root.generation
+                && action.worker == root.worker
+                && now < action.display_expires_at_ms
+                && records.get(&action.surface_id).is_some_and(|record| {
+                    record.incarnation == action.incarnation
+                        && policy::candidate(
+                            record,
+                            turn.fence.origin_surface,
+                            action.channel,
+                            action.privacy,
+                            now,
+                        )
+                        .blocker
+                        .is_none()
+                })
+        })
+    }
+
+    fn propose_output(
+        &mut self,
+        records: &BTreeMap<Uuid, Record>,
+        fence: &TurnFence,
+        output: OutputProposal,
+        now: i64,
+    ) -> Result<(RuntimeResult, Vec<RuntimeData>), RuntimeError> {
+        let turn_id = fence.turn_id;
+        let generation = fence.generation;
+        let worker = fence.worker;
+        let OutputProposal {
+            intent,
+            privacy,
+            confirmation,
+        } = output;
+        let mut events = Vec::new();
+        let turn = self.fence(turn_id, generation, worker, now)?;
+        if turn.finished || turn.voice_pending() || !self.origin_valid(turn, records, now) {
+            return Err(RuntimeError::Stale);
+        }
+        if turn
+            .analysis
+            .as_ref()
+            .is_some_and(|a| a.output_digest.is_none())
+            || turn.lookup_pending()
+        {
+            return Err(RuntimeError::Busy);
+        }
+        if !intent.valid() || self.actions.len() >= MAX_ACTIONS {
+            return Err(RuntimeError::InvalidRequest);
+        }
+        match &intent {
+            SemanticIntent::PlaceAddressCard { content } => {
+                let matching = turn.lookup.as_ref().is_some_and(|lookup| {
+                    lookup.request.provider.provider.service() == LookupService::Places
+                        && lookup.receipt.as_ref().is_some_and(|receipt| {
+                            receipt.visual.as_ref() == Some(content) && now < content.expires_at_ms
+                        })
+                });
+                if !matching {
+                    return Err(RuntimeError::PolicyBlocked);
+                }
+            }
+            SemanticIntent::InformationalSpeech { .. } | SemanticIntent::VisualTextCard { .. }
+                if turn.completed_places_lookup() && confirmation.is_none() =>
+            {
+                return Err(RuntimeError::PolicyBlocked);
+            }
+            _ => {}
+        }
+        let privacy = turn.privacy.max(privacy);
+        if intent.channel() == Channel::VisualCard
+            && privacy <= PrivacyClass::SharedRoom
+            && self.actions.values().any(|a| {
+                a.channel == Channel::VisualCard
+                    && matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched)
+            })
+        {
+            return Err(RuntimeError::Busy);
+        }
+        let mut candidates: Vec<_> = records
+            .values()
+            .filter(|r| !r.revoked)
+            .map(|r| {
+                policy::candidate(r, turn.fence.origin_surface, intent.channel(), privacy, now)
+            })
+            .collect();
+        candidates.sort_by(|a, b| {
+            b.score()
+                .cmp(&a.score())
+                .then(a.surface_id.cmp(&b.surface_id))
+        });
+        let selected = candidates
+            .iter()
+            .find(|c| c.blocker.is_none())
+            .map(|c| c.surface_id);
+        let fallbacks = candidates
+            .iter()
+            .filter(|c| c.blocker.is_none() && Some(c.surface_id) != selected)
+            .map(|c| c.surface_id)
+            .collect();
+        let id = selected.map(|_| Uuid::new_v4());
+        events.push(RuntimeData::Decision {
+            turn_id,
+            generation,
+            action_id: id,
+            privacy,
+            candidates,
+        });
+        self.turn.as_mut().unwrap().privacy = privacy;
+        events.extend(self.reconcile(records, now));
+        let result = if let (Some(surface_id), Some(id)) = (selected, id) {
+            if intent.channel() == Channel::VisualCard {
+                for old in self.actions.values_mut().filter(|a| {
+                    a.channel == Channel::VisualCard && a.status == ActionStatus::Acknowledged
+                }) {
+                    old.status = ActionStatus::Cancelled;
+                    events.push(action_event(old));
+                }
+            }
+            let record = &records[&surface_id];
+            let content_digest = intent.content_digest();
+            let display_expires_at_ms = match &intent {
+                SemanticIntent::PlaceAddressCard { content } => content.expires_at_ms,
+                _ => now.checked_add(60_000).ok_or(RuntimeError::Unavailable)?,
+            };
+            let display_expires_at_ms = confirmation
+                .as_ref()
+                .map_or(display_expires_at_ms, |confirmation| {
+                    display_expires_at_ms.min(confirmation.expires_at_ms)
+                });
+            let action = Action {
+                id,
+                root_id: id,
+                turn_id,
+                generation,
+                worker,
+                surface_id,
+                channel: intent.channel(),
+                incarnation: record.incarnation,
+                content_digest,
+                intent,
+                privacy,
+                status: ActionStatus::Proposed,
+                deadline_ms: now
+                    .checked_add(ACK_MS)
+                    .ok_or(RuntimeError::Unavailable)?
+                    .min(display_expires_at_ms),
+                display_expires_at_ms,
+                attempts: 0,
+                fallbacks,
+                confirmation_root: confirmation
+                    .as_ref()
+                    .map(|confirmation| confirmation.root_id),
+            };
+            self.actions.insert(id, action.clone());
+            if let Some(confirmation) = confirmation {
+                events.push(RuntimeData::DisplayConfirmationProposed {
+                    visual_root: confirmation.root_id,
+                    visual_action: confirmation.acknowledged_action,
+                    action_id: id,
+                });
+            }
+            RuntimeResult::Proposed(action)
+        } else {
+            RuntimeResult::Blocked
+        };
+        Ok((result, events))
+    }
+
     pub fn apply(
         &mut self,
         principal: &str,
@@ -1438,11 +1694,15 @@ impl RuntimeState {
             RuntimeOperation::DisclosurePolicy { surface_id } => {
                 RuntimeResult::DisclosurePolicy(self.disclosure_policy(records, surface_id)?)
             }
-            RuntimeOperation::LookupPolicy { surface_id } => {
-                let (approval, binding) = self.lookup_policy(records, surface_id)?;
+            RuntimeOperation::LookupPolicy {
+                service,
+                surface_id,
+            } => {
+                let (approval, binding) = self.lookup_policy(records, service, surface_id)?;
                 RuntimeResult::LookupPolicy { approval, binding }
             }
             RuntimeOperation::SetLookupPolicy {
+                service,
                 surface_id,
                 approval_revision,
                 approval_incarnation,
@@ -1451,9 +1711,12 @@ impl RuntimeState {
             } => {
                 let (approval, binding, appended) = self.set_lookup_policy(
                     records,
+                    service,
                     surface_id,
-                    approval_revision,
-                    approval_incarnation,
+                    super::lookup::ApprovalBinding {
+                        approval_revision,
+                        incarnation: approval_incarnation,
+                    },
                     expected_revision,
                     policy,
                 )?;
@@ -1486,9 +1749,19 @@ impl RuntimeState {
                 lookup,
                 evidence_digest,
                 privacy,
+                visual,
             } => {
-                let (receipt, appended) =
-                    self.complete_lookup(records, fence, lookup, evidence_digest, privacy, now)?;
+                let (receipt, appended) = self.complete_lookup(
+                    records,
+                    fence,
+                    lookup,
+                    super::lookup::Completion {
+                        evidence_digest,
+                        privacy,
+                        visual,
+                    },
+                    now,
+                )?;
                 events.extend(appended);
                 events.extend(self.reconcile(records, now));
                 RuntimeResult::LookupCompleted(receipt)
@@ -2096,7 +2369,7 @@ impl RuntimeState {
                 {
                     return Err(RuntimeError::Stale);
                 }
-                if turn.privacy > PrivacyClass::SharedRoom {
+                if turn.privacy > PrivacyClass::SharedRoom || turn.completed_places_lookup() {
                     return Err(RuntimeError::PolicyBlocked);
                 }
                 if turn.lookup_pending() {
@@ -2119,6 +2392,9 @@ impl RuntimeState {
                 }
                 if turn.analysis.is_some() || turn.lookup_pending() || !self.actions.is_empty() {
                     return Err(RuntimeError::Busy);
+                }
+                if turn.completed_places_lookup() {
+                    return Err(RuntimeError::PolicyBlocked);
                 }
                 if !digest_valid(&input_digest) {
                     return Err(RuntimeError::InvalidRequest);
@@ -2179,105 +2455,58 @@ impl RuntimeState {
                 intent,
                 privacy,
             } => {
-                let turn = self.fence(turn_id, generation, worker, now)?;
-                if turn.finished || turn.voice_pending() || !self.origin_valid(turn, records, now) {
-                    return Err(RuntimeError::Stale);
-                }
-                if turn
-                    .analysis
-                    .as_ref()
-                    .is_some_and(|a| a.output_digest.is_none())
-                    || turn.lookup_pending()
-                {
-                    return Err(RuntimeError::Busy);
-                }
-                if !intent.valid() || self.actions.len() >= MAX_ACTIONS {
-                    return Err(RuntimeError::InvalidRequest);
-                }
-                let privacy = turn.privacy.max(privacy);
-                if intent.channel() == Channel::VisualCard
-                    && privacy <= PrivacyClass::SharedRoom
-                    && self.actions.values().any(|a| {
-                        a.channel == Channel::VisualCard
-                            && matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched)
-                    })
-                {
-                    return Err(RuntimeError::Busy);
-                }
-                let mut candidates: Vec<_> = records
-                    .values()
-                    .filter(|r| !r.revoked)
-                    .map(|r| {
-                        policy::candidate(
-                            r,
-                            turn.fence.origin_surface,
-                            intent.channel(),
-                            privacy,
-                            now,
-                        )
-                    })
-                    .collect();
-                candidates.sort_by(|a, b| {
-                    b.score()
-                        .cmp(&a.score())
-                        .then(a.surface_id.cmp(&b.surface_id))
-                });
-                let selected = candidates
-                    .iter()
-                    .find(|c| c.blocker.is_none())
-                    .map(|c| c.surface_id);
-                let fallbacks = candidates
-                    .iter()
-                    .filter(|c| c.blocker.is_none() && Some(c.surface_id) != selected)
-                    .map(|c| c.surface_id)
-                    .collect();
-                let id = selected.map(|_| Uuid::new_v4());
-                events.push(RuntimeData::Decision {
-                    turn_id,
-                    generation,
-                    action_id: id,
-                    privacy,
-                    candidates,
-                });
-                self.turn.as_mut().unwrap().privacy = privacy;
-                events.extend(self.reconcile(records, now));
-                if let (Some(surface_id), Some(id)) = (selected, id) {
-                    if intent.channel() == Channel::VisualCard {
-                        for old in self.actions.values_mut().filter(|a| {
-                            a.channel == Channel::VisualCard
-                                && a.status == ActionStatus::Acknowledged
-                        }) {
-                            old.status = ActionStatus::Cancelled;
-                            events.push(action_event(old));
-                        }
-                    }
-                    let record = &records[&surface_id];
-                    let content_digest = crate::surface_registry::hash(intent.text().as_bytes());
-                    let action = Action {
-                        id,
-                        root_id: id,
-                        turn_id,
-                        generation,
-                        worker,
-                        surface_id,
-                        channel: intent.channel(),
-                        incarnation: record.incarnation,
-                        content_digest,
+                let fence = self.fence(turn_id, generation, worker, now)?.fence.clone();
+                let (result, appended) = self.propose_output(
+                    records,
+                    &fence,
+                    OutputProposal {
                         intent,
                         privacy,
-                        status: ActionStatus::Proposed,
-                        deadline_ms: now.checked_add(ACK_MS).ok_or(RuntimeError::Unavailable)?,
-                        display_expires_at_ms: now
-                            .checked_add(60_000)
-                            .ok_or(RuntimeError::Unavailable)?,
-                        attempts: 0,
-                        fallbacks,
-                    };
-                    self.actions.insert(id, action.clone());
-                    RuntimeResult::Proposed(action)
-                } else {
-                    RuntimeResult::Blocked
+                        confirmation: None,
+                    },
+                    now,
+                )?;
+                events.extend(appended);
+                result
+            }
+            RuntimeOperation::ConfirmDisplay {
+                action_id,
+                generation,
+                worker,
+            } => {
+                let action = self.actions.get(&action_id).ok_or(RuntimeError::NotFound)?;
+                let turn = self.fence(action.turn_id, generation, worker, now)?;
+                if action.generation != generation
+                    || action.worker != worker
+                    || action.channel != Channel::VisualCard
+                {
+                    return Err(RuntimeError::Stale);
                 }
+                let fence = turn.fence.clone();
+                if self
+                    .actions
+                    .values()
+                    .any(|candidate| candidate.confirmation_root == Some(action.root_id))
+                {
+                    return Err(RuntimeError::Busy);
+                }
+                let acknowledged = self
+                    .acknowledged_visual(records, action.root_id, now)
+                    .ok_or(RuntimeError::PolicyBlocked)?;
+                let output = OutputProposal {
+                    intent: SemanticIntent::InformationalSpeech {
+                        text: "Displayed on your approved screen.".into(),
+                    },
+                    privacy: turn.privacy.max(acknowledged.privacy),
+                    confirmation: Some(DisplayConfirmation {
+                        root_id: acknowledged.root_id,
+                        acknowledged_action: acknowledged.id,
+                        expires_at_ms: acknowledged.display_expires_at_ms,
+                    }),
+                };
+                let (result, appended) = self.propose_output(records, &fence, output, now)?;
+                events.extend(appended);
+                result
             }
             RuntimeOperation::Claim {
                 action_id,

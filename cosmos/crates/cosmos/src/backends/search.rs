@@ -15,11 +15,15 @@
 //! deployment's private adapter for that surface; **unknown** — this does not
 //! claim Humane operated SearXNG or used the same result-ranking policy.
 
-use std::{collections::BTreeSet, sync::OnceLock, time::Duration};
+use std::{collections::BTreeSet, time::Duration};
 
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use super::lookup::{
+    LookupError, LookupProvider, LookupProviderIdentity, LookupQuery, MAX_LOOKUP_URL_BYTES,
+    MAX_QUERY_BYTES, bounded_body, get_payload_digest, lookup_endpoint, lookup_http,
+    lookup_response_privacy,
+};
 use super::{BackendError, http, key};
 
 pub(crate) const SEARXNG_BASE_URL_VAR: &str = "COSMOS_SEARXNG_BASE_URL";
@@ -32,15 +36,6 @@ const PRIMARY_SEARXNG_ENGINE: &str = "bing";
 /// turn. The shared client retains its stricter four-second connect bound.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A wearer utterance can be large, but sending an unbounded string to a search
-/// engine is neither useful nor safe. Whitespace is collapsed before this cap
-/// is applied at a UTF-8 boundary.
-const MAX_QUERY_BYTES: usize = 512;
-
-/// A malicious or malfunctioning metasearch engine must not make Cosmos buffer
-/// an arbitrary response before JSON decoding.
-const MAX_RESPONSE_BYTES: usize = 256 * 1024;
-
 const MAX_TITLE_BYTES: usize = 192;
 const MAX_SNIPPET_BYTES: usize = 640;
 
@@ -48,78 +43,6 @@ const MAX_SNIPPET_BYTES: usize = 640;
 /// rides in the model's context on every subsequent step of the run, so this is
 /// deliberately small.
 const MAX_RESULTS: usize = 4;
-const MAX_LOOKUP_URL_BYTES: usize = 1024;
-
-/// A choice of provider, not permission to disclose a query to that provider.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LookupProvider {
-    Searxng,
-    SerpApi,
-}
-
-/// Non-secret coordinates shown in the owner ceremony and bound in the ledger.
-/// The digest commits the exact v1 request profile, including upstream selection.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LookupProviderIdentity {
-    pub provider: LookupProvider,
-    pub endpoint: String,
-    pub configuration_digest: String,
-}
-
-impl LookupProviderIdentity {
-    pub fn valid(&self) -> bool {
-        lookup_endpoint(&self.endpoint).is_ok()
-            && self.configuration_digest
-                == lookup_configuration_digest(self.provider, &self.endpoint)
-    }
-}
-
-/// Only this constructor normalizes query text. Oversized input is rejected,
-/// never shortened into a different disclosure than the one the runtime binds.
-pub struct LookupQuery(String);
-
-impl LookupQuery {
-    pub fn new(raw: &str) -> Result<Self, LookupError> {
-        let mut query = String::new();
-        for word in raw.split_whitespace() {
-            if word.chars().any(char::is_control)
-                || query
-                    .len()
-                    .saturating_add(word.len())
-                    .saturating_add(usize::from(!query.is_empty()))
-                    > MAX_QUERY_BYTES
-            {
-                return Err(LookupError::InvalidQuery);
-            }
-            if !query.is_empty() {
-                query.push(' ');
-            }
-            query.push_str(word);
-        }
-        if query.is_empty() {
-            return Err(LookupError::InvalidQuery);
-        }
-        Ok(Self(query))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LookupError {
-    InvalidQuery,
-    InvalidProvider,
-    NotConfigured,
-    StaleProvider,
-    NoResult,
-    Malformed,
-    Oversized,
-    Unavailable,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -235,6 +158,7 @@ impl PreparedLookup {
                     )
                 }))
             }
+            LookupProvider::GooglePlaces => return Err(LookupError::InvalidProvider),
         };
         let sources = match sources {
             Ok(sources) => sources,
@@ -319,11 +243,13 @@ fn configured_lookup_identity(
                 .ok_or(LookupError::NotConfigured)?;
             serpapi_endpoint.to_owned()
         }
+        LookupProvider::GooglePlaces => return Err(LookupError::InvalidProvider),
     };
     lookup_endpoint(&endpoint)?;
     Ok(LookupProviderIdentity {
         provider,
-        configuration_digest: lookup_configuration_digest(provider, &endpoint),
+        configuration_digest: lookup_configuration_digest(provider, &endpoint)
+            .ok_or(LookupError::InvalidProvider)?,
         endpoint,
     })
 }
@@ -345,14 +271,14 @@ fn prepare_lookup_from(
     {
         let mut parameters = url.query_pairs_mut();
         parameters.append_pair("q", query.as_str());
-        for &(name, value) in lookup_parameters(identity.provider) {
+        for &(name, value) in
+            lookup_parameters(identity.provider).ok_or(LookupError::InvalidProvider)?
+        {
             parameters.append_pair(name, value);
         }
     }
     let query_digest = crate::surface_registry::hash(query.as_str().as_bytes());
-    let payload_digest = crate::surface_registry::hash(
-        format!("GET\n{}\naccept:application/json\n", url.as_str()).as_bytes(),
-    );
+    let payload_digest = get_payload_digest(&url);
     if identity.provider == LookupProvider::SerpApi {
         let key = config
             .serpapi_key
@@ -369,21 +295,25 @@ fn prepare_lookup_from(
     })
 }
 
-fn lookup_parameters(provider: LookupProvider) -> &'static [(&'static str, &'static str)] {
+fn lookup_parameters(provider: LookupProvider) -> Option<&'static [(&'static str, &'static str)]> {
     match provider {
-        LookupProvider::Searxng => &[
+        LookupProvider::Searxng => Some(&[
             ("format", "json"),
             ("categories", "general"),
             ("language", "en"),
             ("safesearch", "1"),
             ("pageno", "1"),
             ("engines", "bing"),
-        ],
-        LookupProvider::SerpApi => &[("engine", "google")],
+        ]),
+        LookupProvider::SerpApi => Some(&[("engine", "google")]),
+        LookupProvider::GooglePlaces => None,
     }
 }
 
-fn lookup_configuration_digest(provider: LookupProvider, endpoint: &str) -> String {
+pub(super) fn lookup_configuration_digest(
+    provider: LookupProvider,
+    endpoint: &str,
+) -> Option<String> {
     // Array order is fixed even if another dependency enables serde_json's
     // preserve_order feature. No credential or mutable provider response enters it.
     let profile = serde_json::json!([
@@ -391,46 +321,11 @@ fn lookup_configuration_digest(provider: LookupProvider, endpoint: &str) -> Stri
         1,
         provider,
         endpoint,
-        lookup_parameters(provider),
+        lookup_parameters(provider)?,
     ]);
-    crate::surface_registry::hash(profile.to_string().as_bytes())
-}
-
-fn lookup_endpoint(value: &str) -> Result<reqwest::Url, LookupError> {
-    if value.len() > MAX_LOOKUP_URL_BYTES
-        || value.chars().any(|c| c.is_whitespace() || c.is_control())
-        || value.contains(['\\', '?', '#'])
-    {
-        return Err(LookupError::InvalidProvider);
-    }
-    let url = reqwest::Url::parse(value).map_err(|_| LookupError::InvalidProvider)?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.as_str() != value
-    {
-        return Err(LookupError::InvalidProvider);
-    }
-    Ok(url)
-}
-
-fn lookup_http() -> Result<reqwest::Client, LookupError> {
-    static CLIENT: OnceLock<Result<reqwest::Client, LookupError>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(SEARCH_TIMEOUT)
-                .connect_timeout(Duration::from_secs(4))
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .no_proxy()
-                .build()
-                .map_err(|_| LookupError::Unavailable)
-        })
-        .clone()
+    Some(crate::surface_registry::hash(
+        profile.to_string().as_bytes(),
+    ))
 }
 
 fn lookup_sources<'a>(
@@ -781,47 +676,6 @@ async fn lookup_json<T: DeserializeOwned>(response: reqwest::Response) -> Result
     serde_json::from_slice(&body).map_err(|_| LookupError::Malformed)
 }
 
-async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, LookupError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err(LookupError::Oversized);
-    }
-
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| LookupError::Unavailable)?;
-        if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(body.len()) {
-            return Err(LookupError::Oversized);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
-fn lookup_response_privacy(body: &[u8]) -> Result<crate::ambiance::PrivacyClass, LookupError> {
-    let raw = std::str::from_utf8(body).map_err(|_| LookupError::Malformed)?;
-    let mut privacy = crate::ambiance::runtime::input_privacy(raw);
-    let mut offset = 0;
-    while let Some(start) = body[offset..].iter().position(|byte| *byte == b'"') {
-        offset += start;
-        // Decode each original string with serde, including ignored fields and
-        // duplicate map entries. Decoding into a Value first would discard an
-        // earlier duplicate; scanning raw text alone would miss escaped terms.
-        let mut strings =
-            serde_json::Deserializer::from_slice(&body[offset..]).into_iter::<String>();
-        let text = strings
-            .next()
-            .ok_or(LookupError::Malformed)?
-            .map_err(|_| LookupError::Malformed)?;
-        privacy = privacy.max(crate::ambiance::runtime::input_privacy(&text));
-        offset += strings.byte_offset();
-    }
-    Ok(privacy)
-}
-
 /// Render a search response into transcript text.
 ///
 /// Prefers the direct answer when the engine has one, then the knowledge-graph
@@ -961,6 +815,7 @@ fn compact_text(input: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::lookup::MAX_RESPONSE_BYTES;
     use std::sync::Arc;
 
     use tokio::{

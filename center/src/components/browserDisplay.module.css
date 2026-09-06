@@ -39,6 +39,15 @@
   overflow-wrap: anywhere;
 }
 .card p { margin: 0; }
+.placesCard { box-sizing: border-box; flex-shrink: 0; display: flex; flex-direction: column; max-height: var(--place-card-height, min(480px, 65dvh)); overflow: hidden; }
+.placeQuery { flex-shrink: 0; margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+.places { flex: 1 1 auto; min-height: 44px; overflow-y: auto; margin: 0; padding-left: 22px; }
+.places li + li { margin-top: 12px; }
+.card a { color: var(--hu-colors-beam-base); text-decoration: underline; }
+.card a:focus-visible { outline: 2px solid var(--hu-colors-beam-base); outline-offset: 2px; }
+.attributions { flex-shrink: 0; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--hu-divider); font-family: Arial, sans-serif; font-size: 13px; font-weight: 400; }
+.attributions p + p { margin-top: 4px; }
+.googleMaps { font-family: Arial, sans-serif; font-size: 14px; font-weight: 400; line-height: 20px; color: var(--hu-colors-white); }
 .composer { display: flex; flex-wrap: wrap; gap: 8px; }
 .composer input {
   flex: 1 1 100%;

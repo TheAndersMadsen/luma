@@ -4,12 +4,14 @@ import { COSMOS_WEBAPI, surfaceOwnerHeaders, SessionExpiredError } from "@/serve
 import { boundedJson } from "@/server/boundedJson";
 import { exact, UUID } from "@/lib/contracts/surfaces";
 import {
-  type WebLookupInput,
-  WEB_LOOKUP_INPUT_BYTES,
-  WEB_LOOKUP_RESPONSE_BYTES,
-  parseWebLookupInput,
-  parseWebLookupState,
-} from "@/lib/contracts/webLookup";
+  type LookupInput,
+  type LookupService,
+  LOOKUP_SERVICES,
+  LOOKUP_INPUT_BYTES,
+  LOOKUP_RESPONSE_BYTES,
+  parseLookupInput,
+  parseLookupState,
+} from "@/lib/contracts/lookupDisclosure";
 
 const ERRORS: Record<number, string> = { 400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 409: "conflict", 429: "surface_limit", 503: "unavailable" };
 
@@ -18,7 +20,7 @@ function json(value: unknown, status = 200): Response {
 }
 
 /** Owner policy names the exact provider; saving provider settings grants no disclosure. */
-export async function webLookupRequest(request: Request, operation: "read" | "write", surfaceId: string): Promise<Response> {
+export async function lookupRequest(request: Request, operation: "read" | "write", service: LookupService, surfaceId: string): Promise<Response> {
   try {
     if (!AUTH_ENABLED) return json({ error: "unavailable" }, 503);
     if (!await currentSession()) return json({ error: "unauthorized" }, 401);
@@ -27,11 +29,11 @@ export async function webLookupRequest(request: Request, operation: "read" | "wr
     if (surfaceId.length !== 36 || !UUID.test(surfaceId) || surfaceId === "00000000-0000-0000-0000-000000000000") return json({ error: "invalid_request" }, 400);
     surfaceId = surfaceId.toLowerCase();
 
-    let input: WebLookupInput | undefined;
+    let input: LookupInput | undefined;
     if (!read) {
       try {
         if (request.headers.get("content-type")?.split(";", 1)[0].trim() !== "application/json") throw new Error("content_type");
-        input = parseWebLookupInput(await boundedJson(request.body, WEB_LOOKUP_INPUT_BYTES,
+        input = parseLookupInput(service, await boundedJson(request.body, LOOKUP_INPUT_BYTES,
           AbortSignal.any([request.signal, AbortSignal.timeout(5000)])));
       } catch { return json({ error: "invalid_request" }, 400); }
     }
@@ -42,7 +44,7 @@ export async function webLookupRequest(request: Request, operation: "read" | "wr
     const headers = await surfaceOwnerHeaders();
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(8000)]);
     signal.throwIfAborted();
-    const response = await fetch(`${COSMOS_WEBAPI}/surface-api/v1/surfaces/${surfaceId}/web-lookup`, {
+    const response = await fetch(`${COSMOS_WEBAPI}/surface-api/v1/surfaces/${surfaceId}/${LOOKUP_SERVICES[service].path}`, {
       method: read ? "GET" : "POST",
       headers: { ...headers, "content-type": "application/json" },
       body: input ? JSON.stringify(input) : undefined,
@@ -57,7 +59,7 @@ export async function webLookupRequest(request: Request, operation: "read" | "wr
       void response.body?.cancel().catch(() => {});
       throw new Error("invalid_content_type");
     }
-    const state = parseWebLookupState(await boundedJson(response.body, WEB_LOOKUP_RESPONSE_BYTES, signal));
+    const state = parseLookupState(service, await boundedJson(response.body, LOOKUP_RESPONSE_BYTES, signal));
     if (!read && (!input || !state.approval || state.approval.approvalRevision !== input.approvalRevision
       || state.approval.revision !== input.expectedRevision + 1 || !exact(state.approval.policy, input.policy)
       || state.binding.incarnation !== input.approvalIncarnation

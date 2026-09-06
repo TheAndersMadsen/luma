@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { exact } from "@/lib/contracts/surfaces";
-import { WEB_LOOKUP_APPROVAL, parseWebLookupState, type WebLookupPolicy, type WebLookupProvider, type WebLookupState } from "@/lib/contracts/webLookup";
-import styles from "./webLookupPermission.module.css";
+import { LOOKUP_SERVICES, parseLookupState, type LookupService, type LookupPolicy, type LookupProvider, type LookupState } from "@/lib/contracts/lookupDisclosure";
+import styles from "./lookupPermission.module.css";
 
 type Props = {
+  service: LookupService;
   surfaceId: string;
   approvalRevision: number;
   label: string;
@@ -14,23 +15,38 @@ type Props = {
   revisionMayAdvance?: boolean;
   onRefreshApprovals: () => Promise<void>;
 };
-type Review = { policy: WebLookupPolicy | null };
-const providerName = (provider: WebLookupProvider) => provider.provider === "searxng" ? "SearXNG" : "SerpApi";
-const providerKey = (provider: WebLookupProvider) => `${provider.provider}:${provider.configurationDigest}`;
+type Review = { policy: LookupPolicy | null };
+const COPY = {
+  web: {
+    title: "Web lookup", name: "web lookup", providerLabel: "Web search provider",
+    query: "query text", destination: "web search provider",
+    restrictions: "Private memories, messages, documents and precise device location are outside this permission.",
+  },
+  places: {
+    title: "Place lookup", name: "place lookup", providerLabel: "Place lookup provider",
+    query: "named-place query text", destination: "place provider for visual results only",
+    restrictions: "Only named-place query text and visual results are allowed. This permission does not allow speech, device location, location history, navigation or other device actions. Private memories, messages and documents are outside this permission.",
+  },
+} satisfies Record<LookupService, { title: string; name: string; providerLabel: string; query: string; destination: string; restrictions: string }>;
+const PROVIDERS = {
+  searxng: { name: "SearXNG", description: "Bing engine requests through your SearXNG service. That service controls its downstream queries." },
+  serp_api: { name: "SerpApi", description: "Google web search through SerpApi." },
+  google_places: { name: "Google Maps", description: "Named-place queries through Google Maps for visual place results." },
+} satisfies Record<LookupProvider["provider"], { name: string; description: string }>;
+const providerName = (provider: LookupProvider) => PROVIDERS[provider.provider].name;
+const providerKey = (provider: LookupProvider) => `${provider.provider}:${provider.configurationDigest}`;
 
-function ProviderDetails({ provider }: { provider: WebLookupProvider }) {
+function ProviderDetails({ provider }: { provider: LookupProvider }) {
   return <>
     <p><strong>{providerName(provider)}</strong><br /><span className={styles.endpoint}>{provider.endpoint}</span></p>
-    <p>{provider.provider === "searxng"
-      ? "Bing engine requests through your SearXNG service. That service controls its downstream queries."
-      : "Google web search through SerpApi."}</p>
+    <p>{PROVIDERS[provider.provider].description}</p>
   </>;
 }
 
 /** A separate owner gesture binds one provider to one existing surface approval. */
-export function WebLookupPermission({ surfaceId, approvalRevision, label, canApprove, revisionMayAdvance = false, onRefreshApprovals }: Props) {
+export function LookupPermission({ service, surfaceId, approvalRevision, label, canApprove, revisionMayAdvance = false, onRefreshApprovals }: Props) {
   const [open, setOpen] = useState(false);
-  const [snapshot, setSnapshot] = useState<WebLookupState>();
+  const [snapshot, setSnapshot] = useState<LookupState>();
   const [selected, setSelected] = useState("");
   const [review, setReview] = useState<Review | null>(null);
   const [busy, setBusy] = useState(false);
@@ -39,7 +55,9 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
   const [needsApprovalRefresh, setNeedsApprovalRefresh] = useState(false);
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
-  const path = `/api/surfaces/${surfaceId}/web-lookup`;
+  const definition = LOOKUP_SERVICES[service];
+  const copy = COPY[service];
+  const path = `/api/surfaces/${surfaceId}/${definition.path}`;
   // Browser row revisions include heartbeats. The reviewed binding comes from
   // the atomic permission GET and remains valid for that same incarnation.
   const parentRevision = revisionMayAdvance ? null : approvalRevision;
@@ -65,7 +83,7 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
       window.removeEventListener("pagehide", close);
       document.removeEventListener("visibilitychange", close);
     };
-  }, [invalidate, surfaceId, parentRevision, canApprove, revisionMayAdvance]);
+  }, [invalidate, service, surfaceId, parentRevision, canApprove, revisionMayAdvance]);
 
   async function load() {
     if (needsApprovalRefresh) return;
@@ -77,7 +95,7 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
       const response = await fetch(path, { cache: "no-store", signal });
       signal.throwIfAborted();
       if (!response.ok) throw new Error("unavailable");
-      const saved = parseWebLookupState(await response.json());
+      const saved = parseLookupState(service, await response.json());
       signal.throwIfAborted();
       if (!revisionMayAdvance && saved.binding.approvalRevision !== approvalRevision) {
         setNeedsApprovalRefresh(true);
@@ -89,7 +107,7 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
       const previous = saved.approval?.policy?.provider;
       if (previous && saved.providers.some(provider => exact(provider, previous))) setSelected(providerKey(previous));
     } catch {
-      if (current === generation.current) setError("Web lookup permission is unavailable. Refresh device approvals and permission status before making changes.");
+      if (current === generation.current) setError(`${copy.title} permission is unavailable. Refresh device approvals and permission status before making changes.`);
     } finally { if (current === generation.current) { active.current = null; setBusy(false); } }
   }
 
@@ -106,11 +124,11 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
     setBusy(true); setMessage(""); setError("");
     try {
       const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, cache: "no-store", signal,
-        body: JSON.stringify({ approval: WEB_LOOKUP_APPROVAL, approvalRevision: reviewedBinding.approvalRevision,
+        body: JSON.stringify({ approval: definition.approval, approvalRevision: reviewedBinding.approvalRevision,
           approvalIncarnation: reviewedBinding.incarnation, expectedRevision, policy }) });
       signal.throwIfAborted();
       if (!response.ok) throw new Error("unconfirmed");
-      const saved = parseWebLookupState(await response.json());
+      const saved = parseLookupState(service, await response.json());
       signal.throwIfAborted();
       if (!saved.approval || saved.approval.approvalRevision !== reviewedBinding.approvalRevision
         || saved.binding.incarnation !== reviewedBinding.incarnation
@@ -120,7 +138,7 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
       if (current !== generation.current) return;
       setSnapshot(saved); setReview(null);
       setSelected(policy && saved.providers.some(provider => exact(provider, policy.provider)) ? providerKey(policy.provider) : "");
-      setMessage(policy ? "Cosmos confirmed web lookup permission for this device." : "Cosmos confirmed web lookup permission revoked.");
+      setMessage(policy ? `Cosmos confirmed ${copy.name} permission for this device.` : `Cosmos confirmed ${copy.name} permission revoked.`);
     } catch {
       if (current !== generation.current) return;
       // A lost response can follow a committed write. Only a fresh read can
@@ -133,22 +151,23 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
   const provider = snapshot?.providers.find(candidate => providerKey(candidate) === selected);
   const recorded = snapshot?.approval?.policy;
   const currentProvider = recorded && snapshot?.providers.some(candidate => exact(candidate, recorded.provider));
-  return <div className={styles.permission} role="group" aria-label={`Web lookup permission for ${label}`}>
+  return <div className={styles.permission} role="group" aria-label={`${copy.title} permission for ${label}`}>
     <button type="button" aria-expanded={open} onClick={() => {
       if (open) invalidate(); else void load();
       setOpen(!open);
-    }}>{open ? "Close web lookup permission" : "Web lookup permission"}</button>
+    }}>{open ? `Close ${copy.name} permission` : `${copy.title} permission`}</button>
     {open ? <>
-      <p>Allow Cosmos to send query text from {label} to one selected web search provider. Device approval and saved provider credentials do not grant this permission.</p>
-      <p>Maximum approved content: <strong>shared-room query text</strong>. Cosmos keeps the request’s privacy classification. Private memories, messages, documents and precise device location are outside this permission.</p>
+      <p>Allow Cosmos to send {copy.query} from {label} to one selected {copy.destination}. Device approval and saved provider credentials do not grant this permission.</p>
+      {service === "places" ? <p>Named-place results use an address list with Google Maps and provider credit on an approved browser display. Source links open only when you choose them. This permission does not grant wearer location, navigation or speech.</p> : null}
+      <p>Maximum approved content: <strong>shared-room query text</strong>. Cosmos keeps the request’s privacy classification. {copy.restrictions}</p>
       {snapshot ? recorded ? <div>
-        <p>Recorded web lookup permission:</p>
+        <p>Recorded {copy.name} permission:</p>
         <ProviderDetails provider={recorded.provider} />
         {!currentProvider ? <p role="status">The provider configuration changed or is unavailable. This permission cannot authorize a lookup. Review a current provider to approve it again.</p> : null}
-      </div> : <p>No active web lookup permission.</p> : busy ? <p role="status">Checking web lookup permission…</p> : null}
-      {!canApprove ? <p>This device’s current request approval is unavailable. Existing web lookup permission can still be revoked.</p> : null}
-      {snapshot?.providers.length === 0 ? <p>No configured web lookup provider is available. Open <Link href="/settings/account/services">Services</Link>, then refresh permission status.</p> : null}
-      <label className={styles.field}>Web search provider
+      </div> : <p>No active {copy.name} permission.</p> : busy ? <p role="status">Checking {copy.name} permission…</p> : null}
+      {!canApprove ? <p>This device’s current request approval is unavailable. Existing {copy.name} permission can still be revoked.</p> : null}
+      {snapshot?.providers.length === 0 ? <p>No configured {copy.name} provider is available. Open <Link href="/settings/account/services">Services</Link>, then refresh permission status.</p> : null}
+      <label className={styles.field}>{copy.providerLabel}
         <select value={selected} disabled={busy || !snapshot || !canApprove || !snapshot.providers.length} onChange={event => {
           setSelected(event.target.value); setReview(null); setMessage(""); setError("");
         }}>
@@ -158,26 +177,27 @@ export function WebLookupPermission({ surfaceId, approvalRevision, label, canApp
       </label>
       <div className={styles.actions}>
         <button type="button" disabled={busy || needsApprovalRefresh || !snapshot || !canApprove || !provider}
-          onClick={() => { if (provider) { setReview({ policy: { provider, maximumClass: "shared_room" } }); setMessage(""); setError(""); } }}>Review web lookup permission</button>
-        <button type="button" disabled={busy || needsApprovalRefresh || !recorded} onClick={() => { setReview({ policy: null }); setMessage(""); setError(""); }}>Revoke web lookup permission</button>
+          onClick={() => { if (provider) { setReview({ policy: { provider, maximumClass: "shared_room" } }); setMessage(""); setError(""); } }}>Review {copy.name} permission</button>
+        <button type="button" disabled={busy || needsApprovalRefresh || !recorded} onClick={() => { setReview({ policy: null }); setMessage(""); setError(""); }}>Revoke {copy.name} permission</button>
       </div>
-      {review ? <div className={styles.review} role="group" aria-label={review.policy ? "Review web lookup permission" : "Review web lookup revocation"}>
+      {review ? <div className={styles.review} role="group" aria-label={review.policy ? `Review ${copy.name} permission` : `Review ${copy.name} revocation`}>
         {review.policy ? <>
-          <p>Allow web lookup from <strong>{label}</strong> using this exact provider configuration?</p>
+          <p>Allow {copy.name} from <strong>{label}</strong> using this exact provider configuration?</p>
           <ProviderDetails provider={review.policy.provider} />
           <p>Maximum approved content: <strong>shared-room query text</strong>. Changing providers requires a separate approval. A lookup will not switch providers if this one fails.</p>
-          <button type="button" disabled={busy || !canApprove} onClick={() => void save()}>Allow shared-room web lookup</button>
+          {service === "places" ? <p>{copy.restrictions}</p> : null}
+          <button type="button" disabled={busy || !canApprove} onClick={() => void save()}>Allow shared-room {copy.name}</button>
         </> : <>
-          <p>Revoke web lookup permission for <strong>{label}</strong>? This stops permission for future queries; it cannot recall queries already sent.</p>
-          <button type="button" disabled={busy} onClick={() => void save()}>Confirm revoke web lookup</button>
+          <p>Revoke {copy.name} permission for <strong>{label}</strong>? This stops permission for future queries; it cannot recall queries already sent.</p>
+          <button type="button" disabled={busy} onClick={() => void save()}>Confirm revoke {copy.name}</button>
         </>}
-        <button type="button" disabled={busy} onClick={() => setReview(null)}>Cancel web lookup review</button>
+        <button type="button" disabled={busy} onClick={() => setReview(null)}>Cancel {copy.name} review</button>
       </div> : null}
       {needsApprovalRefresh ? <>
         <p>The device or permission revision changed. Refresh device approvals, then reopen this permission and review it again.</p>
         <button type="button" disabled={busy} onClick={() => { invalidate(); setOpen(false); void onRefreshApprovals(); }}>Refresh device approvals</button>
       </> : null}
-      <button type="button" disabled={busy || needsApprovalRefresh} onClick={() => void load()}>Refresh web lookup permission</button>
+      <button type="button" disabled={busy || needsApprovalRefresh} onClick={() => void load()}>Refresh {copy.name} permission</button>
       {message ? <p role="status">{message}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
     </> : null}

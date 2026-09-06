@@ -41,6 +41,14 @@
   ],
   "evidence": [
     {
+      "id": "places-transient-output-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/visual.rs",
+      "anchor": "pub struct Cache",
+      "scope": "Defines bounded transient named-place cards, canonical content digests, principal and turn bindings, expiring references and cancellation cleanup. Durable actions retain references only. Places has independent per-origin provider permission and cannot return provider content to cognition or speech; Center verifies the exact structured card and attribution before acknowledgment.",
+      "limitation": "One basic named-address lookup and browser output slice. This source reference establishes neither an executed acceptance gate nor real provider/account eligibility, native rendering, navigation, cross-device task context or physical Pin behavior. Provider content restrictions are independent of the paper's runtime authority."
+    },
+    {
       "id": "web-lookup-runtime-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/ambiance/lookup.rs",
@@ -813,7 +821,7 @@
       "requirement": "Preserve the existing Cosmos integrations as conversational product capabilities by reusing their provider adapters through Ambiance-scoped services and typed actions, rather than retaining the old orchestration authority or silently removing useful integrations.",
       "acceptance": "Inventory every existing integration and distinguish configured, conversationally usable and hardware-dependent states in Center. Prove each migrated path through real request admission, scoped context/provider disclosure, permitted output and exact effect evidence where applicable. Public lookups, personal-data retrieval and consequential actions receive their appropriate independent permissions; a configured provider alone is not evidence that an integration works.",
       "status": "partial",
-      "evidence": ["web-lookup-runtime-definition"]
+      "evidence": ["web-lookup-runtime-definition", "places-transient-output-definition"]
     },
     {
       "id": "pixel-default-digital-assistant",

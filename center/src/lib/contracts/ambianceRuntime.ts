@@ -1,16 +1,24 @@
 import { integer, record, UUID } from "./surfaces";
+import { parsePlaceAttribution } from "../placeAttribution";
 
 export const ROOM_METHOD = "cosmos.coordinate.v1";
 export const ROOM_PAYLOAD_BYTES = 12288;
+export const PLACES_CONTENT_BYTES = 8192;
 export interface Stamp { epoch: string; sequence: number; instanceId: string }
 export interface RoomConnection {
   version: 1; url: string; token: string; participant: string;
   runtimeParticipant: "runtime"; runtimeEpoch: string; epoch: string;
 }
+export interface PlacesContent {
+  kind: "places"; query: string;
+  items: { placeId: string; name: string; address: string; sourceUrl: string | null }[];
+  attributions: string[];
+}
+export type RenderContent = { kind: "text"; text: string } | PlacesContent;
 export interface RenderCommand {
   version: 1; actionId: string; turnId: string; generation: number;
   surfaceId: string; incarnation: string; channel: "visual.card";
-  contentDigest: string; content: { kind: "text"; text: string }; expiresAt: number;
+  contentDigest: string; content: RenderContent; expiresAt: number;
 }
 export type RuntimeFrame = { version: 1; kind: "render"; stamp: Stamp; command: RenderCommand }
   | { version: 1; kind: "clear"; stamp: Stamp; actionId: string };
@@ -43,14 +51,58 @@ export function parseRoomConnection(value: unknown, origin: string): RoomConnect
 export function publicText(text: unknown): text is string {
   return typeof text === "string" && !!text.trim() && new TextEncoder().encode(text).length <= 4000;
 }
+function placeText(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && /\P{White_Space}/u.test(value)
+    && new TextEncoder().encode(value).length <= maximum && !/\p{Cc}/u.test(value)
+    && !Array.from(value).some(character => { const code = character.codePointAt(0)!; return code >= 0xd800 && code <= 0xdfff; });
+}
+function placeSource(value: unknown): value is string | null {
+  if (value === null) return true;
+  if (!placeText(value, 2048) || /[\p{White_Space}\\]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.port
+      && (url.hostname === "maps.google.com" || url.hostname === "www.google.com"
+        && (url.pathname === "/maps" || url.pathname.startsWith("/maps/")));
+  } catch { return false; }
+}
+function parseContent(value: unknown): RenderContent {
+  const content = record(value);
+  if (content.kind === "text") {
+    fields(content, ["kind", "text"]);
+    if (!publicText(content.text)) throw new Error("invalid_content");
+  } else if (content.kind === "places") {
+    fields(content, ["kind", "query", "items", "attributions"]);
+    if (!placeText(content.query, 512) || !Array.isArray(content.items) || content.items.length > 4
+      || !Array.isArray(content.attributions) || content.attributions.length > 16
+      || new TextEncoder().encode(JSON.stringify(content)).length > PLACES_CONTENT_BYTES) throw new Error("invalid_place_content");
+    for (const value of content.items) {
+      const item = record(value); fields(item, ["placeId", "name", "address", "sourceUrl"]);
+      if (!placeText(item.placeId, 1024) || /\p{White_Space}/u.test(item.placeId)
+        || !placeText(item.name, 256) || !placeText(item.address, 512) || !placeSource(item.sourceUrl)) throw new Error("invalid_place_item");
+    }
+    for (const attribution of content.attributions) {
+      if (typeof attribution !== "string") throw new Error("invalid_place_attribution");
+      // Unsupported credit must reject the card, never become omitted credit.
+      parsePlaceAttribution(attribution);
+    }
+  } else throw new Error("invalid_content");
+  return content as unknown as RenderContent;
+}
+/** Existing text hashes remain byte-for-byte; Places bind every raw credit. */
+export function renderContentPayload(content: RenderContent): string {
+  return content.kind === "text" ? content.text : JSON.stringify([
+    "cosmos.place-address-card", 1, content.query,
+    content.items.map(item => [item.placeId, item.name, item.address, item.sourceUrl]), content.attributions,
+  ]);
+}
 export function parseCommand(value: unknown): RenderCommand {
   const c = record(value);
   fields(c, ["version", "actionId", "turnId", "generation", "surfaceId", "incarnation", "channel", "contentDigest", "content", "expiresAt"]);
   if (c.version !== 1 || ![c.actionId, c.turnId, c.surfaceId, c.incarnation].every(id)
     || !integer(c.generation, 1) || !integer(c.expiresAt, 1) || c.channel !== "visual.card"
     || typeof c.contentDigest !== "string" || !/^[a-f0-9]{64}$/.test(c.contentDigest)) throw new Error("invalid_proof");
-  const content = record(c.content); fields(content, ["kind", "text"]);
-  if (content.kind !== "text" || !publicText(content.text)) throw new Error("invalid_content");
+  parseContent(c.content);
   return c as unknown as RenderCommand;
 }
 export function parseFrame(payload: string): RuntimeFrame {

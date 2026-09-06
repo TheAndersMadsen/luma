@@ -7,24 +7,32 @@ vi.mock("@/server/auth", () => ({ get AUTH_ENABLED() { return mocks.authEnabled;
 vi.mock("@/server/cosmos", () => ({ get COSMOS_WEBAPI() { return mocks.cosmos; }, surfaceOwnerHeaders: mocks.headers, SessionExpiredError: class extends Error {} }));
 
 import { GET, POST } from "@/app/api/surfaces/[surfaceId]/web-lookup/route";
-import { WEB_LOOKUP_APPROVAL, WEB_LOOKUP_INPUT_BYTES, WEB_LOOKUP_RESPONSE_BYTES } from "@/lib/contracts/webLookup";
+import { GET as PLACES_GET, POST as PLACES_POST } from "@/app/api/surfaces/[surfaceId]/places-lookup/route";
+import { LOOKUP_SERVICES, LOOKUP_INPUT_BYTES, LOOKUP_RESPONSE_BYTES } from "@/lib/contracts/lookupDisclosure";
 import { SessionExpiredError } from "@/server/cosmos";
 
 const surfaceId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const url = `https://center.test/api/surfaces/${surfaceId}/web-lookup`;
+const placesUrl = `https://center.test/api/surfaces/${surfaceId}/places-lookup`;
 const context = { params: Promise.resolve({ surfaceId }) };
 const provider = { provider: "searxng", endpoint: "https://search.example/search", configurationDigest: "a".repeat(64) };
 const policy = { provider, maximumClass: "shared_room" };
 const binding = { approvalRevision: 7, incarnation: null };
 const browserIncarnation = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-const input = { approval: WEB_LOOKUP_APPROVAL, approvalRevision: 7, approvalIncarnation: null, expectedRevision: 2, policy };
+const input = { approval: LOOKUP_SERVICES.web.approval, approvalRevision: 7, approvalIncarnation: null, expectedRevision: 2, policy };
 const saved = { approval: { approvalRevision: 7, revision: 3, policy }, providers: [provider], binding };
+const placesProvider = { provider: "google_places", endpoint: "https://places.googleapis.com/", configurationDigest: "b".repeat(64) };
+const placesPolicy = { provider: placesProvider, maximumClass: "shared_room" };
+const placesInput = { ...input, approval: LOOKUP_SERVICES.places.approval, expectedRevision: 0, policy: placesPolicy };
+const placesSaved = { approval: { approvalRevision: 7, revision: 1, policy: placesPolicy }, providers: [placesProvider], binding };
 
-function request(body: unknown = input, options: RequestInit = {}): Request {
-  return new Request(url, { method: "POST", ...options, headers: { "content-type": "application/json", ...options.headers }, body: JSON.stringify(body) });
+function request(body: unknown = input, options: RequestInit = {}, target = url): Request {
+  return new Request(target, { method: "POST", ...options, headers: { "content-type": "application/json", ...options.headers }, body: JSON.stringify(body) });
 }
 const read = (options: RequestInit = {}) => GET(new Request(url, options), context);
 const write = (body: unknown = input, options: RequestInit = {}) => POST(request(body, options), context);
+const readPlaces = (options: RequestInit = {}) => PLACES_GET(new Request(placesUrl, options), context);
+const writePlaces = (body: unknown = placesInput, options: RequestInit = {}) => PLACES_POST(request(body, options, placesUrl), context);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -38,7 +46,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it("requires configured owner login and a current session on reads and writes", async () => {
-  const handlers = [read, write];
+  const handlers = [read, write, readPlaces, writePlaces];
   mocks.authEnabled = false;
   for (const handler of handlers) expect((await handler()).status).toBe(503);
   expect(mocks.session).not.toHaveBeenCalled();
@@ -54,16 +62,18 @@ it("requires configured owner login and a current session on reads and writes", 
 
 it("rejects cross-origin mutations before body reading or owner authority", async () => {
   mocks.origin.mockReturnValue(false);
-  const pull = vi.fn();
-  const incoming = new Request(url, { method: "POST", headers: { "content-type": "application/json" },
-    body: new ReadableStream({ pull }, { highWaterMark: 0 }), duplex: "half" } as RequestInit);
-  const result = await POST(incoming, context);
-  expect(result.status).toBe(403);
-  expect(await result.json()).toEqual({ error: "same_origin_required" });
-  expect(pull).not.toHaveBeenCalled();
+  for (const [handler, target] of [[POST, url], [PLACES_POST, placesUrl]] as const) {
+    const pull = vi.fn();
+    const incoming = new Request(target, { method: "POST", headers: { "content-type": "application/json" },
+      body: new ReadableStream({ pull }, { highWaterMark: 0 }), duplex: "half" } as RequestInit);
+    const result = await handler(incoming, context);
+    expect(result.status).toBe(403);
+    expect(await result.json()).toEqual({ error: "same_origin_required" });
+    expect(pull).not.toHaveBeenCalled();
+    await incoming.body?.cancel();
+  }
   expect(mocks.headers).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
-  await incoming.body?.cancel();
 });
 
 it("rejects invalid surface IDs and complete malformed policies before acquiring authority", async () => {
@@ -128,6 +138,102 @@ it("reads bounded owner policy and current candidates without implying stale pol
   expect(options?.method).toBe("GET");
   expect(options?.body).toBeUndefined();
   expect(mocks.origin).not.toHaveBeenCalled();
+});
+
+it("reads, grants and revokes Places permission only through its own route and policy revision", async () => {
+  vi.mocked(fetch).mockResolvedValue(Response.json({ approval: null, providers: [placesProvider], binding }));
+  const current = await readPlaces();
+  expect(current.status).toBe(200);
+  expect(await current.json()).toEqual({ approval: null, providers: [placesProvider], binding });
+  expect(vi.mocked(fetch).mock.lastCall?.[0]).toBe(`http://cosmos.test/surface-api/v1/surfaces/${surfaceId}/places-lookup`);
+  expect(vi.mocked(fetch).mock.lastCall?.[1]?.method).toBe("GET");
+
+  vi.mocked(fetch).mockResolvedValue(Response.json(placesSaved));
+  const granted = await writePlaces(placesInput, { headers: { authorization: "Bearer caller", "x-cosmos-admin-token": "caller" } });
+  expect(granted.status).toBe(200);
+  expect(await granted.json()).toEqual(placesSaved);
+  const [target, options] = vi.mocked(fetch).mock.lastCall!;
+  expect(target).toBe(`http://cosmos.test/surface-api/v1/surfaces/${surfaceId}/places-lookup`);
+  expect(options?.method).toBe("POST");
+  expect(options?.headers).toEqual({ authorization: "Bearer server-only", "content-type": "application/json" });
+  expect(JSON.parse(String(options?.body))).toEqual(placesInput);
+  expect(options?.redirect).toBe("error");
+  expect(options?.signal).toBeInstanceOf(AbortSignal);
+
+  const revoke = { ...placesInput, expectedRevision: 1, policy: null };
+  const revoked = { approval: { ...placesSaved.approval, revision: 2, policy: null }, providers: [], binding };
+  vi.mocked(fetch).mockResolvedValue(Response.json(revoked));
+  const result = await writePlaces(revoke);
+  expect(result.status).toBe(200);
+  expect(await result.json()).toEqual(revoked);
+  expect(JSON.parse(String(vi.mocked(fetch).mock.lastCall?.[1]?.body))).toEqual(revoke);
+  expect(vi.mocked(fetch).mock.calls.every(([target]) => target === `http://cosmos.test/surface-api/v1/surfaces/${surfaceId}/places-lookup`)).toBe(true);
+});
+
+it("rejects cross-service providers and approval tokens even for null revocations before owner authority", async () => {
+  for (const body of [{ ...input, policy: placesPolicy }, { ...input, approval: LOOKUP_SERVICES.places.approval },
+    { ...input, approval: LOOKUP_SERVICES.places.approval, policy: null }, { ...input, service: "places" }]) {
+    expect((await write(body)).status).toBe(400);
+  }
+  for (const body of [{ ...placesInput, policy }, { ...placesInput, approval: LOOKUP_SERVICES.web.approval },
+    { ...placesInput, approval: LOOKUP_SERVICES.web.approval, policy: null }, { ...placesInput, service: "web" },
+    { ...placesInput, policy: { ...placesPolicy, provider: { ...provider, provider: "serp_api" } } }]) {
+    expect((await writePlaces(body)).status).toBe(400);
+  }
+  expect(mocks.headers).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("does not admit query content, location, speech or device actions into Places disclosure permissions", async () => {
+  for (const body of [
+    ...["query", "deviceLocation", "locationHistory", "speech", "navigation", "deviceAction"]
+      .map(field => ({ ...placesInput, [field]: true })),
+    ...["deviceLocation", "locationHistory", "speech", "navigation", "deviceAction"]
+      .map(field => ({ ...placesInput, policy: { ...placesPolicy, [field]: true } })),
+    { ...placesInput, policy: { ...placesPolicy, maximumClass: "private" } },
+  ]) {
+    expect((await writePlaces(body)).status).toBe(400);
+  }
+  expect(mocks.headers).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("rejects upstream cross-service candidates and policies without disclosing them", async () => {
+  for (const state of [{ ...saved, providers: [placesProvider] }, { ...saved, approval: { ...saved.approval, policy: placesPolicy } }]) {
+    vi.mocked(fetch).mockResolvedValue(Response.json(state));
+    expect((await read()).status).toBe(503);
+  }
+  for (const state of [{ ...placesSaved, providers: [provider] }, { ...placesSaved, providers: [placesProvider, placesProvider] },
+    { ...placesSaved, approval: { ...placesSaved.approval, policy } },
+    { ...placesSaved, deviceLocation: { latitude: 1, longitude: 1 } }]) {
+    vi.mocked(fetch).mockResolvedValue(Response.json(state));
+    const result = await readPlaces();
+    expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ error: "unavailable" });
+  }
+});
+
+it("confirms Places commits against the reviewed policy, revision and current incarnation", async () => {
+  for (const state of [
+    { ...placesSaved, approval: null },
+    { ...placesSaved, approval: { ...placesSaved.approval, revision: 2 } },
+    { ...placesSaved, approval: { ...placesSaved.approval, policy: null } },
+    { ...placesSaved, approval: { ...placesSaved.approval, policy: { ...placesPolicy, provider: { ...placesProvider, configurationDigest: "c".repeat(64) } } } },
+    { ...placesSaved, binding: { ...binding, approvalRevision: 8 } },
+    { ...placesSaved, binding: { ...binding, incarnation: browserIncarnation } },
+  ]) {
+    vi.mocked(fetch).mockResolvedValue(Response.json(state));
+    const result = await writePlaces();
+    expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ error: "unavailable" });
+  }
+  const browserInput = { ...placesInput, approvalIncarnation: browserIncarnation };
+  const advanced = { ...placesSaved, binding: { approvalRevision: 8, incarnation: browserIncarnation } };
+  vi.mocked(fetch).mockResolvedValue(Response.json(advanced));
+  expect((await writePlaces(browserInput)).status).toBe(200);
+  vi.mocked(fetch).mockResolvedValue(Response.json({ ...advanced,
+    binding: { ...advanced.binding, incarnation: "cccccccc-cccc-cccc-cccc-cccccccccccc" } }));
+  expect((await writePlaces(browserInput)).status).toBe(503);
 });
 
 it("requires exact approval, policy and next policy revision after a successful POST", async () => {
@@ -224,7 +330,7 @@ it("rejects nonexact upstream envelopes and provider candidates instead of passi
 
 it("enforces incoming byte bounds at 4096 and cancels oversized streamed bodies before authority", async () => {
   vi.mocked(fetch).mockResolvedValue(Response.json(saved));
-  const padded = JSON.stringify(input).padEnd(WEB_LOOKUP_INPUT_BYTES, " ");
+  const padded = JSON.stringify(input).padEnd(LOOKUP_INPUT_BYTES, " ");
   const incoming = new Request(url, { method: "POST", headers: { "content-type": "application/json; charset=utf-8" }, body: padded });
   expect((await POST(incoming, context)).status).toBe(200);
   mocks.headers.mockClear();
@@ -244,11 +350,11 @@ it("requires JSON UTF-8 and bounds successful upstream bodies at 8192 bytes", as
     new Response(JSON.stringify(saved), { headers: { "content-type": "text/plain" } }),
     new Response("{", { headers: { "content-type": "application/json" } }),
     new Response(new Uint8Array([0xff]), { headers: { "content-type": "application/json" } }),
-    new Response(" ".repeat(WEB_LOOKUP_RESPONSE_BYTES + 1), { headers: { "content-type": "application/json" } })]) {
+    new Response(" ".repeat(LOOKUP_RESPONSE_BYTES + 1), { headers: { "content-type": "application/json" } })]) {
     vi.mocked(fetch).mockResolvedValue(response);
     expect((await read()).status).toBe(503);
   }
-  const padded = JSON.stringify(saved).padEnd(WEB_LOOKUP_RESPONSE_BYTES, " ");
+  const padded = JSON.stringify(saved).padEnd(LOOKUP_RESPONSE_BYTES, " ");
   vi.mocked(fetch).mockResolvedValue(new Response(padded, { headers: { "content-type": "application/json; charset=utf-8" } }));
   expect((await read()).status).toBe(200);
 });

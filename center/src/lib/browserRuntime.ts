@@ -1,4 +1,4 @@
-import { parseAdmission, parseFrame, parseRoomConnection, publicText, ROOM_PAYLOAD_BYTES,
+import { parseAdmission, parseFrame, parseRoomConnection, publicText, renderContentPayload, ROOM_PAYLOAD_BYTES,
   type BrowserControl, type RenderCommand, type RoomConnection, type Stamp } from "./contracts/ambianceRuntime";
 import type { SurfaceConnection } from "./contracts/surfaces";
 import { createBrowserRoom, type BrowserRoom } from "./browserRoom";
@@ -154,8 +154,9 @@ export class BrowserRuntime {
           if (!this.visible || document.visibilityState !== "visible" || command.surfaceId !== this.surfaceId
             || command.incarnation !== this.connection?.incarnation || command.expiresAt <= Date.now()
             || command.expiresAt > Date.now() + 60000 || this.retired.has(command.actionId)) throw new Error("ineligible_render");
-          const contentDigest = await digest(command.content.text); this.active(generation);
+          const contentDigest = await digest(renderContentPayload(command.content)); this.active(generation);
           if (!this.visible || document.visibilityState !== "visible" || visibilityEpoch !== this.visibilityEpoch) throw new Error("hidden");
+          if (command.expiresAt <= Date.now()) throw new Error("expired_render");
           if (contentDigest !== command.contentDigest) throw new Error("digest_mismatch");
           if (this.current?.actionId === command.actionId) throw new Error("changed_action_stamp");
           this.clearFrame(); this.current = command;
@@ -174,7 +175,12 @@ export class BrowserRuntime {
     this.incoming = task.catch(() => {});
     return task;
   }
-  /** Called only after the exact escaped text commits to the visible DOM. */
+  /** A rejected layout retires the exact card without claiming delivery. */
+  displayFailed(command: RenderCommand) {
+    if (this.current !== command) return;
+    this.clearFrame(); this.status("The place card could not fit its required attribution on this display.");
+  }
+  /** Called only after exact content and every required credit commit to the visible DOM. */
   async committed(command: RenderCommand) {
     if (this.current !== command || this.acknowledged.has(command.actionId) || this.acknowledging.has(command.actionId) || command.expiresAt <= Date.now()) return;
     const generation = this.generation; const visibilityEpoch = this.visibilityEpoch;

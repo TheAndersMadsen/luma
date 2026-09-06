@@ -1,20 +1,21 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebLookupPermission } from "./WebLookupPermission";
-import { WEB_LOOKUP_APPROVAL, type WebLookupBinding, type WebLookupPolicy, type WebLookupProvider } from "@/lib/contracts/webLookup";
+import { LookupPermission } from "./LookupPermission";
+import { LOOKUP_SERVICES, type LookupBinding, type LookupPolicy, type LookupProvider } from "@/lib/contracts/lookupDisclosure";
 
 const surfaceId = "11111111-1111-4111-8111-111111111111";
-const searx: WebLookupProvider = { provider: "searxng", endpoint: "https://search.example.test/search", configurationDigest: "a".repeat(64) };
-const serp: WebLookupProvider = { provider: "serp_api", endpoint: "https://serpapi.com/search.json", configurationDigest: "b".repeat(64) };
-const policy: WebLookupPolicy = { provider: searx, maximumClass: "shared_room" };
+const searx: LookupProvider = { provider: "searxng", endpoint: "https://search.example.test/search", configurationDigest: "a".repeat(64) };
+const serp: LookupProvider = { provider: "serp_api", endpoint: "https://serpapi.com/search.json", configurationDigest: "b".repeat(64) };
+const google: LookupProvider = { provider: "google_places", endpoint: "https://places.googleapis.com/v1/places:searchText", configurationDigest: "c".repeat(64) };
+const policy: LookupPolicy = { provider: searx, maximumClass: "shared_room" };
 const approval = { approvalRevision: 3, revision: 5, policy };
-const binding: WebLookupBinding = { approvalRevision: 3, incarnation: null };
+const binding: LookupBinding = { approvalRevision: 3, incarnation: null };
 const browserIncarnation = "22222222-2222-4222-8222-222222222222";
-const props = { surfaceId, approvalRevision: 3, label: "test installation", canApprove: true, onRefreshApprovals: vi.fn(async () => {}) };
+const props = { service: "web" as const, surfaceId, approvalRevision: 3, label: "test installation", canApprove: true, onRefreshApprovals: vi.fn(async () => {}) };
 const success = "Cosmos confirmed web lookup permission for this device.";
 const revoked = "Cosmos confirmed web lookup permission revoked.";
-const state = (saved: unknown = null, providers: WebLookupProvider[] = [searx, serp], current: WebLookupBinding = binding) => ({ approval: saved, providers, binding: current });
-const response = (saved: unknown = null, providers: WebLookupProvider[] = [searx, serp], current: WebLookupBinding = binding) => Response.json(state(saved, providers, current));
+const state = (saved: unknown = null, providers: LookupProvider[] = [searx, serp], current: LookupBinding = binding) => ({ approval: saved, providers, binding: current });
+const response = (saved: unknown = null, providers: LookupProvider[] = [searx, serp], current: LookupBinding = binding) => Response.json(state(saved, providers, current));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); props.onRefreshApprovals.mockClear(); });
 
 function deferred<T>() {
@@ -39,7 +40,7 @@ function posts(mock: ReturnType<typeof vi.fn>) { return mock.mock.calls.filter((
 
 it("requires owner selection and review of the exact provider and shared-room query class before saving", async () => {
   const mock = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) => response());
-  vi.stubGlobal("fetch", mock); render(<WebLookupPermission {...props} />);
+  vi.stubGlobal("fetch", mock); render(<LookupPermission {...props} />);
   expect(mock).not.toHaveBeenCalled(); await open();
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
   expect(screen.getByText(/Private memories, messages, documents and precise device location/)).toBeVisible();
@@ -58,14 +59,14 @@ it("requires owner selection and review of the exact provider and shared-room qu
   const [url, options] = posts(mock)[0];
   expect(url).toBe(`/api/surfaces/${surfaceId}/web-lookup`);
   expect(options).toMatchObject({ method: "POST", headers: { "content-type": "application/json" }, cache: "no-store" });
-  expect(JSON.parse(String(options.body))).toEqual({ approval: WEB_LOOKUP_APPROVAL, approvalRevision: 3, approvalIncarnation: null, expectedRevision: 0, policy: selectedPolicy });
+  expect(JSON.parse(String(options.body))).toEqual({ approval: LOOKUP_SERVICES.web.approval, approvalRevision: 3, approvalIncarnation: null, expectedRevision: 0, policy: selectedPolicy });
   await act(async () => { pending.resolve(response({ approvalRevision: 3, revision: 1, policy: selectedPolicy })); });
   await screen.findByText(success);
 });
 
 it("changing a reviewed provider removes confirmation until the new provider is reviewed", async () => {
   const mock = vi.fn(async () => response()); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} />); await open(); choose();
+  render(<LookupPermission {...props} />); await open(); choose();
   fireEvent.change(screen.getByLabelText("Web search provider"), { target: { value: `${serp.provider}:${serp.configurationDigest}` } });
   expect(screen.queryByRole("button", { name: "Allow shared-room web lookup" })).not.toBeInTheDocument();
   expect(mock).toHaveBeenCalledTimes(1);
@@ -73,7 +74,7 @@ it("changing a reviewed provider removes confirmation until the new provider is 
 
 it("requires a fresh permission read after a lost write, then uses its actual policy revision", async () => {
   const mock = vi.fn(async () => response(approval)); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} />); await open(); choose();
+  render(<LookupPermission {...props} />); await open(); choose();
   mock.mockRejectedValueOnce(new Error("response lost after commit")); allow();
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
@@ -84,13 +85,13 @@ it("requires a fresh permission read after a lost write, then uses its actual po
   await waitFor(() => expect(screen.getByRole("button", { name: "Revoke web lookup permission" })).toBeEnabled());
   mock.mockResolvedValueOnce(response({ ...approval, revision: 7, policy: null })); revoke();
   await screen.findByText(revoked);
-  expect(JSON.parse(String(posts(mock)[1][1].body))).toEqual({ approval: WEB_LOOKUP_APPROVAL, approvalRevision: 3, approvalIncarnation: null, expectedRevision: 6, policy: null });
+  expect(JSON.parse(String(posts(mock)[1][1].body))).toEqual({ approval: LOOKUP_SERVICES.web.approval, approvalRevision: 3, approvalIncarnation: null, expectedRevision: 6, policy: null });
 });
 
 it("allows explicit revocation after pairing and provider loss while disabling new grants", async () => {
   const mock = vi.fn(async (_url: RequestInfo | URL, options?: RequestInit) => options?.method === "POST"
     ? response({ ...approval, revision: 6, policy: null }, []) : response(approval, []));
-  vi.stubGlobal("fetch", mock); render(<WebLookupPermission {...props} canApprove={false} />); await open();
+  vi.stubGlobal("fetch", mock); render(<LookupPermission {...props} canApprove={false} />); await open();
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
   expect(screen.getByLabelText("Web search provider")).toBeDisabled();
   expect(screen.getByRole("link", { name: "Services" })).toHaveAttribute("href", "/settings/account/services");
@@ -105,7 +106,7 @@ it("allows explicit revocation after pairing and provider loss while disabling n
 it("never treats an old provider digest as the current configuration and requires a new review", async () => {
   const changed = { ...searx, configurationDigest: "c".repeat(64) };
   const mock = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) => response(approval, [changed]));
-  vi.stubGlobal("fetch", mock); render(<WebLookupPermission {...props} />); await open();
+  vi.stubGlobal("fetch", mock); render(<LookupPermission {...props} />); await open();
   expect(screen.getByText(/provider configuration changed or is unavailable/)).toBeVisible();
   expect(screen.getByLabelText("Web search provider")).toHaveValue("");
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
@@ -119,7 +120,7 @@ it("never treats an old provider digest as the current configuration and require
 it("a conflict requires a new atomic binding read and review before another mutation", async () => {
   const original = { approvalRevision: 8, incarnation: browserIncarnation };
   const mock = vi.fn(async () => response(approval, [searx], original)); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} revisionMayAdvance />); await open(); choose();
+  render(<LookupPermission {...props} revisionMayAdvance />); await open(); choose();
   mock.mockResolvedValueOnce(new Response(null, { status: 409 })); allow();
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
@@ -139,8 +140,8 @@ it("preserves a browser review across heartbeat row updates and posts the fetche
   const original = { approvalRevision: 8, incarnation: browserIncarnation };
   const mock = vi.fn(async () => response(null, [searx], original));
   vi.stubGlobal("fetch", mock);
-  const view = render(<WebLookupPermission {...props} revisionMayAdvance />); await open(); choose();
-  view.rerender(<WebLookupPermission {...props} approvalRevision={10} revisionMayAdvance />);
+  const view = render(<LookupPermission {...props} revisionMayAdvance />); await open(); choose();
+  view.rerender(<LookupPermission {...props} approvalRevision={10} revisionMayAdvance />);
   expect(screen.getByRole("button", { name: "Allow shared-room web lookup" })).toBeVisible();
   expect(mock).toHaveBeenCalledTimes(1);
   const advanced = { ...original, approvalRevision: 11 };
@@ -155,7 +156,7 @@ it("preserves a browser review across heartbeat row updates and posts the fetche
 it.each([false, true])("rejects a saved policy revision ahead of the atomic binding (browser=%s)", async revisionMayAdvance => {
   const mock = vi.fn(async () => response({ ...approval, approvalRevision: 4 }, [searx],
     { ...binding, incarnation: revisionMayAdvance ? browserIncarnation : null })); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} revisionMayAdvance={revisionMayAdvance} />);
+  render(<LookupPermission {...props} revisionMayAdvance={revisionMayAdvance} />);
   fireEvent.click(screen.getByRole("button", { name: "Web lookup permission" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
@@ -166,13 +167,13 @@ it.each([false, true])("rejects a saved policy revision ahead of the atomic bind
 it("requires a current native or Pin parent approval when its atomic binding revision changed", async () => {
   const changed = { approvalRevision: 4, incarnation: null };
   const mock = vi.fn(async () => response(null, [searx], changed)); vi.stubGlobal("fetch", mock);
-  const view = render(<WebLookupPermission {...props} />);
+  const view = render(<LookupPermission {...props} />);
   fireEvent.click(screen.getByRole("button", { name: "Web lookup permission" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Refresh web lookup permission" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Refresh device approvals" }));
   expect(props.onRefreshApprovals).toHaveBeenCalledTimes(1);
-  view.rerender(<WebLookupPermission {...props} approvalRevision={4} />); await open();
+  view.rerender(<LookupPermission {...props} approvalRevision={4} />); await open();
   expect(screen.getByLabelText("Web search provider")).toBeEnabled();
 });
 
@@ -183,7 +184,7 @@ it.each([
 ])("rejects a successful response for a changed incarnation or invalid binding revision %#", async ({ browser, savedBinding }) => {
   const original = { ...binding, incarnation: browser ? browserIncarnation : null };
   const mock = vi.fn(async () => response(approval, [searx], original)); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} revisionMayAdvance={browser} />); await open(); choose();
+  render(<LookupPermission {...props} revisionMayAdvance={browser} />); await open(); choose();
   mock.mockResolvedValueOnce(response({ ...approval, revision: 6 }, [searx], savedBinding)); allow();
   await screen.findByRole("alert");
   expect(screen.queryByText(success)).not.toBeInTheDocument();
@@ -192,7 +193,7 @@ it.each([
 
 it.each([false, true])("rejects the other platform's nullable binding shape (browser=%s)", async browser => {
   const mock = vi.fn(async () => response(null, [searx], { ...binding, incarnation: browser ? null : browserIncarnation }));
-  vi.stubGlobal("fetch", mock); render(<WebLookupPermission {...props} revisionMayAdvance={browser} />);
+  vi.stubGlobal("fetch", mock); render(<LookupPermission {...props} revisionMayAdvance={browser} />);
   fireEvent.click(screen.getByRole("button", { name: "Web lookup permission" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeDisabled();
@@ -206,7 +207,7 @@ it.each([
   { ...approval, revision: 6, policy: { ...policy, maximumClass: "private" } },
 ])("does not accept a successful write with mismatched policy or revisions %#", async saved => {
   const mock = vi.fn(async () => response(approval)); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} />); await open(); choose();
+  render(<LookupPermission {...props} />); await open(); choose();
   mock.mockResolvedValueOnce(response(saved)); allow(); await screen.findByRole("alert");
   expect(screen.queryByText(success)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Revoke web lookup permission" })).toBeDisabled();
@@ -214,7 +215,7 @@ it.each([
 
 it.each(["close", "unmount", "hidden", "focus", "pagehide"])("late mutation replies after %s cannot restore permission or success", async cause => {
   const mock = vi.fn(async () => response(approval)); vi.stubGlobal("fetch", mock);
-  const view = render(<WebLookupPermission {...props} />); await open(); choose();
+  const view = render(<LookupPermission {...props} />); await open(); choose();
   const pending = deferred<Response>(); mock.mockReturnValueOnce(pending.promise); allow();
   const signal = posts(mock)[0][1].signal;
   if (cause === "close") fireEvent.click(screen.getByRole("button", { name: "Close web lookup permission" }));
@@ -232,11 +233,107 @@ it.each(["close", "unmount", "hidden", "focus", "pagehide"])("late mutation repl
 
 it("an aborted late conflict cannot require a registry refresh in a new permission read", async () => {
   const mock = vi.fn(async () => response(approval)); vi.stubGlobal("fetch", mock);
-  render(<WebLookupPermission {...props} />); await open(); choose();
+  render(<LookupPermission {...props} />); await open(); choose();
   const pending = deferred<Response>(); mock.mockReturnValueOnce(pending.promise); allow();
   fireEvent.click(screen.getByRole("button", { name: "Close web lookup permission" }));
   await act(async () => { pending.resolve(new Response(null, { status: 409 })); });
   await open();
   expect(screen.queryByRole("button", { name: "Refresh device approvals" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Review web lookup permission" })).toBeEnabled();
+});
+
+it("reviews named-place visual disclosure and grants and revokes it independently of existing web permission", async () => {
+  let placesApproval: { approvalRevision: number; revision: number; policy: LookupPolicy | null } | null = null;
+  const mock = vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
+    if (String(url).endsWith("/web-lookup")) return response(approval);
+    if (options?.method === "POST") {
+      const input = JSON.parse(String(options.body));
+      placesApproval = { approvalRevision: 3, revision: (placesApproval?.revision ?? 0) + 1, policy: input.policy };
+    }
+    return response(placesApproval, [google]);
+  });
+  vi.stubGlobal("fetch", mock);
+  render(<><LookupPermission {...props} /><LookupPermission {...props} service="places" /></>);
+  expect(mock).not.toHaveBeenCalled();
+  await open();
+  const web = within(screen.getByRole("group", { name: `Web lookup permission for ${props.label}` }));
+  expect(web.getByText("Recorded web lookup permission:")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Place lookup permission" }));
+  await waitFor(() => expect(screen.getByLabelText("Place lookup provider")).toBeEnabled());
+  expect(screen.getByText(/Named-place results use an address list with Google Maps and provider credit/)).toHaveTextContent("does not grant wearer location, navigation or speech");
+  expect(screen.getByRole("button", { name: "Review place lookup permission" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Place lookup provider"), { target: { value: `${google.provider}:${google.configurationDigest}` } });
+  fireEvent.click(screen.getByRole("button", { name: "Review place lookup permission" }));
+  const review = within(screen.getByRole("group", { name: "Review place lookup permission" }));
+  expect(review.getByText("Google Maps")).toBeVisible();
+  expect(review.getByText(google.endpoint)).toBeVisible();
+  expect(review.getByText(/Only named-place query text and visual results are allowed/)).toHaveTextContent("does not allow speech, device location, location history, navigation or other device actions");
+  expect(posts(mock)).toHaveLength(0);
+  fireEvent.click(review.getByRole("button", { name: "Allow shared-room place lookup" }));
+  await screen.findByText("Cosmos confirmed place lookup permission for this device.");
+  expect(posts(mock)).toHaveLength(1);
+  expect(posts(mock)[0][0]).toBe(`/api/surfaces/${surfaceId}/places-lookup`);
+  expect(JSON.parse(String(posts(mock)[0][1]?.body))).toEqual({
+    approval: LOOKUP_SERVICES.places.approval, approvalRevision: 3, approvalIncarnation: null,
+    expectedRevision: 0, policy: { provider: google, maximumClass: "shared_room" },
+  });
+  expect(web.getByText("Recorded web lookup permission:")).toBeVisible();
+  expect(web.getByRole("button", { name: "Revoke web lookup permission" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Revoke place lookup permission" }));
+  expect(posts(mock)).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Confirm revoke place lookup" }));
+  await screen.findByText("Cosmos confirmed place lookup permission revoked.");
+  expect(posts(mock)).toHaveLength(2);
+  expect(posts(mock)[1][0]).toBe(`/api/surfaces/${surfaceId}/places-lookup`);
+  expect(JSON.parse(String(posts(mock)[1][1]?.body))).toEqual({
+    approval: LOOKUP_SERVICES.places.approval, approvalRevision: 3, approvalIncarnation: null,
+    expectedRevision: 1, policy: null,
+  });
+  expect(web.getByText("Recorded web lookup permission:")).toBeVisible();
+  expect(web.getByRole("button", { name: "Revoke web lookup permission" })).toBeEnabled();
+  expect(mock.mock.calls.filter(([url]) => String(url).endsWith("/web-lookup"))).toHaveLength(1);
+});
+
+it.each([
+  { service: "places" as const, title: "Place lookup", name: "place lookup", wrongProviders: [searx] },
+  { service: "web" as const, title: "Web lookup", name: "web lookup", wrongProviders: [google] },
+])("rejects another service's provider list for $service", async ({ service, title, name, wrongProviders }) => {
+  const mock = vi.fn(async () => response(null, wrongProviders)); vi.stubGlobal("fetch", mock);
+  render(<LookupPermission {...props} service={service} />);
+  fireEvent.click(screen.getByRole("button", { name: `${title} permission` }));
+  await screen.findByRole("alert");
+  expect(screen.getByRole("button", { name: `Review ${name} permission` })).toBeDisabled();
+  expect(posts(mock)).toHaveLength(0);
+});
+
+it("does not confirm a Places write with a Web policy and requires a fresh read", async () => {
+  const mock = vi.fn(async () => response(null, [google])); vi.stubGlobal("fetch", mock);
+  render(<LookupPermission {...props} service="places" />);
+  fireEvent.click(screen.getByRole("button", { name: "Place lookup permission" }));
+  await waitFor(() => expect(screen.getByLabelText("Place lookup provider")).toBeEnabled());
+  fireEvent.change(screen.getByLabelText("Place lookup provider"), { target: { value: `${google.provider}:${google.configurationDigest}` } });
+  fireEvent.click(screen.getByRole("button", { name: "Review place lookup permission" }));
+  mock.mockResolvedValueOnce(response({ approvalRevision: 3, revision: 1, policy }, [google]));
+  fireEvent.click(screen.getByRole("button", { name: "Allow shared-room place lookup" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByText("Cosmos confirmed place lookup permission for this device.")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Review place lookup permission" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Revoke place lookup permission" })).toBeDisabled();
+});
+
+it("switching services cancels a pending write and requires a fresh service-specific read", async () => {
+  const mock = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) => response(approval)); vi.stubGlobal("fetch", mock);
+  const view = render(<LookupPermission {...props} />); await open(); choose();
+  const pending = deferred<Response>(); mock.mockReturnValueOnce(pending.promise); allow();
+  const signal = posts(mock)[0][1].signal;
+  view.rerender(<LookupPermission {...props} service="places" />);
+  expect(signal.aborted).toBe(true);
+  await act(async () => { pending.resolve(response({ ...approval, revision: 6 })); });
+  expect(screen.queryByText(success)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Place lookup provider")).not.toBeInTheDocument();
+  mock.mockResolvedValueOnce(response(null, [google]));
+  fireEvent.click(screen.getByRole("button", { name: "Place lookup permission" }));
+  await screen.findByText("No active place lookup permission.");
+  expect(mock.mock.calls.at(-1)?.[0]).toBe(`/api/surfaces/${surfaceId}/places-lookup`);
+  expect(screen.getByLabelText("Place lookup provider")).toHaveValue("");
 });

@@ -3,6 +3,7 @@ use crate::{
     ambiance::{BrowserProof, NativeProof, native_connection::ConnectionView},
     assistant::llm::{ChatMessage, ChatModel, ChatResponse, LlmError, ToolCall, ToolDef},
     store::{MemoryStore, Store},
+    surface_registry::now_ms,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -48,6 +49,98 @@ impl ChatModel for CardModel {
             name: "propose_information".into(), arguments: serde_json::json!({"intent":{"kind":"visual_text_card","text":"Synthetic room card"},"privacy":"public"}).to_string(),
         }), ..Default::default() })
     }
+}
+
+fn delivery_action(intent: crate::ambiance::SemanticIntent) -> crate::ambiance::Action {
+    crate::ambiance::Action {
+        id: Uuid::new_v4(),
+        root_id: Uuid::new_v4(),
+        confirmation_root: None,
+        turn_id: Uuid::new_v4(),
+        generation: 1,
+        worker: Uuid::new_v4(),
+        surface_id: Uuid::new_v4(),
+        channel: intent.channel(),
+        incarnation: Uuid::new_v4(),
+        content_digest: intent.content_digest(),
+        intent,
+        privacy: crate::ambiance::PrivacyClass::SharedRoom,
+        status: crate::ambiance::ActionStatus::Dispatched,
+        deadline_ms: now_ms() + 5_000,
+        display_expires_at_ms: now_ms() + 30_000,
+        attempts: 1,
+        fallbacks: Vec::new(),
+    }
+}
+
+#[test]
+fn browser_room_render_envelope_enforces_exact_wire_byte_limit_before_send() {
+    use crate::ambiance::SemanticIntent;
+    let runtime = AmbianceRuntime::new(
+        Arc::new(MemoryStore::default()),
+        Arc::new(CardModel::default()),
+        None,
+    );
+    let mut action = delivery_action(SemanticIntent::VisualTextCard { text: "x".into() });
+    let stamp = InputStamp {
+        epoch: Uuid::new_v4(),
+        sequence: 1,
+        instance_id: action.id,
+    };
+    let short = render_payload(&runtime, "U:fixture", &action, &stamp).unwrap();
+    let decoded: serde_json::Value = serde_json::from_str(&short).unwrap();
+    assert_eq!(decoded["kind"], "render");
+    assert_eq!(decoded["stamp"], serde_json::to_value(&stamp).unwrap());
+    assert_eq!(
+        decoded["command"],
+        crate::browser_runtime_api::command(&action, None).unwrap()
+    );
+
+    // Control bytes expand to six JSON bytes each. The 4000-byte text bound
+    // alone cannot establish the size of the fully serialized RPC envelope.
+    let available = cosmos_rtc::MAX_PAYLOAD - (short.len() - 1);
+    let text = format!(
+        "{}{}",
+        "\u{0001}".repeat(available / 6),
+        "x".repeat(available % 6)
+    );
+    assert!(text.len() < 4000);
+    action.intent = SemanticIntent::VisualTextCard { text: text.clone() };
+    action.content_digest = action.intent.content_digest();
+    let exact = render_payload(&runtime, "U:fixture", &action, &stamp).unwrap();
+    assert_eq!(exact.len(), cosmos_rtc::MAX_PAYLOAD);
+    action.intent = SemanticIntent::VisualTextCard {
+        text: format!("{text}x"),
+    };
+    action.content_digest = action.intent.content_digest();
+    assert!(render_payload(&runtime, "U:fixture", &action, &stamp).is_none());
+}
+
+#[test]
+fn browser_room_missing_transient_places_never_replays_or_substitutes_text() {
+    let model = Arc::new(CardModel::default());
+    let runtime = AmbianceRuntime::new(Arc::new(MemoryStore::default()), model.clone(), None);
+    let expires_at_ms = now_ms() + 30_000;
+    let reference = crate::ambiance::visual::Reference {
+        id: Uuid::new_v4(),
+        digest: hash(b"synthetic transient places content"),
+        expires_at_ms,
+    };
+    let mut action =
+        delivery_action(crate::ambiance::SemanticIntent::PlaceAddressCard { content: reference });
+    action.display_expires_at_ms = expires_at_ms;
+    let stamp = InputStamp {
+        epoch: Uuid::new_v4(),
+        sequence: 1,
+        instance_id: action.id,
+    };
+    // A durable action can survive process restart while its card cannot.
+    // Neither the original dispatch nor its same-key retry recreates content.
+    for attempts in [1, 2] {
+        action.attempts = attempts;
+        assert!(render_payload(&runtime, "U:fixture", &action, &stamp).is_none());
+    }
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

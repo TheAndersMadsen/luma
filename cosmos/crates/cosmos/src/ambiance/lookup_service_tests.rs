@@ -2,7 +2,7 @@ use super::*;
 use crate::ambiance::{
     Action, ActionStatus, Channel, InputStamp, RuntimeData, ledger::LedgerEvent,
 };
-use crate::backends::search::{self, LookupEvidence, LookupProviderIdentity, LookupSource};
+use crate::backends::search::{self, LookupEvidence, LookupSource};
 use crate::integrations::SearchConfig;
 use crate::store::MemoryStore;
 use crate::surface_registry::{Mutation, hash};
@@ -97,7 +97,10 @@ impl LookupFixture {
             .store
             .runtime(
                 self.principal(),
-                RuntimeOperation::LookupPolicy { surface_id },
+                RuntimeOperation::LookupPolicy {
+                    service: LookupService::Web,
+                    surface_id,
+                },
             )
             .await
             .unwrap()
@@ -109,6 +112,7 @@ impl LookupFixture {
             .runtime(
                 self.principal(),
                 RuntimeOperation::SetLookupPolicy {
+                    service: LookupService::Web,
                     surface_id,
                     approval_revision: binding.approval_revision,
                     approval_incarnation: binding.incarnation,

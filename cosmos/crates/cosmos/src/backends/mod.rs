@@ -43,6 +43,7 @@
 
 pub mod azure_speech;
 pub mod food;
+pub mod lookup;
 pub mod music;
 pub mod music_discovery;
 pub mod perplexity;

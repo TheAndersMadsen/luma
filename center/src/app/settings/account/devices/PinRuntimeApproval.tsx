@@ -7,7 +7,7 @@ import settings from "../../settings.module.css";
 import styles from "./devices.module.css";
 import { SpeechDisclosure } from "./SpeechDisclosure";
 import { LocalVoicePermission } from "./LocalVoicePermission";
-import { WebLookupPermission } from "../surfaces/WebLookupPermission";
+import { LookupPermission } from "../surfaces/LookupPermission";
 
 type Selection = { deviceId: string; surfaceId?: string };
 
@@ -138,9 +138,9 @@ export function PinRuntimeApproval() {
       </div>{pin ? <>
         <LocalVoicePermission key={`voice:${pin.surfaceId}:${pin.revision}`} pin={pin} />
         <SpeechDisclosure key={`speech:${pin.surfaceId}:${pin.revision}`} pin={pin} />
-        <WebLookupPermission key={`lookup:${pin.surfaceId}:${pin.revision}`} surfaceId={pin.surfaceId}
+        {(["web", "places"] as const).map(service => <LookupPermission key={`lookup:${service}:${pin.surfaceId}:${pin.revision}`} service={service} surfaceId={pin.surfaceId}
           approvalRevision={pin.revision} label={`Pin ${pin.deviceId}`} canApprove={!pin.revoked && pin.currentPaired === true}
-          onRefreshApprovals={refresh} />
+          onRefreshApprovals={refresh} />)}
       </> : null}</Fragment>;
     })}
     {message ? <div className={settings.stateRow} role="status">{message}</div> : null}

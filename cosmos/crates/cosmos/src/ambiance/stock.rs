@@ -1,5 +1,5 @@
 //! Stock wire encoders. Durable runtime claims are the only dispatch authority.
-use super::{RuntimeResult, SemanticIntent, runtime::AmbianceRuntime};
+use super::{Channel, RuntimeResult, SemanticIntent, runtime::AmbianceRuntime};
 use crate::auth::AuthenticatedRequest;
 use cosmos_protocol::aibus as pb;
 use std::sync::Arc;
@@ -46,7 +46,7 @@ async fn response_started(
             ),
         }),
     };
-    if matches!(action.intent, SemanticIntent::VisualTextCard { .. }) {
+    if action.intent.channel() == Channel::VisualCard {
         action = runtime.display_confirmation(auth, &action).await?;
     }
     let RuntimeResult::Dispatch(action) = runtime.stock_claim(auth, &action).await? else {
