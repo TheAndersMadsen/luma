@@ -4,6 +4,7 @@ pub mod changes;
 pub mod disclosure;
 pub mod echo;
 pub mod ledger;
+pub mod lookup;
 pub mod native_connection;
 pub mod openrouter;
 pub mod pin_connection;

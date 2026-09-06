@@ -104,6 +104,8 @@ it("requires review and a separate owner confirmation of the key and limited pub
   expect(options?.headers).toEqual({ "content-type": "application/json" });
   expect(JSON.parse(String(options?.body))).toEqual({ ...descriptor, expectedRevision: 0 });
   expect(screen.getByText("Public-text approval recorded · connection unverified · room and actor unknown.")).toBeVisible();
+  expect(screen.getByRole("group", { name: `Web lookup permission for Android TV installation ${descriptor.enrollmentId}` })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Web lookup permission" })).toBeVisible();
 });
 
 it("editing a reviewed descriptor removes its approval gesture until the new descriptor is reviewed", async () => {

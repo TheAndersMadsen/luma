@@ -6,6 +6,7 @@ import { NATIVE_DESCRIPTOR_BYTES, NATIVE_PLATFORMS, nativePublicKeyFingerprint, 
   parseNativeSurface, parseNativeSurfaces, type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import settings from "../../settings.module.css";
 import styles from "./surfaces.module.css";
+import { WebLookupPermission } from "./WebLookupPermission";
 
 type Review = { descriptor: NativeDescriptor; fingerprint: string; existing: NativeSurface | null };
 const PATH = "/api/surfaces/native";
@@ -164,6 +165,9 @@ export function NativeSurfaces() {
           <button type="button" disabled={busy} onClick={() => void change(row)}>Confirm revoke installation</button>
           <button type="button" disabled={busy} onClick={() => setRevoking(null)}>Cancel revocation</button>
         </div> : <button type="button" disabled={busy} onClick={() => { setReview(null); setRevoking(row); setError(""); setMessage(""); }}>Revoke installation {row.enrollmentId}</button>}
+        <WebLookupPermission key={`lookup:${row.surfaceId}:${row.revision}`} surfaceId={row.surfaceId}
+          approvalRevision={row.revision} label={`${NATIVE_PLATFORMS[row.platform]} installation ${row.enrollmentId}`} canApprove={!row.revoked}
+          onRefreshApprovals={refresh} />
       </li>)}</ul>}
     <button type="button" disabled={busy} onClick={() => void refresh()}>Refresh native approvals</button>
     {message ? <p role="status">{message}</p> : null}

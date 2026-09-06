@@ -8,6 +8,7 @@ import styles from "./surfaces.module.css";
 import { BrowserRuntime } from "@/lib/browserRuntime";
 import { CommittedCard } from "@/components/BrowserDisplay";
 import type { RenderCommand } from "@/lib/contracts/ambianceRuntime";
+import { WebLookupPermission } from "./WebLookupPermission";
 
 const STATUS: Record<TabStatus, string> = {
   inactive: "This tab is not connected. If a leave request cannot reach Cosmos, availability expires 45 seconds after the last state update Cosmos accepts.",
@@ -98,6 +99,10 @@ export function Surfaces() {
             <button disabled={busy} onClick={() => void revoke(surface.surfaceId)}>Confirm revoke</button>
             <button disabled={busy} onClick={() => setRevoking(null)}>Cancel revoke</button>
           </div> : <button onClick={() => { setMutationError(false); setRevoking(surface.surfaceId); }}>Revoke {surface.surfaceId === tab.current?.surfaceId ? "this tab" : `display ${index + 1}`}</button>}
+          <WebLookupPermission key={`lookup:${surface.surfaceId}`} surfaceId={surface.surfaceId}
+            approvalRevision={surface.revision} label={surface.surfaceId === tab.current?.surfaceId ? "this tab" : `Browser display ${index + 1}`}
+            canApprove={!surface.revoked && surface.manifest.authority.mayOriginate.some(value => value === "user.request")}
+            revisionMayAdvance onRefreshApprovals={refresh} />
         </li>)}
       </ul>}
       {mutationError && <p role="alert">Revocation could not be confirmed. Refresh and retry.</p>}

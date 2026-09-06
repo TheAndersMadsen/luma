@@ -41,6 +41,14 @@
   ],
   "evidence": [
     {
+      "id": "web-lookup-runtime-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/lookup.rs",
+      "anchor": "pub(super) fn start_lookup(",
+      "scope": "Defines one bounded web-query disclosure per admitted turn, exact per-origin provider permission, write-ahead ledger events, completion digests and revocation of pending or completed output. Review binds to the current browser incarnation and survives ordinary heartbeat revisions; Native/Pin approvals retain exact revision checks. Provider evidence privacy joins before projection or truncation, including empty results.",
+      "limitation": "One integration slice only. This implementation reference does not establish an executed provider/Center acceptance gate, live provider availability, native output or restoration of the remaining integrations."
+    },
+    {
       "id": "native-client-core-definition",
       "kind": "implementation",
       "path": "cosmos/crates/surface-client/src/lib.rs",
@@ -804,8 +812,8 @@
       "sourceSections": ["3.4", "4.3", "4.4", "4.6", "5.3"],
       "requirement": "Preserve the existing Cosmos integrations as conversational product capabilities by reusing their provider adapters through Ambiance-scoped services and typed actions, rather than retaining the old orchestration authority or silently removing useful integrations.",
       "acceptance": "Inventory every existing integration and distinguish configured, conversationally usable and hardware-dependent states in Center. Prove each migrated path through real request admission, scoped context/provider disclosure, permitted output and exact effect evidence where applicable. Public lookups, personal-data retrieval and consequential actions receive their appropriate independent permissions; a configured provider alone is not evidence that an integration works.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["web-lookup-runtime-definition"]
     },
     {
       "id": "pixel-default-digital-assistant",

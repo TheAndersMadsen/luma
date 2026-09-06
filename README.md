@@ -197,6 +197,52 @@ Center must also make its current conversational availability clear. Replacing
 the old orchestrator must not silently turn working integrations into settings
 that the assistant cannot use.
 
+The integration inventory for the new conversation is:
+
+| Capability to preserve | Runtime work and current boundary |
+| --- | --- |
+| SearXNG / SerpApi web search | First scoped lookup increment below; real provider conversation acceptance remains open. |
+| Pirate Weather and places/maps | Named-place lookup and weather are next. Precise wearer location needs separate authorized context; opening navigation on Pixel is a separate device action. |
+| Wikipedia, Wolfram and Perplexity | Pending scoped query adapters with bounded evidence; generated analysis must retain actual citations. |
+| Nutrition and visual shopping | Pending scoped product lookup. Images, health context and meal logging need their own admission. Shopping lookup does not imply purchasing. |
+| MusicBrainz and Spotify / YouTube Music / TIDAL / Apple connections | Preserve catalog identities and accounts; conversational search, versioned selections and observed playback on the selected device remain pending. |
+| Notes, memory, captures, contacts and messages | Pending source- and purpose-scoped retrieval and separately authorized writes/actions. Stored backups do not establish email integration. |
+| Calendar and device actions | A real calendar provider is still required. Timers, settings, calls, sending and navigation need typed actions with appropriate confirmation and observed outcomes. |
+| Composition, translation and notification triage | Explicit current text can use bounded analysis. Stock transformation services and selected personal content still need scoped admission. |
+| Azure speech | Existing guarded Pin speech paths are being extended to every thin client; native playback acceptance remains open. |
+
+Web lookup is the first conversational integration being restored. In Devices,
+open Web lookup permission for the requesting browser, native installation or
+Pin. Review the configured provider and endpoint, then explicitly allow shared
+query text. A SearXNG grant names its Bing request profile; a SerpApi grant names
+Google search. Cosmos does not switch providers when a lookup fails. Saving a
+provider key alone leaves every device's lookup permission off.
+
+The runtime admits one bounded query from the current request, commits its
+provider disclosure before network access and records a result digest before
+proposing a sourced text card. Sources are actual provider URLs and plain text;
+they do not become instructions or trigger another model/tool call. Normal
+browser heartbeats preserve permission, while re-enrollment and revocation fence
+it. Permission changes bind to the reviewed browser incarnation so ordinary
+heartbeats do not invalidate the review. Pending work is cancelled when its
+origin or permission changes. Retries of the same sequenced Browser, Native or
+Pin input cannot issue another provider call; unsequenced stock Understand RPCs
+have no stable input identity and each admission creates a separate turn.
+Privacy classification covers the full bounded provider response before source
+filtering, truncation or card-size limits, including empty result sets.
+The first output is the existing approved Center display. Native rendering,
+spoken search summaries, weather/places/music services and personal-data integrations remain separate
+increments. This source path does not establish a live provider conversation.
+
+Validation for this increment passed 43 focused Cosmos tests and the built
+Center/native-client acceptance harness. The latter used real HTTPS/WSS,
+PostgreSQL, LiveKit, owner controls and DOM acknowledgment with synthetic
+cognition and one local SearXNG HTTP fixture. It verified the committed query
+and evidence digests, permission changes, cancellation and recovery from a
+failed client-journal save without repeating the provider request. This is
+application-path evidence; actual provider availability, owner login and
+physical device behavior still need their separate acceptance.
+
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:
 

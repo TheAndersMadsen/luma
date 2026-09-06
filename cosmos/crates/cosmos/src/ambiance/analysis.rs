@@ -16,6 +16,13 @@ pub struct AnalysisRequest {
     pub channel: Channel,
 }
 
+/// A query suggestion carries no provider, account, URL or output authority.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebLookupRequest {
+    pub query: String,
+}
+
 #[derive(Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Proposal {
@@ -27,6 +34,10 @@ pub enum Proposal {
         analysis: AnalysisRequest,
         privacy: PrivacyClass,
     },
+    Lookup {
+        web_lookup: WebLookupRequest,
+        privacy: PrivacyClass,
+    },
 }
 
 pub fn proposal_tool() -> ToolDef {
@@ -34,9 +45,9 @@ pub fn proposal_tool() -> ToolDef {
         json!({"type":"string","enum":["public","shared_room","near_user","private","sensitive"]});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, or request one bounded larger-model analysis of the current request. Supply either intent or analysis, never both; omit the other field. Neither option executes a device operation or proves an outcome.".into(),
+        description: "Propose informational text, one bounded larger-model analysis, or one web lookup of the current request. Supply exactly one of intent, analysis or web_lookup; omit the others. Web lookup requires the origin's separate provider permission and returns a sourced visual card. No option grants device authority or proves an outcome.".into(),
         // Provider function schemas prohibit root unions. Optional branches
-        // describe the two shapes; Proposal's strict parser enforces XOR before
+        // describe the shapes; Proposal's strict parser enforces XOR before
         // any runtime work, including against a provider that ignores the schema.
         parameters: json!({"type":"object","additionalProperties":false,"required":["privacy"],"properties":{
             "intent":{"oneOf":[
@@ -44,6 +55,7 @@ pub fn proposal_tool() -> ToolDef {
                 {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"enum":["visual_text_card"]},"text":{"type":"string","minLength":1,"maxLength":4000}}}
             ]},
             "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},
+            "web_lookup":{"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512}}},
             "privacy":privacy
         }}),
     }
@@ -285,6 +297,10 @@ mod tests {
             json!({"analysis":{"question":"Compare","channel":"audio.tts"},"privacy":"public","intent":{"kind":"informational_speech","text":"bypass"}}),
             json!({"analysis":{"question":"Compare","channel":"audio.tts","provider":"arbitrary"},"privacy":"public"}),
             json!({"analysis":{"question":"Compare","channel":"device.operation"},"privacy":"public"}),
+            json!({"web_lookup":{"query":"weather","provider":"searxng"},"privacy":"public"}),
+            json!({"web_lookup":{"query":"weather","endpoint":"https://different.test/"},"privacy":"public"}),
+            json!({"web_lookup":{"query":"weather"},"privacy":"public","intent":{"kind":"visual_text_card","text":"invented result"}}),
+            json!({"web_lookup":{"query":"weather"},"analysis":{"question":"Compare","channel":"visual.card"},"privacy":"public"}),
         ] {
             assert!(serde_json::from_value::<Proposal>(args).is_err());
         }

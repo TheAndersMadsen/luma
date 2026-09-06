@@ -131,22 +131,22 @@ const CODEX_REASONING_EFFORTS = [
 const SERVICES: readonly ServiceState[] = [
   {
     name: "Assistant",
-    detail: "Language-model requests and tool orchestration",
+    detail: "Model configuration for supported conversation and analysis requests",
     ready: (status) => status.assistant,
   },
   {
     name: "Web search",
-    detail: "Current results through the server search profile",
+    detail: "Sourced conversation results after web lookup approval in Devices",
     ready: (status) => status.tools.some((tool) => tool.name === "web_search" && tool.live),
   },
   {
     name: "Maps & places",
-    detail: "Nearby search, reverse geocoding and directions",
+    detail: "Maps provider configuration; conversation support is being restored",
     ready: (status) => status.tools.some((tool) => tool.name === "nearby" && tool.live),
   },
   {
     name: "Speech",
-    detail: "Cloud transcription and spoken responses",
+    detail: "Azure Speech configuration; voice support depends on the client",
     ready: (status) => status.speech,
   },
 ];
@@ -175,7 +175,7 @@ function chip(status: AssistantStatus | undefined, ready: boolean): {
     return { tone: "degraded", label: "Unavailable" };
   }
   return ready
-    ? { tone: "live", label: "Ready" }
+    ? { tone: "live", label: "Configured" }
     : { tone: "off", label: "Needs setup" };
 }
 
@@ -551,7 +551,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
 
       <div className={styles.providerNote}>
         <strong>Managed by Cosmos</strong>
-        <span>Provider credentials stay in Cosmos. Your Pin receives only its Cosmos connection.</span>
+        <span>Provider credentials stay in Cosmos. Configured services still need the requesting device’s permission and a supported conversation path.</span>
       </div>
 
       {!operator ? (

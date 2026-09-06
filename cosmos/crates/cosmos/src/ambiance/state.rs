@@ -137,6 +137,31 @@ pub enum RuntimeOperation {
     DisclosurePolicy {
         surface_id: Uuid,
     },
+    LookupPolicy {
+        surface_id: Uuid,
+    },
+    SetLookupPolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        approval_incarnation: Option<Uuid>,
+        expected_revision: u64,
+        policy: Option<super::lookup::Policy>,
+    },
+    StartLookup {
+        fence: TurnFence,
+        request: super::lookup::Request,
+        id: Uuid,
+    },
+    CheckLookup {
+        fence: TurnFence,
+        lookup: super::lookup::Lookup,
+    },
+    CompleteLookup {
+        fence: TurnFence,
+        lookup: super::lookup::Lookup,
+        evidence_digest: String,
+        privacy: PrivacyClass,
+    },
     SetDisclosurePolicy {
         surface_id: Uuid,
         approval_revision: u64,
@@ -278,6 +303,13 @@ pub enum RuntimeResult {
     DisclosurePolicy(Option<super::disclosure::Approval>),
     DisclosureStarted(super::disclosure::Disclosure),
     DisclosureCurrent,
+    LookupPolicy {
+        approval: Option<super::lookup::Approval>,
+        binding: super::lookup::ApprovalBinding,
+    },
+    LookupStarted(super::lookup::Lookup),
+    LookupCurrent,
+    LookupCompleted(super::lookup::Receipt),
     PinOpened {
         connection: super::PinConnection,
         duplicate: bool,
@@ -341,6 +373,8 @@ pub struct Turn {
     pub disclosures: Vec<super::disclosure::Disclosure>,
     #[serde(default)]
     pub voice: Option<super::voice::Intake>,
+    #[serde(default)]
+    pub lookup: Option<super::lookup::Lookup>,
 }
 
 impl Turn {
@@ -348,6 +382,12 @@ impl Turn {
         self.voice
             .as_ref()
             .is_some_and(|v| v.transcript_digest.is_none())
+    }
+
+    pub(super) fn lookup_pending(&self) -> bool {
+        self.lookup
+            .as_ref()
+            .is_some_and(|lookup| lookup.receipt.is_none())
     }
 }
 
@@ -404,6 +444,8 @@ pub struct RuntimeState {
     pub disclosure_policies: BTreeMap<Uuid, super::disclosure::Approval>,
     #[serde(default)]
     pub voice_policies: BTreeMap<Uuid, super::voice::Approval>,
+    #[serde(default)]
+    pub lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -555,6 +597,24 @@ pub enum RuntimeData {
     DisclosurePolicyChanged {
         surface_id: Uuid,
         approval: super::disclosure::Approval,
+    },
+    LookupPolicyChanged {
+        surface_id: Uuid,
+        approval: super::lookup::Approval,
+    },
+    LookupStarted {
+        fence: TurnFence,
+        lookup: super::lookup::Lookup,
+    },
+    LookupDenied {
+        fence: TurnFence,
+        request: super::lookup::Request,
+    },
+    LookupCompleted {
+        fence: TurnFence,
+        id: Uuid,
+        policy_revision: u64,
+        receipt: super::lookup::Receipt,
     },
     ProviderDisclosureStarted {
         fence: TurnFence,
@@ -812,6 +872,9 @@ impl RuntimeState {
             if let Some(voice) = turn.voice.as_ref().filter(|_| turn.voice_pending()) {
                 due = due.min(voice.expires_at_ms);
             }
+            if let Some(lookup) = turn.lookup.as_ref().filter(|_| turn.lookup_pending()) {
+                due = due.min(lookup.deadline_ms());
+            }
             if let Some(origin) = records.get(&turn.fence.origin_surface) {
                 if matches!(origin.binding, Binding::Browser) {
                     due = due
@@ -899,37 +962,40 @@ impl RuntimeState {
         records: &BTreeMap<Uuid, Record>,
         now: i64,
     ) -> bool {
-        records.get(&turn.fence.origin_surface).is_some_and(|r| {
-            !r.revoked
-                && match r.binding {
-                    Binding::Browser => {
-                        r.incarnation == turn.origin_incarnation && r.view(now).available
-                    }
-                    Binding::Pin { .. } => {
-                        r.revision == turn.origin_revision
-                            && turn.pin_incarnation.is_none_or(|incarnation| {
-                                self.pin_connections.get(&r.surface_id).is_some_and(|c| {
-                                    c.incarnation == incarnation && c.current(r, now)
+        self.lookup_authority_valid(turn, records, now)
+            && records.get(&turn.fence.origin_surface).is_some_and(|r| {
+                !r.revoked
+                    && match r.binding {
+                        Binding::Browser => {
+                            r.incarnation == turn.origin_incarnation && r.view(now).available
+                        }
+                        Binding::Pin { .. } => {
+                            r.revision == turn.origin_revision
+                                && turn.pin_incarnation.is_none_or(|incarnation| {
+                                    self.pin_connections.get(&r.surface_id).is_some_and(|c| {
+                                        c.incarnation == incarnation && c.current(r, now)
+                                    })
                                 })
-                            })
+                        }
+                        Binding::Native { .. } => {
+                            r.revision == turn.origin_revision
+                                && self
+                                    .native_connections
+                                    .get(&r.surface_id)
+                                    .and_then(|state| state.connection.as_ref())
+                                    .is_some_and(|connection| {
+                                        connection.incarnation == turn.origin_incarnation
+                                            && connection.current(r, now)
+                                            && self.ingress.get(&r.surface_id).is_some_and(
+                                                |cursor| {
+                                                    cursor.incarnation == connection.incarnation
+                                                        && cursor.epoch == connection.epoch
+                                                },
+                                            )
+                                    })
+                        }
                     }
-                    Binding::Native { .. } => {
-                        r.revision == turn.origin_revision
-                            && self
-                                .native_connections
-                                .get(&r.surface_id)
-                                .and_then(|state| state.connection.as_ref())
-                                .is_some_and(|connection| {
-                                    connection.incarnation == turn.origin_incarnation
-                                        && connection.current(r, now)
-                                        && self.ingress.get(&r.surface_id).is_some_and(|cursor| {
-                                            cursor.incarnation == connection.incarnation
-                                                && cursor.epoch == connection.epoch
-                                        })
-                                })
-                    }
-                }
-        })
+            })
     }
     /// Called inside both registry and runtime transactions. Ordinary visible
     /// heartbeats do not alter the origin incarnation or eligibility.
@@ -960,6 +1026,11 @@ impl RuntimeState {
             records
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
+        self.lookup_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|record| approval.current(record))
         });
         self.ingress.retain(|id, cursor| {
             records.get(id).is_some_and(|r| {
@@ -1366,6 +1437,61 @@ impl RuntimeState {
             }
             RuntimeOperation::DisclosurePolicy { surface_id } => {
                 RuntimeResult::DisclosurePolicy(self.disclosure_policy(records, surface_id)?)
+            }
+            RuntimeOperation::LookupPolicy { surface_id } => {
+                let (approval, binding) = self.lookup_policy(records, surface_id)?;
+                RuntimeResult::LookupPolicy { approval, binding }
+            }
+            RuntimeOperation::SetLookupPolicy {
+                surface_id,
+                approval_revision,
+                approval_incarnation,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, binding, appended) = self.set_lookup_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    approval_incarnation,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(appended);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::LookupPolicy {
+                    approval: Some(approval),
+                    binding,
+                }
+            }
+            RuntimeOperation::StartLookup { fence, request, id } => {
+                match self.start_lookup(records, fence.clone(), request.clone(), id, now) {
+                    Ok((lookup, appended)) => {
+                        events.extend(appended);
+                        RuntimeResult::LookupStarted(lookup)
+                    }
+                    Err(RuntimeError::PolicyBlocked) => {
+                        events.push(RuntimeData::LookupDenied { fence, request });
+                        RuntimeResult::Blocked
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            RuntimeOperation::CheckLookup { fence, lookup } => {
+                self.check_lookup(records, &fence, &lookup, now)?;
+                RuntimeResult::LookupCurrent
+            }
+            RuntimeOperation::CompleteLookup {
+                fence,
+                lookup,
+                evidence_digest,
+                privacy,
+            } => {
+                let (receipt, appended) =
+                    self.complete_lookup(records, fence, lookup, evidence_digest, privacy, now)?;
+                events.extend(appended);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::LookupCompleted(receipt)
             }
             RuntimeOperation::SetDisclosurePolicy {
                 surface_id,
@@ -1926,6 +2052,7 @@ impl RuntimeState {
                     finished: false,
                     analysis: None,
                     disclosures: Vec::new(),
+                    lookup: None,
                     voice: match &origin {
                         OriginProof::VoicePin { intake, .. } => Some(intake.clone()),
                         _ => None,
@@ -1972,6 +2099,9 @@ impl RuntimeState {
                 if turn.privacy > PrivacyClass::SharedRoom {
                     return Err(RuntimeError::PolicyBlocked);
                 }
+                if turn.lookup_pending() {
+                    return Err(RuntimeError::Busy);
+                }
                 RuntimeResult::CognitionCurrent
             }
             RuntimeOperation::AnalysisStart {
@@ -1987,7 +2117,7 @@ impl RuntimeState {
                 {
                     return Err(RuntimeError::Stale);
                 }
-                if turn.analysis.is_some() || !self.actions.is_empty() {
+                if turn.analysis.is_some() || turn.lookup_pending() || !self.actions.is_empty() {
                     return Err(RuntimeError::Busy);
                 }
                 if !digest_valid(&input_digest) {
@@ -2057,6 +2187,7 @@ impl RuntimeState {
                     .analysis
                     .as_ref()
                     .is_some_and(|a| a.output_digest.is_none())
+                    || turn.lookup_pending()
                 {
                     return Err(RuntimeError::Busy);
                 }

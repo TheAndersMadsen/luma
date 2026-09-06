@@ -3,7 +3,7 @@
 //! APIs, PostgreSQL authority, SFU, BFF, React render and DOM acknowledgment run.
 use super::*;
 use crate::{
-    ambiance::{ActionStatus, Channel, RuntimeState, SemanticIntent},
+    ambiance::{ActionStatus, Channel, PrivacyClass, RuntimeData, RuntimeState, SemanticIntent},
     assistant::llm::{ChatMessage, ChatModel, ChatResponse, LlmError, ToolCall, ToolDef},
     enrollment::{EnrollmentStore, MemoryEnrollmentStore},
     store::Store,
@@ -19,6 +19,7 @@ use cosmos_surface_client::{
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     io::{Read, Write},
     os::unix::fs::OpenOptionsExt,
     sync::{
@@ -120,6 +121,7 @@ async fn retry_client_pending(client: &mut NativeClient) -> OperationResult {
 
 struct Model {
     calls: AtomicUsize,
+    provider_calls: AtomicUsize,
     provider: Option<crate::ambiance::openrouter::OpenRouterTextModel>,
 }
 #[tonic::async_trait]
@@ -130,7 +132,21 @@ impl ChatModel for Model {
         tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if messages
+            .last()
+            .is_some_and(|message| message.content == LOOKUP_PROMPT)
+        {
+            return Ok(ChatResponse {
+                tool_call: Some(ToolCall {
+                    name: "propose_information".into(),
+                    arguments: json!({"web_lookup":{"query":LOOKUP_QUERY},"privacy":"public"})
+                        .to_string(),
+                }),
+                ..Default::default()
+            });
+        }
         if let Some(provider) = &self.provider {
+            self.provider_calls.fetch_add(1, Ordering::SeqCst);
             return provider.complete(messages, tools).await;
         }
         Ok(ChatResponse { tool_call: Some(ToolCall { name: "propose_information".into(),
@@ -158,6 +174,112 @@ enum Stage {
     BrowserReady,
     RenderObserved,
     ClearObserved,
+    LookupRenderObserved,
+    LookupClearObserved,
+}
+
+const LOOKUP_PROMPT: &str = "Find public web sources about the Denmark national football team.";
+const LOOKUP_QUERY: &str = "Denmark national football team";
+const LOOKUP_TITLE: &str = "Denmark national football team";
+const LOOKUP_SNIPPET: &str = "Official team information from the Danish Football Association.";
+const LOOKUP_SOURCE_URL: &str = "https://www.dbu.dk/landshold/herrelandshold/";
+
+fn lookup_card_text() -> String {
+    format!(
+        "Web results for \"{LOOKUP_QUERY}\"\n\n[1] {LOOKUP_TITLE}\n{LOOKUP_SNIPPET}\n{LOOKUP_SOURCE_URL}"
+    )
+}
+
+fn lookup_evidence() -> crate::backends::search::LookupEvidence {
+    crate::backends::search::LookupEvidence {
+        sources: vec![crate::backends::search::LookupSource {
+            title: LOOKUP_TITLE.into(),
+            snippet: LOOKUP_SNIPPET.into(),
+            url: LOOKUP_SOURCE_URL.into(),
+        }],
+        privacy_floor: PrivacyClass::SharedRoom,
+    }
+}
+
+async fn committed_lookup_events(
+    audit: &sqlx::PgPool,
+    principal: &str,
+) -> Vec<crate::ambiance::ledger::RuntimeEvent> {
+    let events: Vec<String> = sqlx::query_scalar(
+        "SELECT event::text FROM cosmos_surface_event WHERE principal=$1 AND event->>'version'='3' AND event->'data'->>'kind' LIKE 'lookup_%' ORDER BY sequence",
+    ).bind(principal).fetch_all(audit).await.unwrap();
+    events
+        .into_iter()
+        .map(|event| serde_json::from_str(&event).unwrap())
+        .collect()
+}
+
+/// The selected SearXNG backend makes real loopback HTTP. Its response is
+/// deterministic fixture data, never a claim that a live search was performed.
+async fn lookup_server(
+    audit: sqlx::PgPool,
+    principal: String,
+    native_id: Uuid,
+) -> (
+    crate::integrations::SearchConfig,
+    crate::backends::search::LookupProviderIdentity,
+    Arc<AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use crate::backends::search;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = crate::integrations::SearchConfig {
+        searxng_base_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+        ..Default::default()
+    };
+    let providers = search::lookup_providers_for_test(&config);
+    assert_eq!(providers.len(), 1);
+    let provider = providers[0].clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let received = calls.clone();
+    let expected_provider = provider.clone();
+    let app = axum::Router::new().route("/search", axum::routing::get(move |axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>, axum::extract::OriginalUri(uri): axum::extract::OriginalUri, headers: axum::http::HeaderMap| {
+        let audit = audit.clone();
+        let principal = principal.clone();
+        let received = received.clone();
+        let expected_provider = expected_provider.clone();
+        async move {
+            assert_eq!(received.fetch_add(1, Ordering::SeqCst), 0, "lookup retries must not contact the provider again");
+            assert_eq!(query, BTreeMap::from([
+                ("q".into(), LOOKUP_QUERY.into()), ("format".into(), "json".into()),
+                ("categories".into(), "general".into()), ("language".into(), "en".into()),
+                ("safesearch".into(), "1".into()), ("pageno".into(), "1".into()), ("engines".into(), "bing".into()),
+            ]));
+            assert_eq!(headers.get("accept").unwrap(), "application/json");
+            let payload_digest = crate::surface_registry::hash(format!(
+                "GET\nhttp://{}{}\naccept:application/json\n", headers.get("host").unwrap().to_str().unwrap(), uri,
+            ).as_bytes());
+            let state = committed_runtime(&audit, &principal).await;
+            let turn = state.turn.as_ref().unwrap();
+            assert_eq!(turn.fence.origin_surface, native_id);
+            let lookup = turn.lookup.as_ref().expect("lookup must commit before provider I/O");
+            assert_eq!(lookup.policy_revision, 1);
+            assert_eq!(lookup.request.provider, expected_provider);
+            assert_eq!(lookup.request.query_digest, crate::surface_registry::hash(LOOKUP_QUERY.as_bytes()));
+            assert_eq!(lookup.request.payload_digest, payload_digest);
+            assert_eq!(lookup.request.privacy, PrivacyClass::SharedRoom);
+            assert!(lookup.receipt.is_none());
+            let events = committed_lookup_events(&audit, &principal).await;
+            assert_eq!(events.len(), 2);
+            assert!(matches!(&events[0].data, RuntimeData::LookupPolicyChanged { surface_id, approval }
+                if *surface_id == native_id && approval.approval_revision == 1 && approval.revision == 1
+                    && approval.policy.as_ref().is_some_and(|policy| policy.provider == expected_provider && policy.maximum_class == PrivacyClass::SharedRoom)));
+            assert!(matches!(&events[1].data, RuntimeData::LookupStarted { fence, lookup: started }
+                if fence.turn_id == turn.fence.turn_id && fence.generation == turn.fence.generation
+                    && fence.origin_surface == native_id && started == lookup));
+            assert!(events[0].sequence < events[1].sequence);
+            axum::Json(json!({"results":[{"title":LOOKUP_TITLE,"content":LOOKUP_SNIPPET,"url":LOOKUP_SOURCE_URL}]}))
+        }
+    }));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (config, provider, calls, server)
 }
 
 #[derive(Deserialize)]
@@ -389,6 +511,8 @@ async fn browser_center_application_acceptance() {
     let bearer = super::tests::bearer(&subject);
     let native_enrollment = Uuid::new_v4();
     let native_id = native_surface_id(&principal, native_enrollment);
+    let (lookup_config, lookup_provider, lookup_calls, lookup_server) =
+        lookup_server(audit.clone(), principal.clone(), native_id).await;
     let mut scalar = [0u8; 32];
     scalar[31] = 1;
     let signer = Arc::new(FixtureSigner {
@@ -459,13 +583,13 @@ async fn browser_center_application_acceptance() {
     };
     let model = Arc::new(Model {
         calls: AtomicUsize::new(0),
+        provider_calls: AtomicUsize::new(0),
         provider,
     });
-    let runtime = Arc::new(AmbianceRuntime::new(
-        store.clone(),
-        model.clone(),
-        Some(pairing.clone()),
-    ));
+    let runtime = Arc::new(
+        AmbianceRuntime::new(store.clone(), model.clone(), Some(pairing.clone()))
+            .with_lookup_config_for_test(lookup_config.clone()),
+    );
     let config = crate::browser_rooms::Config::new(
         url.into(),
         public_url.into(),
@@ -482,10 +606,11 @@ async fn browser_center_application_acceptance() {
         Some(super::tests::verifier()),
         rooms.clone(),
     )
-    .merge(crate::surface_api::with_pairing(
+    .merge(crate::surface_api::with_lookup_config_for_test(
         store.clone(),
         Some(super::tests::verifier()),
         Some(pairing),
+        lookup_config,
     ))
     .merge(crate::native_runtime_api::with_audience(
         store.clone(),
@@ -506,13 +631,16 @@ async fn browser_center_application_acceptance() {
         "nativeDisconnected":false,"browserPreservedAfterNative":false,
         "nativeClientLibrary":false,"nativeUntrustedTlsRejected":false,
         "nativeCompletionSaveRecovered":false,
-        "nativeCrashPendingRecovered":false});
+        "nativeCrashPendingRecovered":false,
+        "webLookupApproved":false,"webLookupAcknowledged":false,"webLookupRetried":false,"webLookupLedgerVerified":false,
+        "webLookupCancelled":false,"webLookupPayloadCleared":false,"webLookupRevoked":false});
     write_private(status_path, &status, true);
     write_private(
         input["bootstrapPath"].as_str().unwrap(),
         &json!({
             "port":address.port(),"subject":subject,"bearer":bearer,"pinId":pin_id,
             "nativeDescriptor":native_descriptor,"nativeId":native_id,"nativePublicKeyFingerprint":native_fingerprint,
+            "lookupProvider":lookup_provider,
         }),
         true,
     );
@@ -870,6 +998,130 @@ async fn browser_center_application_acceptance() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
 
+            // A separate owner gesture approves the selected provider for
+            // this native origin. The first text turn granted no web access.
+            loop {
+                assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+                assert_eq!(lookup_calls.load(Ordering::SeqCst), 0);
+                let events = committed_lookup_events(&audit, &principal).await;
+                if let Some(event) = events.last() {
+                    assert_eq!(events.len(), 1);
+                    assert!(matches!(&event.data, RuntimeData::LookupPolicyChanged { surface_id, approval }
+                        if *surface_id == native_id && approval.approval_revision == 1 && approval.revision == 1
+                            && approval.policy.as_ref().is_some_and(|policy| policy.provider == lookup_provider && policy.maximum_class == PrivacyClass::SharedRoom)));
+                    break;
+                }
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat while owner reviews lookup");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            status["webLookupApproved"] = true.into();
+            write_private(status_path, &status, false);
+            native.heartbeat().await.expect("native heartbeat before lookup request");
+            heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+            journal.fail_completion_save();
+            assert!(matches!(native.send_text(LOOKUP_PROMPT).await, Err(NativeClientError::Persistence)));
+            assert_eq!(journal.failures.load(Ordering::SeqCst), 3);
+            let lookup_pending = native.status().pending.expect("lookup input admission remains pending");
+            assert_eq!(lookup_pending.kind, OperationKind::Text);
+            let OperationResult::Text(lookup_admission) = retry_client_pending(&mut native).await else {
+                panic!("lookup input must recover its exact admitted turn")
+            };
+            assert_eq!(lookup_admission.turn_id, lookup_pending.instance_id);
+            assert!(!lookup_admission.duplicate);
+            assert!(native.status().pending.is_none());
+            let turn_id = lookup_admission.turn_id;
+            let generation = lookup_admission.generation;
+            let expected_card = lookup_card_text();
+            let expected_evidence_digest = crate::surface_registry::hash(&serde_json::to_vec(&lookup_evidence()).unwrap());
+            let mut lookup_acknowledged = false;
+            loop {
+                let state = committed_runtime(&audit, &principal).await;
+                assert!(model.calls.load(Ordering::SeqCst) <= 2);
+                assert!(lookup_calls.load(Ordering::SeqCst) <= 1);
+                let current = state.turn.as_ref().unwrap();
+                assert_eq!((current.fence.turn_id, current.fence.generation, current.fence.origin_surface), (turn_id, generation, native_id));
+                assert_eq!(state.ingress[&native_id].receipts.len(), 2);
+                assert!(state.actions.values().all(|action| action.surface_id != native_id));
+                if !lookup_acknowledged && state.actions.values().any(|action| {
+                    action.status == ActionStatus::Acknowledged && action.turn_id == turn_id && action.generation == generation
+                        && action.worker == current.fence.worker && action.channel == Channel::VisualCard
+                        && action.surface_id == browser_id && action.incarnation == browser_incarnation
+                        && action.intent.text() == expected_card
+                        && action.content_digest == crate::surface_registry::hash(expected_card.as_bytes())
+                }) {
+                    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                    assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                    let lookup = current.lookup.as_ref().unwrap();
+                    let receipt = lookup.receipt.as_ref().expect("source evidence commits before rendering");
+                    assert_eq!(lookup.policy_revision, 1);
+                    assert_eq!(lookup.request.provider, lookup_provider);
+                    assert_eq!(receipt.evidence_digest, expected_evidence_digest);
+                    assert_eq!(receipt.privacy, PrivacyClass::SharedRoom);
+                    assert!(receipt.received_at_ms >= lookup.started_at_ms);
+                    assert!(receipt.received_at_ms < lookup.started_at_ms + crate::ambiance::lookup::LOOKUP_MS);
+                    let events = committed_lookup_events(&audit, &principal).await;
+                    assert_eq!(events.len(), 3);
+                    assert!(matches!(&events[2].data, RuntimeData::LookupCompleted { fence, id, policy_revision, receipt: committed }
+                        if fence.turn_id == turn_id && fence.generation == generation && fence.origin_surface == native_id
+                            && *id == lookup.id && *policy_revision == 1 && committed == receipt));
+                    assert!(events[1].sequence < events[2].sequence);
+                    lookup_acknowledged = true;
+                    status["webLookupAcknowledged"] = true.into();
+                    status["webLookupRetried"] = true.into();
+                    status["webLookupLedgerVerified"] = true.into();
+                    write_private(status_path, &status, false);
+                }
+                match coordination_stage(coordination_path) {
+                    Some(Stage::LookupRenderObserved) => { assert!(lookup_acknowledged); break; }
+                    Some(Stage::ClearObserved) => {}
+                    _ => panic!("lookup render checkpoint is missing or out of order"),
+                }
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat while sourced lookup renders");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            native.cancel(lookup_admission).await.expect("native cancels sourced lookup turn");
+            assert_cancelled_payload(&committed_runtime(&audit, &principal).await, turn_id, generation);
+            status["webLookupCancelled"] = true.into();
+            status["webLookupPayloadCleared"] = true.into();
+            write_private(status_path, &status, false);
+            loop {
+                match coordination_stage(coordination_path) {
+                    Some(Stage::LookupClearObserved) => break,
+                    Some(Stage::LookupRenderObserved) => {}
+                    _ => panic!("lookup clear checkpoint is missing or out of order"),
+                }
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat after lookup clear");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            loop {
+                assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+                let events = committed_lookup_events(&audit, &principal).await;
+                if events.len() == 4 {
+                    assert!(matches!(&events[3].data, RuntimeData::LookupPolicyChanged { surface_id, approval }
+                        if *surface_id == native_id && approval.approval_revision == 1 && approval.revision == 2 && approval.policy.is_none()));
+                    assert_cancelled_payload(&committed_runtime(&audit, &principal).await, turn_id, generation);
+                    break;
+                }
+                assert_eq!(events.len(), 3);
+                if tokio::time::Instant::now() >= heartbeat_due {
+                    native.heartbeat().await.expect("native heartbeat while owner revokes lookup");
+                    heartbeat_due = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            status["webLookupRevoked"] = true.into();
+            write_private(status_path, &status, false);
+
             loop {
                 let record = committed_record(&audit, &principal, native_id)
                     .await
@@ -938,7 +1190,8 @@ async fn browser_center_application_acceptance() {
                     assert_eq!(current.binding, Binding::Browser);
                     let view = current.view(crate::surface_registry::now_ms());
                     assert!(view.connected && view.available && !view.revoked);
-                    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                    assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
                     if current.sequence > browser_sequence_after_native_close {
                         // This state sequence was committed after native SDK
                         // shutdown, so cached browser availability cannot pass.
@@ -959,7 +1212,8 @@ async fn browser_center_application_acceptance() {
                 assert!(state.native_connections.is_empty());
                 assert!(!state.ingress.contains_key(&native_id));
                 assert_cancelled_payload(&state, turn_id, generation);
-                assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+                assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+                assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
                 let speech_revoked = state
                     .disclosure_policies
                     .get(&pin_id)
@@ -977,7 +1231,11 @@ async fn browser_center_application_acceptance() {
                         .all(|surface| !surface.connected)
                 {
                     status["complete"] = true.into();
-                    status["modelCalls"] = 1.into();
+                    status["modelCalls"] = 2.into();
+                    status["modelProviderCalls"] = model.provider_calls.load(Ordering::SeqCst).into();
+                    status["lookupProviderCalls"] = 1.into();
+                    status["lookupProviderMode"] = "local-searxng-fixture".into();
+                    status["webLookupPolicyRevision"] = 2.into();
                     status["modelMode"] = model_mode.into();
                     status["speechPolicyRevision"] = 2.into();
                     status["localVoicePolicyRevision"] = 2.into();
@@ -994,6 +1252,8 @@ async fn browser_center_application_acceptance() {
     .await;
     server.abort();
     let _ = server.await;
+    lookup_server.abort();
+    let _ = lookup_server.await;
     audit.close().await;
-    accepted.expect("Center must verify enrollment alone grants no room authority, render and acknowledge one native-origin text turn despite exact retries, clear its payload on native cancellation, preserve the browser after native revocation, and finish with separate speech and local voice revocations");
+    accepted.expect("Center must verify native client recovery, approved sourced web lookup with one committed provider call, exact DOM acknowledgments and cancellation clears, native revocation with browser continuity, and separate speech and local voice revocations");
 }

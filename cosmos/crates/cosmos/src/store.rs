@@ -1161,6 +1161,19 @@ impl MemoryBook {
 }
 
 impl MemoryStore {
+    /// Inspect committed events at a local provider fixture's request boundary.
+    #[cfg(test)]
+    pub(crate) async fn ambiance_ledger_events(
+        &self,
+        principal: &str,
+    ) -> Vec<crate::ambiance::ledger::LedgerEvent> {
+        self.surfaces
+            .lock()
+            .expect("surface registry lock poisoned")
+            .get(principal)
+            .map_or_else(Vec::new, |registry| registry.events.clone())
+    }
+
     /// A ready-to-share handle, for wiring at service-registration time.
     /// Build the store, restoring any snapshot this workload previously wrote.
     ///

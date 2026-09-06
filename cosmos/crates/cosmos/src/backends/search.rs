@@ -6,15 +6,19 @@
 //! ReAct transcript as an **observation**, so it must be compact enough for a
 //! model to reason over and honest about what it did and did not find.
 //!
+//! Ambiance uses `prepare_lookup` after selecting an explicitly approved provider.
+//! That separate entry preserves real citations and never uses this legacy
+//! observation path's provider fallback.
+//!
 //! Evidence labels: **observed** — the device-facing tool surface identifies
 //! web retrieval as `MODE_SERP_API`; **implemented** — SearXNG is this
 //! deployment's private adapter for that surface; **unknown** — this does not
 //! claim Humane operated SearXNG or used the same result-ranking policy.
 
-use std::time::Duration;
+use std::{collections::BTreeSet, sync::OnceLock, time::Duration};
 
 use futures_util::StreamExt;
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{BackendError, http, key};
 
@@ -44,10 +48,460 @@ const MAX_SNIPPET_BYTES: usize = 640;
 /// rides in the model's context on every subsequent step of the run, so this is
 /// deliberately small.
 const MAX_RESULTS: usize = 4;
+const MAX_LOOKUP_URL_BYTES: usize = 1024;
+
+/// A choice of provider, not permission to disclose a query to that provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LookupProvider {
+    Searxng,
+    SerpApi,
+}
+
+/// Non-secret coordinates shown in the owner ceremony and bound in the ledger.
+/// The digest commits the exact v1 request profile, including upstream selection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookupProviderIdentity {
+    pub provider: LookupProvider,
+    pub endpoint: String,
+    pub configuration_digest: String,
+}
+
+impl LookupProviderIdentity {
+    pub fn valid(&self) -> bool {
+        lookup_endpoint(&self.endpoint).is_ok()
+            && self.configuration_digest
+                == lookup_configuration_digest(self.provider, &self.endpoint)
+    }
+}
+
+/// Only this constructor normalizes query text. Oversized input is rejected,
+/// never shortened into a different disclosure than the one the runtime binds.
+pub struct LookupQuery(String);
+
+impl LookupQuery {
+    pub fn new(raw: &str) -> Result<Self, LookupError> {
+        let mut query = String::new();
+        for word in raw.split_whitespace() {
+            if word.chars().any(char::is_control)
+                || query
+                    .len()
+                    .saturating_add(word.len())
+                    .saturating_add(usize::from(!query.is_empty()))
+                    > MAX_QUERY_BYTES
+            {
+                return Err(LookupError::InvalidQuery);
+            }
+            if !query.is_empty() {
+                query.push(' ');
+            }
+            query.push_str(word);
+        }
+        if query.is_empty() {
+            return Err(LookupError::InvalidQuery);
+        }
+        Ok(Self(query))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookupError {
+    InvalidQuery,
+    InvalidProvider,
+    NotConfigured,
+    StaleProvider,
+    NoResult,
+    Malformed,
+    Oversized,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookupSource {
+    pub title: String,
+    pub snippet: String,
+    pub url: String,
+}
+
+/// Source text is untrusted data. Runtime supplies the lookup ID, receipt time,
+/// privacy join and evidence digest; the provider cannot assign those values.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookupEvidence {
+    pub sources: Vec<LookupSource>,
+    pub privacy_floor: crate::ambiance::PrivacyClass,
+}
+
+/// One exact request snapshot. It contains a credential-bearing URL and must
+/// never implement Debug/Serialize/Clone. Preparing it performs no network I/O;
+/// the runtime must commit its disclosure before polling consuming execute().
+pub struct PreparedLookup {
+    identity: LookupProviderIdentity,
+    query: LookupQuery,
+    query_digest: String,
+    payload_digest: String,
+    url: reqwest::Url,
+}
+
+impl PreparedLookup {
+    pub fn identity(&self) -> &LookupProviderIdentity {
+        &self.identity
+    }
+
+    pub fn query(&self) -> &str {
+        self.query.as_str()
+    }
+
+    pub fn query_digest(&self) -> &str {
+        &self.query_digest
+    }
+
+    /// Digest of the exact GET method, URL and Accept header before adding
+    /// authentication. Credentials never enter public identity or ledger hashes.
+    pub fn payload_digest(&self) -> &str {
+        &self.payload_digest
+    }
+
+    pub async fn execute(self) -> Result<LookupEvidence, LookupError> {
+        let response = lookup_http()?
+            .get(self.url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| LookupError::Unavailable)?;
+        // error_for_status() accepts redirects; those are not usable answers.
+        if !response.status().is_success() {
+            return Err(LookupError::Unavailable);
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next());
+        if !content_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+        {
+            return Err(LookupError::Malformed);
+        }
+        let body = bounded_body(response).await?;
+        // This join precedes DTO parsing and every row/field reduction. Content
+        // discarded by projection still contributed to this service response.
+        let privacy_floor = lookup_response_privacy(&body)?;
+        let sources = match self.identity.provider {
+            LookupProvider::Searxng => {
+                let found: LookupSearxResponse =
+                    serde_json::from_slice(&body).map_err(|_| LookupError::Malformed)?;
+                if found.error.is_some() {
+                    return Err(LookupError::Unavailable);
+                }
+                let results = found.results.ok_or(LookupError::Malformed)?;
+                if results.is_empty()
+                    && found
+                        .unresponsive_engines
+                        .is_some_and(|engines| !engines.is_empty())
+                {
+                    return Err(LookupError::Unavailable);
+                }
+                let terms = relevance_terms(self.query.as_str());
+                let mut ranked: Vec<_> = results.iter().collect();
+                ranked.sort_by_key(|result| std::cmp::Reverse(result_relevance(result, &terms)));
+                lookup_sources(ranked.into_iter().map(|row| {
+                    (
+                        &*row.title,
+                        &*row.content,
+                        row.url.as_str().unwrap_or_default(),
+                    )
+                }))
+            }
+            LookupProvider::SerpApi => {
+                let found: LookupSerpResponse =
+                    serde_json::from_slice(&body).map_err(|_| LookupError::Malformed)?;
+                if found.error.is_some() {
+                    return Err(LookupError::Unavailable);
+                }
+                // Direct answers without an actual source link cannot become
+                // cited evidence. The legacy observation path stays unchanged.
+                let results = found.organic_results.ok_or(LookupError::Malformed)?;
+                lookup_sources(results.iter().map(|row| {
+                    (
+                        &*row.title,
+                        &*row.snippet,
+                        row.link.as_str().unwrap_or_default(),
+                    )
+                }))
+            }
+        };
+        let sources = match sources {
+            Ok(sources) => sources,
+            Err(LookupError::NoResult) => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(LookupEvidence {
+            sources,
+            privacy_floor,
+        })
+    }
+}
+
+/// At most two server-derived candidates. Selecting one in owner policy never
+/// enables the other one, even when both providers have configuration.
+pub fn lookup_providers() -> Vec<LookupProviderIdentity> {
+    let config = crate::integrations::active().snapshot().search;
+    lookup_providers_from(&config, SERPAPI_BASE_URL)
+}
+
+pub fn prepare_lookup(
+    identity: &LookupProviderIdentity,
+    query: LookupQuery,
+) -> Result<PreparedLookup, LookupError> {
+    let config = crate::integrations::active().snapshot().search;
+    prepare_lookup_from(identity, query, &config, SERPAPI_BASE_URL)
+}
+
+/// Deterministic integration fixtures use an isolated configuration snapshot,
+/// never the installed provider authority or a process environment mutation.
+#[cfg(test)]
+pub(crate) fn lookup_providers_for_test(
+    config: &crate::integrations::SearchConfig,
+) -> Vec<LookupProviderIdentity> {
+    lookup_providers_from(config, SERPAPI_BASE_URL)
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_lookup_for_test(
+    identity: &LookupProviderIdentity,
+    query: LookupQuery,
+    config: &crate::integrations::SearchConfig,
+) -> Result<PreparedLookup, LookupError> {
+    prepare_lookup_from(identity, query, config, SERPAPI_BASE_URL)
+}
+
+fn lookup_providers_from(
+    config: &crate::integrations::SearchConfig,
+    serpapi_endpoint: &str,
+) -> Vec<LookupProviderIdentity> {
+    [LookupProvider::Searxng, LookupProvider::SerpApi]
+        .into_iter()
+        .filter_map(|provider| configured_lookup_identity(provider, config, serpapi_endpoint).ok())
+        .collect()
+}
+
+fn configured_lookup_identity(
+    provider: LookupProvider,
+    config: &crate::integrations::SearchConfig,
+    serpapi_endpoint: &str,
+) -> Result<LookupProviderIdentity, LookupError> {
+    let endpoint = match provider {
+        LookupProvider::Searxng => {
+            let base = config
+                .searxng_base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or(LookupError::NotConfigured)?;
+            if base.chars().any(char::is_whitespace) || base.contains('\\') {
+                return Err(LookupError::InvalidProvider);
+            }
+            let mut url = searxng_url(base, "").map_err(|_| LookupError::InvalidProvider)?;
+            url.set_query(None);
+            url.to_string()
+        }
+        LookupProvider::SerpApi => {
+            config
+                .serpapi_key
+                .as_deref()
+                .filter(|key| !key.trim().is_empty())
+                .ok_or(LookupError::NotConfigured)?;
+            serpapi_endpoint.to_owned()
+        }
+    };
+    lookup_endpoint(&endpoint)?;
+    Ok(LookupProviderIdentity {
+        provider,
+        configuration_digest: lookup_configuration_digest(provider, &endpoint),
+        endpoint,
+    })
+}
+
+fn prepare_lookup_from(
+    identity: &LookupProviderIdentity,
+    query: LookupQuery,
+    config: &crate::integrations::SearchConfig,
+    serpapi_endpoint: &str,
+) -> Result<PreparedLookup, LookupError> {
+    if !identity.valid() {
+        return Err(LookupError::InvalidProvider);
+    }
+    let configured = configured_lookup_identity(identity.provider, config, serpapi_endpoint)?;
+    if &configured != identity {
+        return Err(LookupError::StaleProvider);
+    }
+    let mut url = lookup_endpoint(&identity.endpoint)?;
+    {
+        let mut parameters = url.query_pairs_mut();
+        parameters.append_pair("q", query.as_str());
+        for &(name, value) in lookup_parameters(identity.provider) {
+            parameters.append_pair(name, value);
+        }
+    }
+    let query_digest = crate::surface_registry::hash(query.as_str().as_bytes());
+    let payload_digest = crate::surface_registry::hash(
+        format!("GET\n{}\naccept:application/json\n", url.as_str()).as_bytes(),
+    );
+    if identity.provider == LookupProvider::SerpApi {
+        let key = config
+            .serpapi_key
+            .as_deref()
+            .ok_or(LookupError::NotConfigured)?;
+        url.query_pairs_mut().append_pair("api_key", key);
+    }
+    Ok(PreparedLookup {
+        identity: configured,
+        query,
+        query_digest,
+        payload_digest,
+        url,
+    })
+}
+
+fn lookup_parameters(provider: LookupProvider) -> &'static [(&'static str, &'static str)] {
+    match provider {
+        LookupProvider::Searxng => &[
+            ("format", "json"),
+            ("categories", "general"),
+            ("language", "en"),
+            ("safesearch", "1"),
+            ("pageno", "1"),
+            ("engines", "bing"),
+        ],
+        LookupProvider::SerpApi => &[("engine", "google")],
+    }
+}
+
+fn lookup_configuration_digest(provider: LookupProvider, endpoint: &str) -> String {
+    // Array order is fixed even if another dependency enables serde_json's
+    // preserve_order feature. No credential or mutable provider response enters it.
+    let profile = serde_json::json!([
+        "cosmos.web-lookup",
+        1,
+        provider,
+        endpoint,
+        lookup_parameters(provider),
+    ]);
+    crate::surface_registry::hash(profile.to_string().as_bytes())
+}
+
+fn lookup_endpoint(value: &str) -> Result<reqwest::Url, LookupError> {
+    if value.len() > MAX_LOOKUP_URL_BYTES
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+        || value.contains(['\\', '?', '#'])
+    {
+        return Err(LookupError::InvalidProvider);
+    }
+    let url = reqwest::Url::parse(value).map_err(|_| LookupError::InvalidProvider)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.as_str() != value
+    {
+        return Err(LookupError::InvalidProvider);
+    }
+    Ok(url)
+}
+
+fn lookup_http() -> Result<reqwest::Client, LookupError> {
+    static CLIENT: OnceLock<Result<reqwest::Client, LookupError>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(SEARCH_TIMEOUT)
+                .connect_timeout(Duration::from_secs(4))
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .no_proxy()
+                .build()
+                .map_err(|_| LookupError::Unavailable)
+        })
+        .clone()
+}
+
+fn lookup_sources<'a>(
+    rows: impl Iterator<Item = (&'a str, &'a str, &'a str)>,
+) -> Result<Vec<LookupSource>, LookupError> {
+    let mut sources = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut had_rows = false;
+    for (title, snippet, source_url) in rows {
+        had_rows = true;
+        if source_url.len() > MAX_LOOKUP_URL_BYTES
+            || source_url
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+            || source_url.contains('\\')
+        {
+            continue;
+        }
+        let Ok(url) = reqwest::Url::parse(source_url) else {
+            continue;
+        };
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.as_str().len() > MAX_LOOKUP_URL_BYTES
+        {
+            continue;
+        }
+        let title = compact_text(title, MAX_TITLE_BYTES);
+        let snippet = compact_text(snippet, MAX_SNIPPET_BYTES);
+        if (title.is_empty() && snippet.is_empty()) || !seen.insert(url.to_string()) {
+            continue;
+        }
+        sources.push(LookupSource {
+            title,
+            snippet,
+            url: url.to_string(),
+        });
+        if sources.len() == MAX_RESULTS {
+            break;
+        }
+    }
+    if sources.is_empty() {
+        return Err(if had_rows {
+            LookupError::Malformed
+        } else {
+            LookupError::NoResult
+        });
+    }
+    Ok(sources)
+}
 
 enum SelectedBackend {
     Searxng(String),
     SerpApi(String),
+}
+
+// Unlike the legacy observation DTOs, a missing result field is not an empty
+// result. Provider errors and an unavailable selected engine remain failures.
+#[derive(Deserialize)]
+struct LookupSearxResponse {
+    results: Option<Vec<SearxResult>>,
+    error: Option<serde_json::Value>,
+    unresponsive_engines: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+struct LookupSerpResponse {
+    organic_results: Option<Vec<Organic>>,
+    error: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +534,8 @@ struct Organic {
     title: String,
     #[serde(default)]
     snippet: String,
+    #[serde(default)]
+    link: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -98,6 +554,8 @@ struct SearxResult {
     engine: String,
     #[serde(default)]
     engines: Vec<String>,
+    #[serde(default)]
+    url: serde_json::Value,
 }
 
 #[derive(Debug, PartialEq)]
@@ -313,23 +771,55 @@ fn searxng_url(base_url: &str, query: &str) -> Result<reqwest::Url, BackendError
 }
 
 async fn bounded_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, BackendError> {
+    lookup_json(response)
+        .await
+        .map_err(|_| BackendError::Unavailable)
+}
+
+async fn lookup_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, LookupError> {
+    let body = bounded_body(response).await?;
+    serde_json::from_slice(&body).map_err(|_| LookupError::Malformed)
+}
+
+async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, LookupError> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
     {
-        return Err(BackendError::Unavailable);
+        return Err(LookupError::Oversized);
     }
 
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| BackendError::Unavailable)?;
+        let chunk = chunk.map_err(|_| LookupError::Unavailable)?;
         if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(body.len()) {
-            return Err(BackendError::Unavailable);
+            return Err(LookupError::Oversized);
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|_| BackendError::Unavailable)
+    Ok(body)
+}
+
+fn lookup_response_privacy(body: &[u8]) -> Result<crate::ambiance::PrivacyClass, LookupError> {
+    let raw = std::str::from_utf8(body).map_err(|_| LookupError::Malformed)?;
+    let mut privacy = crate::ambiance::runtime::input_privacy(raw);
+    let mut offset = 0;
+    while let Some(start) = body[offset..].iter().position(|byte| *byte == b'"') {
+        offset += start;
+        // Decode each original string with serde, including ignored fields and
+        // duplicate map entries. Decoding into a Value first would discard an
+        // earlier duplicate; scanning raw text alone would miss escaped terms.
+        let mut strings =
+            serde_json::Deserializer::from_slice(&body[offset..]).into_iter::<String>();
+        let text = strings
+            .next()
+            .ok_or(LookupError::Malformed)?
+            .map_err(|_| LookupError::Malformed)?;
+        privacy = privacy.max(crate::ambiance::runtime::input_privacy(&text));
+        offset += strings.byte_offset();
+    }
+    Ok(privacy)
 }
 
 /// Render a search response into transcript text.
@@ -523,6 +1013,7 @@ mod tests {
         r.organic_results = vec![Organic {
             title: "Paris".into(),
             snippet: "…".into(),
+            link: serde_json::Value::Null,
         }];
         let text = summarize_serpapi(&r, "capital of France").unwrap();
         assert!(text.contains("Paris"));
@@ -546,10 +1037,12 @@ mod tests {
             Organic {
                 title: "A".into(),
                 snippet: "one".into(),
+                link: serde_json::Value::Null,
             },
             Organic {
                 title: "B".into(),
                 snippet: "two".into(),
+                link: serde_json::Value::Null,
             },
         ];
         let text = summarize_serpapi(&organic, "q").unwrap();
@@ -564,6 +1057,7 @@ mod tests {
             .map(|i| Organic {
                 title: format!("t{i}"),
                 snippet: "s".into(),
+                link: serde_json::Value::Null,
             })
             .collect();
         let text = summarize_serpapi(&r, "q").unwrap();
@@ -835,6 +1329,7 @@ mod tests {
                     content: "s".repeat(MAX_SNIPPET_BYTES * 2),
                     engine: "bing".to_owned(),
                     engines: Vec::new(),
+                    url: serde_json::Value::Null,
                 })
                 .collect(),
         };
@@ -866,6 +1361,7 @@ mod tests {
                 content: content.to_owned(),
                 engine: engine.to_owned(),
                 engines: Vec::new(),
+                url: serde_json::Value::Null,
             })
             .collect(),
         };
@@ -888,5 +1384,539 @@ mod tests {
         let url = searxng_url("http://searxng:8080", "query").unwrap();
         assert_eq!(url.host_str(), Some("searxng"));
         assert_eq!(url.path(), "/search");
+    }
+
+    fn lookup_config(searxng_base_url: Option<String>) -> crate::integrations::SearchConfig {
+        crate::integrations::SearchConfig {
+            searxng_base_url,
+            serpapi_key: Some("synthetic-lookup-key".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ambiance_lookup_query_rejects_changes_that_would_silently_truncate_the_disclosure() {
+        assert_eq!(
+            LookupQuery::new("  latest\n Danish\tnews ")
+                .unwrap()
+                .as_str(),
+            "latest Danish news"
+        );
+        assert_eq!(LookupQuery::new(" ").err(), Some(LookupError::InvalidQuery));
+        assert_eq!(
+            LookupQuery::new("a\0b").err(),
+            Some(LookupError::InvalidQuery)
+        );
+        assert_eq!(
+            LookupQuery::new(&"a".repeat(513)).err(),
+            Some(LookupError::InvalidQuery)
+        );
+        assert_eq!(
+            LookupQuery::new(&"💡".repeat(129)).err(),
+            Some(LookupError::InvalidQuery)
+        );
+        assert_eq!(
+            LookupQuery::new(&"💡".repeat(128)).unwrap().as_str().len(),
+            512
+        );
+    }
+
+    #[test]
+    fn ambiance_lookup_identity_is_canonical_profile_bound_and_credential_free() {
+        let config = lookup_config(Some("https://search.example/personal".into()));
+        let providers = lookup_providers_from(&config, SERPAPI_BASE_URL);
+        assert_eq!(providers.len(), 2);
+        assert_eq!(
+            providers[0].endpoint,
+            "https://search.example/personal/search"
+        );
+        assert_eq!(providers[1].endpoint, "https://serpapi.com/search.json");
+        for provider in &providers {
+            assert!(provider.valid());
+            let serialized = serde_json::to_value(provider).unwrap();
+            assert_eq!(serialized.as_object().unwrap().len(), 3);
+            assert!(serialized.get("configurationDigest").is_some());
+            assert!(!serialized.to_string().contains("synthetic-lookup-key"));
+        }
+        assert_eq!(
+            serde_json::to_value(providers[1].provider).unwrap(),
+            "serp_api"
+        );
+        let mut changed = providers[0].clone();
+        changed.endpoint = "https://different.example/search".into();
+        assert!(
+            !changed.valid(),
+            "changing destination invalidates the fixed profile digest"
+        );
+        changed = providers[0].clone();
+        changed.configuration_digest = "a".repeat(64);
+        assert!(!changed.valid());
+        let mut rotated = config.clone();
+        rotated.serpapi_key = Some("a-different-synthetic-key".into());
+        assert_eq!(providers, lookup_providers_from(&rotated, SERPAPI_BASE_URL));
+        for endpoint in [
+            "https://search.example/search?",
+            "https://search.example/search#",
+            "https://user:password@search.example/search",
+            "https://SEARCH.example/search",
+            "https://search.example/white space",
+            "https:\\search.example/search",
+            "file:///tmp/search",
+            "https://search.example",
+        ] {
+            assert!(
+                lookup_endpoint(endpoint).is_err(),
+                "noncanonical/unsafe endpoint: {endpoint}"
+            );
+        }
+        assert!(lookup_endpoint(&format!("https://search.example/{}", "x".repeat(1024))).is_err());
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_stale_configuration_is_rejected_without_contacting_either_endpoint() {
+        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let old = lookup_config(Some(format!("http://{}", first.local_addr().unwrap())));
+        let changed = lookup_config(Some(format!("http://{}", second.local_addr().unwrap())));
+        let provider = lookup_providers_from(&old, SERPAPI_BASE_URL).remove(0);
+        assert_eq!(
+            prepare_lookup_from(
+                &provider,
+                LookupQuery::new("query").unwrap(),
+                &changed,
+                SERPAPI_BASE_URL
+            )
+            .err(),
+            Some(LookupError::StaleProvider)
+        );
+        let absent = lookup_config(None);
+        assert_eq!(
+            prepare_lookup_from(
+                &provider,
+                LookupQuery::new("query").unwrap(),
+                &absent,
+                SERPAPI_BASE_URL
+            )
+            .err(),
+            Some(LookupError::NotConfigured)
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), first.accept())
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), second.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_uses_one_selected_provider_with_exact_query_profile_and_real_sources()
+    {
+        let (base, request) = serve_once("200 OK", r#"{"results":[{"title":"Actual article","content":"Actual source text","url":"https://example.org/article?id=7#part","engine":"bing"}]}"#.into(), Duration::ZERO).await;
+        let config = lookup_config(Some(base));
+        let provider = lookup_providers_from(&config, SERPAPI_BASE_URL).remove(0);
+        let prepared = prepare_lookup_from(
+            &provider,
+            LookupQuery::new("  Danish \nnews ").unwrap(),
+            &config,
+            SERPAPI_BASE_URL,
+        )
+        .unwrap();
+        let query_digest = prepared.query_digest().to_owned();
+        let payload_digest = prepared.payload_digest().to_owned();
+        assert_eq!(prepared.identity(), &provider);
+        assert_eq!(prepared.query(), "Danish news");
+        let evidence = prepared.execute().await.unwrap();
+        assert_eq!(
+            evidence.sources,
+            [LookupSource {
+                title: "Actual article".into(),
+                snippet: "Actual source text".into(),
+                url: "https://example.org/article?id=7#part".into(),
+            }]
+        );
+        let request = request.await.unwrap();
+        let target = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap();
+        let actual = reqwest::Url::parse(&provider.endpoint)
+            .unwrap()
+            .join(target)
+            .unwrap();
+        let parameters: std::collections::BTreeMap<_, _> =
+            actual.query_pairs().into_owned().collect();
+        assert_eq!(parameters.get("q").map(String::as_str), Some("Danish news"));
+        assert_eq!(parameters.get("engines").map(String::as_str), Some("bing"));
+        assert_eq!(parameters.get("format").map(String::as_str), Some("json"));
+        assert_eq!(parameters.get("language").map(String::as_str), Some("en"));
+        assert_eq!(parameters.len(), 7);
+        assert!(!request.contains("api_key"));
+        assert_eq!(query_digest, crate::surface_registry::hash(b"Danish news"));
+        assert_eq!(
+            payload_digest,
+            crate::surface_registry::hash(
+                format!("GET\n{actual}\naccept:application/json\n").as_bytes()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_serpapi_snapshot_authentication_never_enters_public_digests() {
+        let (base, request) = serve_once("200 OK", r#"{"organic_results":[{"title":"Found","snippet":"Evidence","link":"https://example.org/found"}]}"#.into(), Duration::ZERO).await;
+        let endpoint = format!("{base}/search.json");
+        let config = lookup_config(None);
+        let provider = lookup_providers_from(&config, &endpoint).remove(0);
+        let prepared = prepare_lookup_from(
+            &provider,
+            LookupQuery::new("actual query").unwrap(),
+            &config,
+            &endpoint,
+        )
+        .unwrap();
+        let public_digest = prepared.payload_digest().to_owned();
+        let mut rotated = config.clone();
+        rotated.serpapi_key = Some("rotated-synthetic-key".into());
+        let other = prepare_lookup_from(
+            &provider,
+            LookupQuery::new("actual query").unwrap(),
+            &rotated,
+            &endpoint,
+        )
+        .unwrap();
+        assert_eq!(other.payload_digest(), public_digest);
+        assert_eq!(other.query_digest(), prepared.query_digest());
+        let evidence = prepared.execute().await.unwrap();
+        assert_eq!(evidence.sources[0].url, "https://example.org/found");
+        let request = request.await.unwrap();
+        assert!(request.contains("engine=google"));
+        assert!(request.contains("q=actual+query"));
+        assert!(request.contains("api_key=synthetic-lookup-key"));
+        assert!(!request.contains("rotated-synthetic-key"));
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_empty_failed_or_degraded_searxng_never_calls_the_other_configured_provider()
+     {
+        let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/search.json", fallback.local_addr().unwrap());
+        for (status, body, expected) in [
+            ("200 OK", r#"{"results":[]}"#, None),
+            (
+                "503 Service Unavailable",
+                "{}",
+                Some(LookupError::Unavailable),
+            ),
+            (
+                "200 OK",
+                r#"{"results":[{"title":"Available","content":"Secondary source","url":"https://example.org/available","engine":"secondary"}]}"#,
+                None,
+            ),
+        ] {
+            let (base, request) = serve_once(status, body.into(), Duration::ZERO).await;
+            let config = lookup_config(Some(base));
+            let provider = lookup_providers_from(&config, &endpoint).remove(0);
+            let prepared = prepare_lookup_from(
+                &provider,
+                LookupQuery::new("only approved provider").unwrap(),
+                &config,
+                &endpoint,
+            )
+            .unwrap();
+            assert_eq!(prepared.execute().await.err(), expected);
+            assert!(request.await.unwrap().contains("engines=bing"));
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), fallback.accept())
+                .await
+                .is_err(),
+            "fallback received a connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_redirects_never_disclose_to_a_second_endpoint() {
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_url = format!(
+            "http://{}/must-not-receive-query",
+            target.local_addr().unwrap()
+        );
+        let mut source_calls = 0;
+        for provider in [LookupProvider::Searxng, LookupProvider::SerpApi] {
+            for status in [301, 302, 303, 307, 308] {
+                let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let base = format!("http://{}", source.local_addr().unwrap());
+                let location = target_url.clone();
+                let handle = tokio::spawn(async move {
+                    let (mut socket, _) = source.accept().await.unwrap();
+                    let mut request = vec![0; 8192];
+                    let count = socket.read(&mut request).await.unwrap();
+                    assert!(
+                        String::from_utf8_lossy(&request[..count]).contains("q=bounded+lookup")
+                    );
+                    socket.write_all(format!("HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                });
+                let config = lookup_config(Some(base.clone()));
+                let serpapi_endpoint = format!("{base}/search.json");
+                let identity = lookup_providers_from(&config, &serpapi_endpoint)
+                    .into_iter()
+                    .find(|identity| identity.provider == provider)
+                    .unwrap();
+                let prepared = prepare_lookup_from(
+                    &identity,
+                    LookupQuery::new("bounded lookup").unwrap(),
+                    &config,
+                    &serpapi_endpoint,
+                )
+                .unwrap();
+                assert_eq!(prepared.execute().await, Err(LookupError::Unavailable));
+                handle.await.unwrap();
+                source_calls += 1;
+            }
+        }
+        assert_eq!(source_calls, 10);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), target.accept())
+                .await
+                .is_err(),
+            "redirect target received a connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_malformed_oversized_and_uncited_results_are_distinct_from_no_result() {
+        for (body, expected) in [
+            ("not-json".to_owned(), LookupError::Malformed),
+            ("{}".to_owned(), LookupError::Malformed),
+            (
+                r#"{"error":"provider failed"}"#.to_owned(),
+                LookupError::Unavailable,
+            ),
+            (
+                r#"{"results":[],"unresponsive_engines":[["bing","timeout"]]}"#.to_owned(),
+                LookupError::Unavailable,
+            ),
+            (
+                format!(
+                    r#"{{"results":[],"padding":"{}"}}"#,
+                    "x".repeat(MAX_RESPONSE_BYTES)
+                ),
+                LookupError::Oversized,
+            ),
+            (
+                r#"{"results":[{"title":"No source URL","content":"Cannot cite this"}]}"#
+                    .to_owned(),
+                LookupError::Malformed,
+            ),
+            (
+                r#"{"results":[],"ignored":"\uZZZZ"}"#.to_owned(),
+                LookupError::Malformed,
+            ),
+        ] {
+            let (base, _) = serve_once("200 OK", body, Duration::ZERO).await;
+            let config = lookup_config(Some(base));
+            let identity = lookup_providers_from(&config, SERPAPI_BASE_URL).remove(0);
+            let prepared = prepare_lookup_from(
+                &identity,
+                LookupQuery::new("lookup").unwrap(),
+                &config,
+                SERPAPI_BASE_URL,
+            )
+            .unwrap();
+            assert_eq!(prepared.execute().await, Err(expected));
+        }
+    }
+
+    #[test]
+    fn citation_metadata_does_not_change_legacy_observation_acceptance() {
+        for metadata in ["null", "17", r#"{"unexpected":"shape"}"#] {
+            let searx: SearxResponse = serde_json::from_str(&format!(r#"{{"results":[{{"title":"Legacy result","content":"Still useful","url":{metadata}}}]}}"#)).unwrap();
+            assert!(
+                summarize_searxng(&searx, "query")
+                    .unwrap()
+                    .contains("Legacy result")
+            );
+            let serp: SerpResponse = serde_json::from_str(&format!(r#"{{"organic_results":[{{"title":"Legacy result","snippet":"Still useful","link":{metadata}}}]}}"#)).unwrap();
+            assert!(
+                summarize_serpapi(&serp, "query")
+                    .unwrap()
+                    .contains("Legacy result")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_chunked_oversize_is_stopped_without_a_content_length_header() {
+        let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = lookup_config(Some(format!("http://{}", source.local_addr().unwrap())));
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = source.accept().await.unwrap();
+            let mut request = vec![0; 8192];
+            let mut received = 0;
+            loop {
+                assert!(
+                    received < request.len(),
+                    "fixture request headers exceed limit"
+                );
+                let read = socket.read(&mut request[received..]).await.unwrap();
+                assert!(read > 0, "fixture request ended before its headers");
+                received += read;
+                if request[..received]
+                    .windows(4)
+                    .any(|bytes| bytes == b"\r\n\r\n")
+                {
+                    break;
+                }
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.unwrap();
+            let chunk = "x".repeat(16 * 1024);
+            for _ in 0..=MAX_RESPONSE_BYTES / chunk.len() {
+                if socket
+                    .write_all(format!("{:x}\r\n{chunk}\r\n", chunk.len()).as_bytes())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            let _ = socket.write_all(b"0\r\n\r\n").await;
+        });
+        let identity = lookup_providers_from(&config, SERPAPI_BASE_URL).remove(0);
+        let prepared = prepare_lookup_from(
+            &identity,
+            LookupQuery::new("query").unwrap(),
+            &config,
+            SERPAPI_BASE_URL,
+        )
+        .unwrap();
+        assert_eq!(prepared.execute().await, Err(LookupError::Oversized));
+        handle.await.unwrap();
+    }
+
+    #[test]
+    fn ambiance_lookup_evidence_limits_rows_and_preserves_whole_valid_urls() {
+        let rows: Vec<_> = [
+            "javascript:alert(1)".to_owned(),
+            "file:///tmp/private".into(),
+            "https://user:password@example.org/secret".into(),
+            format!("https://example.org/{}", "x".repeat(1024)),
+        ]
+        .into_iter()
+        .chain((0..10).map(|i| format!("https://example.org/source/{i}?a=b#cite")))
+        .map(|url| ("💡".repeat(100), "long snippet ".repeat(100), url))
+        .collect();
+        let evidence = lookup_sources(
+            rows.iter()
+                .map(|(title, snippet, url)| (&**title, &**snippet, &**url)),
+        )
+        .unwrap();
+        assert_eq!(evidence.len(), 4);
+        for (index, source) in evidence.iter().enumerate() {
+            assert!(source.title.len() <= MAX_TITLE_BYTES);
+            assert!(source.snippet.len() <= MAX_SNIPPET_BYTES);
+            assert_eq!(
+                source.url,
+                format!("https://example.org/source/{index}?a=b#cite")
+            );
+        }
+        let duplicates = [
+            ("Title", "One", "https://example.org/same"),
+            ("Title", "Two", "https://example.org/same"),
+        ];
+        assert_eq!(lookup_sources(duplicates.into_iter()).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_privacy_covers_text_beyond_field_caps_and_filtered_fifth_row() {
+        let mut cases = vec![
+            serde_json::json!({"results":[{
+                "title":format!("{} password", "ordinary ".repeat(MAX_TITLE_BYTES)),
+                "content":"Visible source", "url":"https://example.org/title"
+            }],"privacy":"public"}).to_string(),
+            serde_json::json!({"results":[{
+                "title":"Visible title", "content":format!("{} password", "ordinary ".repeat(MAX_SNIPPET_BYTES)),
+                "url":"https://example.org/snippet"
+            }]}).to_string(),
+        ];
+        let mut rows: Vec<_> = (0..4)
+            .map(|index| {
+                serde_json::json!({
+                    "title":format!("lookup {index}"), "content":"Visible source",
+                    "url":format!("https://example.org/{index}")
+                })
+            })
+            .collect();
+        rows.push(serde_json::json!({
+            "title":"password", "content":"Discarded source", "url":"file:///discarded"
+        }));
+        cases.push(
+            serde_json::json!({"results":rows})
+                .to_string()
+                .replace("password", "\\u0070assword"),
+        );
+        for body in cases {
+            let (base, request) = serve_once("200 OK", body, Duration::ZERO).await;
+            let config = lookup_config(Some(base));
+            let provider = lookup_providers_from(&config, SERPAPI_BASE_URL).remove(0);
+            let prepared = prepare_lookup_from(
+                &provider,
+                LookupQuery::new("lookup").unwrap(),
+                &config,
+                SERPAPI_BASE_URL,
+            )
+            .unwrap();
+            let evidence = prepared.execute().await.unwrap();
+            assert_eq!(
+                evidence.privacy_floor,
+                crate::ambiance::PrivacyClass::Sensitive
+            );
+            assert!(!evidence.sources.is_empty());
+            assert!(evidence.sources.len() <= 4);
+            assert!(
+                evidence
+                    .sources
+                    .iter()
+                    .all(|source| !source.title.contains("password")
+                        && !source.snippet.contains("password")),
+                "discarded sensitive text must still raise the retained evidence floor"
+            );
+            assert!(request.await.unwrap().starts_with("GET /search?"));
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiance_lookup_empty_results_preserve_ignored_and_duplicate_string_privacy() {
+        for body in [
+            r#"{"results":[],"ignored":"password"}"#,
+            r#"{"results":[],"ignored":"\u0070assword","ignored":"ordinary","privacy":"public"}"#,
+        ] {
+            let (base, request) = serve_once("200 OK", body.into(), Duration::ZERO).await;
+            let config = lookup_config(Some(base));
+            let provider = lookup_providers_from(&config, SERPAPI_BASE_URL).remove(0);
+            let prepared = prepare_lookup_from(
+                &provider,
+                LookupQuery::new("lookup").unwrap(),
+                &config,
+                SERPAPI_BASE_URL,
+            )
+            .unwrap();
+            let evidence = prepared.execute().await.unwrap();
+            assert!(evidence.sources.is_empty());
+            assert_eq!(
+                evidence.privacy_floor,
+                crate::ambiance::PrivacyClass::Sensitive
+            );
+            assert!(request.await.unwrap().starts_with("GET /search?"));
+        }
+        assert_eq!(
+            lookup_sources(std::iter::empty()).err(),
+            Some(LookupError::NoResult)
+        );
     }
 }

@@ -1,0 +1,9 @@
+.permission { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--hu-text-muted); }
+.permission p { line-height: 1.5; margin: 12px 0; }
+.permission button { padding: 10px 14px; margin: 4px 8px 4px 0; border: 1px solid currentColor; border-radius: 8px; cursor: pointer; }
+.permission button:disabled { opacity: .5; cursor: default; }
+.endpoint { overflow-wrap: anywhere; }
+.field { display: block; margin: 16px 0; }
+.field select { display: block; box-sizing: border-box; max-width: 100%; width: 100%; margin-top: 8px; padding: 10px; border: 1px solid var(--hu-text-muted); border-radius: 8px; color: inherit; background: var(--hu-colors-penumbra-base); font: inherit; }
+.actions { display: flex; flex-wrap: wrap; }
+.review { margin: 12px 0; padding: 16px; border: 1px solid var(--hu-text-muted); border-radius: 8px; }

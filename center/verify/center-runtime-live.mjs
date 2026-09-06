@@ -65,7 +65,7 @@ const diagnostics = [];
 function recordStatus(request, status, cacheControl) {
   const pathname = new URL(request.url, "https://127.0.0.1").pathname;
   if (diagnostics.length < 128 && (pathname === "/api/runtime/room" || pathname === "/api/runtime/input"
-    || pathname.startsWith("/api/surfaces/native") || pathname.startsWith("/runtime-api/v1/native/")
+    || pathname.startsWith("/api/surfaces/native") || pathname.endsWith("/web-lookup") || pathname.startsWith("/runtime-api/v1/native/")
     || pathname.startsWith("/livekit/"))) {
     diagnostics.push({ path: pathname, status, ...(cacheControl ? { cacheControl } : {}) });
   }
@@ -115,7 +115,7 @@ async function until(read, timeout = 180000) {
 }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
 function checkpoint(stage) {
-  assert(["browserReady", "renderObserved", "clearObserved"].includes(stage));
+  assert(["browserReady", "renderObserved", "clearObserved", "lookupRenderObserved", "lookupClearObserved"].includes(stage));
   fs.writeFileSync(coordinationPendingPath, JSON.stringify({ stage }), { mode: 0o600 });
   fs.renameSync(coordinationPendingPath, coordinationPath);
 }
@@ -243,7 +243,7 @@ try {
   await page.getByRole("button", { name: "Confirm shared display", exact: true }).click();
   await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
   checkpoint("browserReady");
-  // The production native client supplies the only model request and recovers
+  // The production native client supplies this model request and recovers
   // its persisted admission. Center must acknowledge the actual DOM commit.
   await page.getByLabel("Cosmos display", { exact: true }).getByText("Center acceptance card", { exact: true }).waitFor();
   await until(() => { const status = readJson(statusPath); return status?.acknowledged && status.nativeTextRetried; }, 10000);
@@ -253,6 +253,61 @@ try {
   await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
   await until(() => { const status = readJson(statusPath); return status?.nativeCancelled && status.payloadCleared && status.nativeCrashPendingRecovered; }, 45000);
   checkpoint("clearObserved");
+  stage = "owner native web lookup permission";
+  const lookupPath = `/api/surfaces/${native.nativeId}/web-lookup`;
+  const webPermission = page.getByRole("group", { name: `Web lookup permission for macOS installation ${descriptor.enrollmentId}`, exact: true });
+  const [lookupRead] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "GET"),
+    webPermission.getByRole("button", { name: "Web lookup permission", exact: true }).click(),
+  ]);
+  assert.equal(lookupRead.status(), 200);
+  assert.match(lookupRead.headers()["cache-control"], /(?:^|,)\s*no-store\s*(?:,|$)/iu);
+  const lookupSnapshot = await lookupRead.json();
+  const lookupBinding = lookupSnapshot.binding;
+  assert.equal(lookupBinding.approvalRevision, expectedNative.revision);
+  assert.deepEqual(lookupBinding, { approvalRevision: expectedNative.revision, incarnation: null });
+  assert.deepEqual(lookupSnapshot, { approval: null, binding: lookupBinding, providers: [native.lookupProvider] });
+  assert.equal(native.lookupProvider.provider, "searxng");
+  const lookupEndpoint = new URL(native.lookupProvider.endpoint);
+  assert.equal(lookupEndpoint.hostname, "127.0.0.1");
+  assert.equal(lookupEndpoint.pathname, "/search");
+  await webPermission.locator("select").selectOption(`${native.lookupProvider.provider}:${native.lookupProvider.configurationDigest}`);
+  await webPermission.getByRole("button", { name: "Review web lookup permission", exact: true }).click();
+  const lookupPolicy = { provider: native.lookupProvider, maximumClass: "shared_room" };
+  const [lookupGranted] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "POST"),
+    webPermission.getByRole("button", { name: "Allow shared-room web lookup", exact: true }).click(),
+  ]);
+  assert.equal(lookupGranted.status(), 200);
+  assert.deepEqual(lookupGranted.request().postDataJSON(), { approval: "approve-web-lookup-disclosure-v1", approvalRevision: lookupBinding.approvalRevision, approvalIncarnation: lookupBinding.incarnation, expectedRevision: 0, policy: lookupPolicy });
+  assert.deepEqual(await lookupGranted.json(), { approval: { approvalRevision: lookupBinding.approvalRevision, revision: 1, policy: lookupPolicy }, binding: lookupBinding, providers: [native.lookupProvider] });
+  await webPermission.getByText("Cosmos confirmed web lookup permission for this device.", { exact: true }).waitFor();
+  stage = "native lookup through selected local provider and sourced DOM acknowledgment";
+  const lookupSource = "https://www.dbu.dk/landshold/herrelandshold/";
+  const lookupCard = `Web results for "Denmark national football team"\n\n[1] Denmark national football team\nOfficial team information from the Danish Football Association.\n${lookupSource}`;
+  const lookupDisplay = page.getByLabel("Cosmos display", { exact: true });
+  await lookupDisplay.getByText(lookupCard, { exact: true }).waitFor();
+  const renderedLookupText = await lookupDisplay.getByText(lookupCard, { exact: true }).textContent();
+  assert.equal(renderedLookupText, lookupCard);
+  assert(renderedLookupText.includes(lookupSource));
+  await until(() => { const status = readJson(statusPath); return status?.webLookupApproved && status.webLookupAcknowledged && status.webLookupRetried && status.webLookupLedgerVerified; }, 10000);
+  await page.screenshot({ path: path.join(directory, "web-lookup-rendered.png"), fullPage: true });
+  checkpoint("lookupRenderObserved");
+  stage = "native sourced lookup cancellation and clear";
+  await lookupDisplay.waitFor({ state: "detached" });
+  await until(() => { const status = readJson(statusPath); return status?.webLookupCancelled && status.webLookupPayloadCleared; }, 10000);
+  checkpoint("lookupClearObserved");
+  stage = "owner native web lookup revocation";
+  await webPermission.getByRole("button", { name: "Revoke web lookup permission", exact: true }).click();
+  const [lookupRevoked] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === lookupPath && response.request().method() === "POST"),
+    webPermission.getByRole("button", { name: "Confirm revoke web lookup", exact: true }).click(),
+  ]);
+  assert.equal(lookupRevoked.status(), 200);
+  assert.deepEqual(lookupRevoked.request().postDataJSON(), { approval: "approve-web-lookup-disclosure-v1", approvalRevision: lookupBinding.approvalRevision, approvalIncarnation: lookupBinding.incarnation, expectedRevision: 1, policy: null });
+  assert.deepEqual(await lookupRevoked.json(), { approval: { approvalRevision: lookupBinding.approvalRevision, revision: 2, policy: null }, binding: lookupBinding, providers: [native.lookupProvider] });
+  await webPermission.getByText("Cosmos confirmed web lookup permission revoked.", { exact: true }).waitFor();
+  await until(() => readJson(statusPath)?.webLookupRevoked, 10000);
   stage = "owner native installation revocation";
   await page.getByRole("button", { name: `Revoke installation ${descriptor.enrollmentId}`, exact: true }).click();
   const [revoked] = await Promise.all([
@@ -279,7 +334,12 @@ try {
   await page.getByLabel("Cosmos display", { exact: true }).waitFor({ state: "detached" });
   const result = await until(() => { const status = readJson(statusPath); return status?.complete ? status : null; }, 10000);
   assert.equal(result.acknowledged, true);
-  assert.equal(result.modelCalls, 1);
+  assert.equal(result.modelCalls, 2);
+  assert.equal(result.modelProviderCalls, providerMode ? 1 : 0);
+  assert.equal(result.lookupProviderCalls, 1);
+  assert.equal(result.lookupProviderMode, "local-searxng-fixture");
+  assert.equal(result.webLookupPolicyRevision, 2);
+  for (const flag of ["webLookupApproved", "webLookupAcknowledged", "webLookupRetried", "webLookupLedgerVerified", "webLookupCancelled", "webLookupPayloadCleared", "webLookupRevoked"]) assert.equal(result[flag], true, flag);
   assert.equal(result.modelMode, providerMode ? "openrouter-text" : "synthetic");
   assert.equal(result.speechPolicyRevision, 2);
   assert.equal(result.localVoicePolicyRevision, 2);
@@ -302,7 +362,7 @@ try {
   assert.deepEqual(errors, [], "No browser runtime exceptions");
   const exit = await new Promise(resolve => child.exitCode !== null ? resolve(child.exitCode) : child.once("exit", resolve));
   assert.equal(exit, 0);
-  process.stdout.write(`PASS: actual native client over HTTPS/WSS, Center owner controls, persisted text recovery, shared Cosmos routing, DOM acknowledgment, native cancellation/revocation and durable clear; one ${providerMode ? "live OpenRouter" : "synthetic"} model call.\nArtifacts: ${directory}\n`);
+  process.stdout.write(`PASS: actual native client over HTTPS/WSS, Center owner controls, persisted text recovery, shared routing, sourced DOM acknowledgment, lookup/native cancellation and revocation; one local SearXNG fixture request, one synthetic lookup proposal and one ${providerMode ? "live OpenRouter" : "synthetic"} text model call.\nArtifacts: ${directory}\n`);
   fs.writeFileSync(path.join(directory, "result.json"), JSON.stringify(result) + "\n", { mode: 0o600 });
 } catch (error) {
   if (page && !page.isClosed()) {

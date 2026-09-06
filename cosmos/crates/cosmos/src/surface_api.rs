@@ -22,6 +22,18 @@ struct ApiState {
     store: SharedStore,
     verifier: Option<Arc<JwtVerifier>>,
     pairing: Option<crate::enrollment::SharedEnrollmentStore>,
+    #[cfg(test)]
+    lookup_config: Option<crate::integrations::SearchConfig>,
+}
+
+impl ApiState {
+    fn lookup_providers(&self) -> Vec<crate::backends::search::LookupProviderIdentity> {
+        #[cfg(test)]
+        if let Some(config) = &self.lookup_config {
+            return crate::backends::search::lookup_providers_for_test(config);
+        }
+        crate::backends::search::lookup_providers()
+    }
 }
 
 pub fn router(store: SharedStore) -> Router {
@@ -37,6 +49,16 @@ pub(crate) fn with_pairing(
     verifier: Option<Arc<JwtVerifier>>,
     pairing: Option<crate::enrollment::SharedEnrollmentStore>,
 ) -> Router {
+    routes(ApiState {
+        store,
+        verifier,
+        pairing,
+        #[cfg(test)]
+        lookup_config: None,
+    })
+}
+
+fn routes(api: ApiState) -> Router {
     Router::new()
         .route("/surface-api/v1/surfaces", get(list).post(approve))
         .route("/surface-api/v1/surfaces/:surface_id", delete(revoke))
@@ -61,12 +83,29 @@ pub(crate) fn with_pairing(
             get(voice_policy).post(set_voice_policy),
         )
         .layer(DefaultBodyLimit::max(1024))
+        .route(
+            "/surface-api/v1/surfaces/:surface_id/web-lookup",
+            get(lookup_policy)
+                .post(set_lookup_policy)
+                .layer(DefaultBodyLimit::max(4096)),
+        )
         .layer(axum::middleware::map_response(no_store))
-        .with_state(ApiState {
-            store,
-            verifier,
-            pairing,
-        })
+        .with_state(api)
+}
+
+#[cfg(test)]
+pub(crate) fn with_lookup_config_for_test(
+    store: SharedStore,
+    verifier: Option<Arc<JwtVerifier>>,
+    pairing: Option<crate::enrollment::SharedEnrollmentStore>,
+    config: crate::integrations::SearchConfig,
+) -> Router {
+    routes(ApiState {
+        store,
+        verifier,
+        pairing,
+        lookup_config: Some(config),
+    })
 }
 
 async fn no_store(mut response: Response) -> Response {
@@ -316,6 +355,110 @@ where
 }
 
 const LOCAL_VOICE_APPROVAL: &str = "approve-local-voice-intake-v1";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LookupApproval {
+    approval: String,
+    approval_revision: u64,
+    #[serde(deserialize_with = "required_lookup_incarnation")]
+    approval_incarnation: Option<Uuid>,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_lookup_policy")]
+    policy: Option<crate::ambiance::lookup::Policy>,
+}
+
+fn required_lookup_incarnation<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+fn required_lookup_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::lookup::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+async fn lookup_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::LookupPolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::LookupPolicy { approval, binding } = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({
+        "approval": approval,
+        "binding": binding,
+        "providers": api.lookup_providers(),
+    })))
+}
+
+async fn set_lookup_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<LookupApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != crate::ambiance::lookup::OWNER_APPROVAL {
+        return Err(invalid());
+    }
+    let providers = api.lookup_providers();
+    if let Some(policy) = &request.policy {
+        // The owner approves the exact displayed destination and request
+        // profile. A provider key or an old configuration is not that grant.
+        if !providers.contains(&policy.provider) {
+            return Err(ApiError(StatusCode::CONFLICT, "provider_changed"));
+        }
+        let current = api
+            .store
+            .surface(&principal, surface_id)
+            .await?
+            .filter(|surface| !surface.revoked)
+            .ok_or(RegistryError::NotFound)?;
+        if let surface_registry::Binding::Pin { device_id } = current.binding {
+            crate::pin_admission::paired_owner(api.pairing.as_ref(), &principal, &device_id)
+                .await?;
+        }
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetLookupPolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                approval_incarnation: request.approval_incarnation,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::LookupPolicy { approval, binding } = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(
+        json!({"approval": approval, "providers": providers, "binding": binding}),
+    ))
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -602,6 +745,9 @@ async fn leave(
 
 #[cfg(test)]
 mod tests {
+    mod lookup_tests {
+        include!("surface_lookup_tests.rs");
+    }
     use super::*;
     use axum::{body::Body, http::Request};
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header};
