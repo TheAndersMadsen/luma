@@ -182,14 +182,15 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.12` and deployed at
+The current server preview is published as `v0.2.0-ambiance.13` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`72acabcdc3ad30ef62f3e0afdf6c344d6e417ac8` and environment `production`. That
+`583c1744350a42baab64a78449f7a7aa465a338c` and environment `production`. That
 release was built on the workstation after GitHub Actions minutes ran out: the
 Cosmos and Center images were built and pushed locally, the other three images
 were reused from `v0.2.0-ambiance.10`, and its GitHub release carries no
 sigstore bundle. It carries private replies routed to the owner's personal
-device, the Devices page, live native presence and the LiveKit node address.
+device, the Devices page, live native presence, the LiveKit node address, the
+provider proposal normalizer and the shared client's automatic heartbeat retry.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. The upgrade preserved the configured profiles,
 connections and nonblank credentials. Web lookup's exact-commit CI and built
