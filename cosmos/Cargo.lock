@@ -684,6 +684,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+ "webrtc-sys-build",
 ]
 
 [[package]]

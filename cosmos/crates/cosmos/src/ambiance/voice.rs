@@ -184,6 +184,7 @@ impl LocalVoice {
                 transcript,
                 privacy,
                 Some(&self.authenticated),
+                false,
             )
             .await?;
         self.cancel.armed = false;

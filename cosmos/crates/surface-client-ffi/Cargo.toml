@@ -18,3 +18,9 @@ uuid.workspace = true
 [target.'cfg(target_os = "android")'.dependencies]
 cosmos-rtc = { path = "../rtc" }
 jni = "0.21.1"
+
+[build-dependencies]
+# Android links libwebrtc statically; the Java classes in libwebrtc.jar need
+# their JNI natives kept and exported from this library. The vendored helper
+# only reads the separately verified archive.
+webrtc-sys-build = "0.3.19"

@@ -92,6 +92,7 @@ class SurfaceController(context: Context) {
             val bytes = NativeSurface.poll(current) ?: return
             val event = runCatching { NativeEvent.decode(bytes) }.getOrNull()
             if (event == null) {
+                Log.w(TAG, "undecodable snapshot: ${String(bytes, Charsets.UTF_8).take(400)}")
                 _state.update { it.copy(phase = Phase.BLOCKED, message = "Cosmos returned a response this app could not verify.") }
                 return
             }
@@ -102,7 +103,6 @@ class SurfaceController(context: Context) {
     private fun fold(event: NativeEvent) {
         // Snapshots are redacted by the native client: no journal, token or request text.
         Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId}")
-        lastOperation = event.operation
         _state.update { previous ->
             val failure = event.error?.let(::message)
             val phase = when {
@@ -134,6 +134,8 @@ class SurfaceController(context: Context) {
                 },
             )
         }
+        // Published after the state so a waiting command observes both together.
+        lastOperation = event.operation
     }
 
     private fun message(code: String): String = when (code) {
@@ -219,7 +221,9 @@ class SurfaceController(context: Context) {
 
     fun connect() = scope.launch {
         command("connect") { NativeSurface.connect(handle) }
-        if (wantedVisible && _state.value.phase == Phase.CONNECTED && !_state.value.visible) {
+        // Visibility lives on the connection: re-report the retained foreground
+        // state after every successful connect, even if a snapshot lagged.
+        if (wantedVisible && _state.value.phase == Phase.CONNECTED) {
             command("set_visible") { NativeSurface.setVisible(handle, true) }
         }
     }
