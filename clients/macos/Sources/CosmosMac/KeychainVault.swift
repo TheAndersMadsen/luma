@@ -24,6 +24,9 @@ public final class KeychainVault: @unchecked Sendable {
         let keychain: SecKeychain
         let application: SecTrustedApplication
         let applicationPath: Data
+        /// The Keychain partition of signed code: `teamid:` plus the team identifier.
+        /// Ad-hoc or unsigned builds have none and are trusted by path only.
+        let partition: String?
     }
 
     private struct Identity {
@@ -72,7 +75,8 @@ public final class KeychainVault: @unchecked Sendable {
             guard SecTrustedApplicationCreateFromPath(nil, &application) == errSecSuccess,
                   let application else { throw ClientFailure.storageUnavailable }
             let storage = Storage(keychain: keychain, application: application,
-                                  applicationPath: try trustedPath(application))
+                                  applicationPath: try trustedPath(application),
+                                  partition: signingPartition())
             let identity: Identity
             if let stored = try readIdentity(storage) {
                 identity = stored
@@ -364,16 +368,94 @@ public final class KeychainVault: @unchecked Sendable {
             var applications: CFArray?
             var description: CFString?
             var prompt = SecKeychainPromptSelector(rawValue: 0)
-            guard SecACLCopyContents(grant as! SecACL, &applications, &description, &prompt) == errSecSuccess,
-                  let applications = applications as? [Any], applications.count == 1,
-                  CFGetTypeID(applications[0] as CFTypeRef) == SecTrustedApplicationGetTypeID(),
-                  try trustedPath(applications[0] as! SecTrustedApplication) == storage.applicationPath else {
+            guard SecACLCopyContents(grant as! SecACL, &applications, &description, &prompt) == errSecSuccess else {
                 throw ClientFailure.storageUnavailable
+            }
+            if let applications = applications as? [Any] {
+                guard applications.count == 1,
+                      CFGetTypeID(applications[0] as CFTypeRef) == SecTrustedApplicationGetTypeID(),
+                      try trustedPath(applications[0] as! SecTrustedApplication) == storage.applicationPath else {
+                    throw ClientFailure.storageUnavailable
+                }
+            } else {
+                // Items created by signed code carry no application list: macOS
+                // stores their access as a partition list instead, and "no list"
+                // would otherwise mean any application. Require exactly this
+                // code's own team partition.
+                try verifyPartition(access, storage: storage)
             }
         }
         // This is a bounded ACL/path check, not equality of code requirements.
         // The actual no-UI read/sign is the OS check that this caller is trusted.
         // Owner/integrity/partition ACLs do not grant these sensitive operations.
+    }
+
+    /// macOS keeps a signed app's partition list in the one ACL entry that
+    /// carries the partition authorization; its description is the
+    /// hex-encoded property list `{Partitions: [...]}`.
+    private static func verifyPartition(_ access: SecAccess, storage: Storage) throws {
+        guard let partition = storage.partition,
+              let grants = SecAccessCopyMatchingACLList(access, kSecACLAuthorizationPartitionID) as? [Any],
+              !grants.isEmpty, grants.count <= 16 else {
+            throw ClientFailure.storageUnavailable
+        }
+        var lists: [[String]] = []
+        for grant in grants {
+            guard CFGetTypeID(grant as CFTypeRef) == SecACLGetTypeID() else {
+                throw ClientFailure.storageUnavailable
+            }
+            let authorizations = (SecACLCopyAuthorizations(grant as! SecACL) as? [String]) ?? []
+            guard authorizations.contains(kSecACLAuthorizationPartitionID as String) else { continue }
+            var applications: CFArray?
+            var description: CFString?
+            var prompt = SecKeychainPromptSelector(rawValue: 0)
+            guard SecACLCopyContents(grant as! SecACL, &applications, &description, &prompt) == errSecSuccess,
+                  let encoded = description as String?, encoded.utf8.count <= 8192, encoded.utf8.count % 2 == 0,
+                  let bytes = decodeHex(encoded),
+                  let plist = try? PropertyListSerialization.propertyList(from: bytes, format: nil),
+                  let partitions = (plist as? [String: Any])?["Partitions"] as? [String] else {
+                throw ClientFailure.storageUnavailable
+            }
+            lists.append(partitions)
+        }
+        guard lists == [[partition]] else { throw ClientFailure.storageUnavailable }
+    }
+
+    private static func decodeHex(_ text: String) -> Data? {
+        var bytes = Data(capacity: text.utf8.count / 2)
+        var high: UInt8?
+        for character in text.utf8 {
+            let nibble: UInt8
+            switch character {
+            case 48...57: nibble = character - 48
+            case 97...102: nibble = character - 87
+            case 65...70: nibble = character - 55
+            default: return nil
+            }
+            if let previous = high {
+                bytes.append(previous << 4 | nibble)
+                high = nil
+            } else {
+                high = nibble
+            }
+        }
+        return high == nil ? bytes : nil
+    }
+
+    /// The running code's team partition, or nil for ad-hoc and unsigned code.
+    private static func signingPartition() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf(SecCSFlags(), &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
+              let staticCode else { return nil }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation),
+                                            &information) == errSecSuccess,
+              let team = (information as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String,
+              !team.isEmpty, team.utf8.count <= 32,
+              team.utf8.allSatisfy({ (65...90).contains($0) || (48...57).contains($0) }) else { return nil }
+        return "teamid:" + team
     }
 
     private static func trustedPath(_ application: SecTrustedApplication) throws -> Data {

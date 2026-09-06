@@ -1974,13 +1974,16 @@ shared cards and plays Cosmos-synthesized spoken replies once the installation
 is approved at the speech profile; document capture and handoff are later
 capability increments, and installation approval does not grant them.
 
-Keychain binds the installation identity to the application that created it:
-its executable path and its code identity. The stable path keeps the first
-constant, and `REVIVAL_MACOS_CODESIGN_IDENTITY` (a Keychain code-signing
-identity name or SHA-1, for example an Apple Development certificate) keeps the
-second constant across rebuilds. An ad-hoc signed rebuild is a new application
-to Keychain, so the app then reports the stored identity as unusable rather than
-as a locked Keychain; reset the installation and enroll again. The app never
+Keychain binds the installation identity to the application that created it.
+For ad-hoc signed code that is the executable path plus the exact build, so
+every rebuild is a new application and the app reports the stored identity as
+unusable rather than as a locked Keychain; reset the installation and enroll
+again. For code signed with a team certificate, macOS instead restricts the
+items to that team's Keychain partition (`teamid:…`), which survives rebuilds;
+`REVIVAL_MACOS_CODESIGN_IDENTITY` (a Keychain code-signing identity name or
+SHA-1, for example an Apple Development certificate) selects that signing, and
+the vault verifies that the partition list names exactly its own team. The
+stable app path keeps the path binding constant in both cases. The app never
 substitutes plaintext storage when Keychain access is unavailable.
 
 For a broad change:
