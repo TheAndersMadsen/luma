@@ -1,5 +1,7 @@
-//! A single worker owns the native client. C sees public configuration,
+//! A single worker owns the native client. C and JNI see public configuration,
 //! bounded commands, and redacted snapshots; protected bytes stay in callbacks.
+#[cfg(target_os = "android")]
+mod android;
 use cosmos_surface_client::{
     Client, Config, Display, Error, OperationKind, Pending, Platform, PlatformError, SecureStore,
     Signer, TransportShutdown,
@@ -92,6 +94,11 @@ pub struct CosmosSurfaceCallbacks {
     pub read_journal: Option<ReadCallback>,
     pub write_journal_atomically: Option<WriteCallback>,
 }
+
+/// Platform-owned key, journal and nothing else. Every binding supplies one
+/// implementation; the worker never sees key material or journal contents.
+trait Bindings: Signer + SecureStore {}
+impl<T: Signer + SecureStore> Bindings for T {}
 
 struct Callbacks(CosmosSurfaceCallbacks);
 // SAFETY: The C contract requires a thread-safe context retained until the
@@ -267,6 +274,17 @@ impl CosmosSurface {
         }
     }
 
+    /// The oldest retained snapshot, consumed. Bindings without a caller
+    /// buffer take ownership of the exact bytes.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn take_event(&self) -> Option<Vec<u8>> {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshots
+            .pop_front()
+    }
+
     fn stop(&mut self) -> i32 {
         self.shutdown.send_replace(true);
         self.closed.store(true, Ordering::Release);
@@ -399,13 +417,15 @@ fn snapshot(
 
 async fn run(
     config: Config,
-    callbacks: Arc<Callbacks>,
+    callbacks: Arc<dyn Bindings>,
     mut commands: mpsc::Receiver<Command>,
     mut shutdown: watch::Receiver<bool>,
     events: Arc<Mutex<Events>>,
     shutdown_scope: &mut Option<TransportShutdown>,
 ) {
-    let mut client = match Client::new(config, callbacks.clone(), callbacks) {
+    let signer: Arc<dyn Signer> = callbacks.clone();
+    let store: Arc<dyn SecureStore> = callbacks;
+    let mut client = match Client::new(config, signer, store) {
         Ok(client) => client,
         Err(error) => {
             push(
@@ -594,8 +614,25 @@ pub unsafe extern "C" fn cosmos_surface_create(
             Ok(config) => config,
             Err(code) => return code,
         };
+        match spawn(config, Arc::new(Callbacks(callbacks))) {
+            Ok(handle) => {
+                // SAFETY: Transfer ownership only after the join guard is installed.
+                unsafe {
+                    *output = Box::into_raw(handle);
+                }
+                OK
+            }
+            Err(code) => code,
+        }
+    })
+}
+
+/// Start the owned worker for one platform binding. The returned handle owns
+/// the worker; its process permit is released only after SDK cleanup ends.
+fn spawn(config: Config, callbacks: Arc<dyn Bindings>) -> Result<Box<CosmosSurface>, i32> {
+    {
         let Some(permit) = ClientPermit::acquire() else {
-            return QUEUE_FULL;
+            return Err(QUEUE_FULL);
         };
         let (commands, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let (shutdown, stop) = watch::channel(false);
@@ -610,7 +647,6 @@ pub unsafe extern "C" fn cosmos_surface_create(
             callbacks_finished: Mutex::new(Some(callbacks_finished)),
             worker: None,
         });
-        let callbacks = Arc::new(Callbacks(callbacks));
         let worker = thread::Builder::new()
             .name("cosmos-surface".into())
             .spawn(move || {
@@ -682,14 +718,10 @@ pub unsafe extern "C" fn cosmos_surface_create(
             });
         handle.worker = match worker {
             Ok(worker) => Some(worker),
-            Err(_) => return UNAVAILABLE,
+            Err(_) => return Err(UNAVAILABLE),
         };
-        // SAFETY: Transfer ownership only after the join guard is installed.
-        unsafe {
-            *output = Box::into_raw(handle);
-        }
-        OK
-    })
+        Ok(handle)
+    }
 }
 
 unsafe fn enqueue(surface: *mut CosmosSurface, command: Command) -> i32 {

@@ -32,6 +32,11 @@ function timedStage(label, action, { now = () => process.hrtime.bigint(), report
 }
 
 function exitLikeChild(result) {
+  // A captured child already failed silently; its diagnostics must reach the
+  // operator before this process adopts its exit status.
+  if (typeof result.stderr === 'string' && result.stderr.trim()) {
+    process.stderr.write(result.stderr.endsWith('\n') ? result.stderr : `${result.stderr}\n`);
+  }
   if (result.signal) {
     // This is called only at the outer boundary, after synchronous `finally`
     // blocks and registered cleanup actions have had a chance to run.

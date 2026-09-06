@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Network for the owner's Cosmos only. No microphone, overlay, accessibility
+         or notification-listener permission: this surface is text and one shared card. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application android:name=".CosmosApplication" android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Cosmos" android:allowBackup="false" android:supportsRtl="true"
+        android:extractNativeLibs="false">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
+        <activity android:name=".AssistActivity" android:exported="true"
+            android:theme="@style/Theme.Cosmos.Overlay" android:excludeFromRecents="true" android:launchMode="singleInstance">
+            <intent-filter><action android:name="android.intent.action.ASSIST"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
+        </activity>
+    </application>
+</manifest>

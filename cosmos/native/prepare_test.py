@@ -34,6 +34,26 @@ class NativeInputs(unittest.TestCase):
             with self.assertRaises(ValueError):
                 prepare.verify(archive, {**expected, "sha256": "0" * 64})
 
+    def test_omitted_foreign_sysroot_is_neither_extracted_nor_expected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "input.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("fixture/lib/libwebrtc.a", b"synthetic archive")
+                # Case-colliding names cannot both exist on a case-insensitive filesystem.
+                bundle.writestr("fixture/include/build/linux/sysroot/ipt_ECN.h", b"upper")
+                bundle.writestr("fixture/include/build/linux/sysroot/ipt_ecn.h", b"lower")
+            omit = ("include/build/linux/",)
+            prepare.extract(archive, root, "fixture", omit)
+            self.assertFalse((root / "fixture/include/build").exists())
+            prepare.verify_materialized(archive, root / "fixture", omit)
+            with self.assertRaises(ValueError):
+                prepare.verify_materialized(archive, root / "fixture")
+            (root / "fixture/include/build/linux/sysroot").mkdir(parents=True)
+            (root / "fixture/include/build/linux/sysroot/extra.h").write_bytes(b"stray")
+            with self.assertRaises(ValueError):
+                prepare.verify_materialized(archive, root / "fixture", omit)
+
     def test_archive_paths_and_links_rejected_before_extraction(self):
         for name, mode in [("fixture/../../escape", 0), ("/escape", 0), ("other/file", 0), ("fixture/link", 0o120777)]:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:

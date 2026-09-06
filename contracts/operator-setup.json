@@ -150,6 +150,42 @@
       "documentationAnchor": "README.md#development"
     },
     {
+      "id": "client.build.android",
+      "tokens": ["client", "build", "android"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build the Android development APK (Pixel and Android TV) outside the source checkout.",
+      "usage": "revival client build android",
+      "documentationAnchor": "README.md#development"
+    },
+    {
+      "id": "client.check.android",
+      "tokens": ["client", "check", "android"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Cross-compile, unit-test and assemble the Android client without installing it.",
+      "usage": "revival client check android",
+      "documentationAnchor": "README.md#development"
+    },
+    {
+      "id": "client.install.android",
+      "tokens": ["client", "install", "android"],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Install the built development APK on one exact Android device.",
+      "usage": "revival client install android --serial SERIAL [--confirm]",
+      "documentationAnchor": "README.md#development"
+    },
+    {
       "id": "init",
       "tokens": [
         "init"

@@ -12,6 +12,13 @@ use livekit_token::{AccessToken, VideoGrants};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
 
+/// Android binds the SDK to the application's JVM and context once per
+/// process before any room is opened. Idempotent; the caller keeps the VM.
+#[cfg(target_os = "android")]
+pub fn initialize_android(vm: &jni::JavaVM, context: &jni::objects::JObject) -> bool {
+    livekit::webrtc::android::initialize_android_context(vm, context)
+}
+
 pub const MAX_PAYLOAD: usize = 12 * 1024;
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(3);
 const METHOD: &str = "cosmos.coordinate.v1";

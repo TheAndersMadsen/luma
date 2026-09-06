@@ -25,10 +25,17 @@ def verify(archive, expected):
         raise ValueError("libwebrtc archive size or SHA-256 mismatch")
 
 
-def extract(archive, destination, root_name):
+def omitted(member, root_name, omit):
+    """Members under an omitted prefix are never extracted or compared."""
+    relative = PurePosixPath(member).relative_to(root_name) if member.startswith(root_name + "/") else None
+    return relative is not None and any(str(relative).startswith(prefix) for prefix in omit)
+
+
+def extract(archive, destination, root_name, omit=()):
     with zipfile.ZipFile(archive) as bundle:
         names = set()
         total = 0
+        members = []
         for item in bundle.infolist():
             path = PurePosixPath(item.filename)
             mode = item.external_attr >> 16
@@ -39,19 +46,21 @@ def extract(archive, destination, root_name):
                     or stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR)):
                 raise ValueError("invalid libwebrtc archive member")
             names.add(item.filename)
-        bundle.extractall(destination)
+            if not omitted(item.filename, root_name, omit):
+                members.append(item)
+        bundle.extractall(destination, members=members)
     # Python deliberately does not restore zip mode bits. Inputs are data; no
     # downloaded executable is run during acquisition or compilation.
     for path in (destination / root_name).rglob("*"):
         path.chmod(0o700 if path.is_dir() else 0o600)
 
 
-def verify_materialized(archive, root):
+def verify_materialized(archive, root, omit=()):
     """Compare every compiler input with bytes from the authenticated archive."""
     expected = set()
     with zipfile.ZipFile(archive) as bundle:
         for item in bundle.infolist():
-            if item.is_dir():
+            if item.is_dir() or omitted(item.filename, root.name, omit):
                 continue
             relative = PurePosixPath(item.filename).relative_to(root.name)
             expected.add(str(relative))
@@ -75,6 +84,10 @@ def verify_materialized(archive, root):
 def prepare(cache, target):
     contract = json.loads(Path(__file__).with_name("webrtc.json").read_text())
     expected = contract["assets"][target]
+    # Some archives carry foreign sysroots the target never compiles against;
+    # their case-colliding names cannot even materialize on case-insensitive
+    # filesystems. The contract names them, and the remaining tree stays exact.
+    omit = tuple(expected.get("omit", ()))
     cache = cache.resolve()
     checkout = Path(__file__).resolve().parents[2]
     if cache == checkout or checkout in cache.parents:
@@ -115,11 +128,11 @@ def prepare(cache, target):
         if root.exists():
             if root.is_symlink():
                 raise ValueError("cached libwebrtc root must not be a symlink")
-            verify_materialized(archive, root)
+            verify_materialized(archive, root, omit)
         else:
             destination = Path(tempfile.mkdtemp(prefix="extract-", dir=cache))
             try:
-                extract(archive, destination, root_name)
+                extract(archive, destination, root_name, omit)
                 os.rename(destination / root_name, root)
             finally:
                 shutil.rmtree(destination)

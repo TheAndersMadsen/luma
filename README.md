@@ -1914,6 +1914,26 @@ installed `/Applications/Xcode_VERSION.app/Contents/Developer`. It leaves the
 system's developer-tool selection unchanged. Command Line Tools alone omit
 the XCTest framework needed by the client tests.
 
+The Android client (Pixel and, later, Android TV) reuses the same shared Rust
+client, cross-compiled with the NDK release the Pin builder pins and wrapped in
+a Kotlin shell. It needs an Android SDK at `ANDROID_HOME` with platform 35,
+build-tools 35.0.0 and `ndk;28.2.13676358`, plus
+`rustup target add aarch64-linux-android` for the pinned toolchain:
+
+```sh
+./revival client check android
+./revival client build android
+./revival client install android --serial SERIAL --confirm
+```
+
+The verified `android-arm64` libwebrtc input is pinned in
+`cosmos/native/webrtc.json` like the desktop inputs. Installation targets one
+exact `adb` serial and prints only a plan without `--confirm`. The app keeps
+its P-256 installation key in the Android Keystore, stores the client journal
+encrypted in app-private storage, reports the foreground activity as visible
+and acknowledges each delivered card once it is composed. It offers to become
+the default digital assistant so the panel opens over the current app.
+
 The check compiles and tests the Rust core, C bridge and Swift shell. The build
 prints an external `Cosmos.app` path and verifies its local ad-hoc signature;
 neither command launches or installs the app. Distribution signing, notarization

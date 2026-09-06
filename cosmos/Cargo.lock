@@ -631,6 +631,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
+ "jni",
  "livekit",
  "livekit-net",
  "livekit-token",
@@ -676,7 +677,9 @@ dependencies = [
 name = "cosmos-surface-client-ffi"
 version = "0.1.0"
 dependencies = [
+ "cosmos-rtc",
  "cosmos-surface-client",
+ "jni",
  "serde",
  "serde_json",
  "tokio",

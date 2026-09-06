@@ -15,10 +15,16 @@ function ownDirectory(directory) {
   return directory;
 }
 
+const USAGE = 'usage: ./revival client (build | check) (macos | android) | ./revival client install android --serial SERIAL [--confirm]';
+
 function clientCommand(args) {
   const [operation, platform, ...extra] = args;
+  if (platform === 'android') {
+    androidClient(operation, extra);
+    return;
+  }
   if (!['build', 'check'].includes(operation) || platform !== 'macos' || extra.length) {
-    fail('usage: ./revival client build macos | ./revival client check macos', 64);
+    fail(USAGE, 64);
   }
   if (process.platform !== 'darwin' || process.arch !== 'arm64') {
     fail('The macOS client currently builds on an Apple Silicon Mac with the Apple developer tools.');
@@ -124,6 +130,126 @@ function clientCommand(args) {
   ], { env: environment });
   info(`[implemented] development app: ${application}`);
   info('[observed] Ad-hoc signed local development build; distribution signing, notarization and device acceptance remain separate.');
+}
+
+function pinnedNdkVersion() {
+  const contract = JSON.parse(fs.readFileSync(path.join(ROOT, 'platform/containers/pin-builder/toolchain.json'), 'utf8'));
+  const version = contract?.toolchain?.android?.ndk;
+  if (typeof version !== 'string' || !/^[0-9][0-9.]*$/u.test(version)) {
+    throw new Error('pin-builder toolchain.json must pin the Android NDK version');
+  }
+  return version;
+}
+
+function androidHome(environment) {
+  const home = environment.ANDROID_HOME || environment.ANDROID_SDK_ROOT;
+  if (!home || !fs.existsSync(path.join(home, 'platform-tools'))) {
+    fail('Android client builds need an Android SDK at ANDROID_HOME (platform-tools, platforms;android-35, build-tools;35.0.0).');
+  }
+  return home;
+}
+
+/// The Pixel/TV client compiles the same shared Rust library the macOS app
+/// uses, cross-built with the NDK the Pin builder pins, and a Kotlin shell.
+/// Nothing is generated inside the checkout; the APK is a development build.
+function androidClient(operation, extra) {
+  const install = operation === 'install';
+  if (!['build', 'check', 'install'].includes(operation)) fail(USAGE, 64);
+  let serial = null;
+  let confirmed = false;
+  if (install) {
+    for (let index = 0; index < extra.length; index += 1) {
+      if (extra[index] === '--serial' && /^[A-Za-z0-9._:-]{1,64}$/u.test(extra[index + 1] || '')) {
+        serial = extra[index + 1];
+        index += 1;
+      } else if (extra[index] === '--confirm') {
+        confirmed = true;
+      } else {
+        fail(USAGE, 64);
+      }
+    }
+    if (!serial) fail('client install android requires --serial SERIAL from `adb devices`', 64);
+  } else if (extra.length) {
+    fail(USAGE, 64);
+  }
+  const projectPath = path.join(ROOT, 'clients', 'android');
+  if (!fs.existsSync(path.join(projectPath, 'settings.gradle.kts'))) {
+    fail('Native client builds require the source checkout.');
+  }
+  if (isInsideSource(BUILD_DIR)) {
+    fail('Native client build output must remain outside the source checkout.');
+  }
+  const base = ownDirectory(path.join(BUILD_DIR, 'android-client'));
+  const apk = path.join(base, 'Cosmos-debug.apk');
+  if (install) {
+    if (!fs.existsSync(apk)) fail(`Build the client first: ${apk} does not exist.`);
+    const environment = cosmosTestEnvironment();
+    info(`[plan] adb -s ${serial} install -r ${apk}`);
+    if (!confirmed) {
+      info('[plan] Pass --confirm to install this development build on exactly that device.');
+      return;
+    }
+    timedRun('development APK installation', 'adb', ['-s', serial, 'install', '-r', apk], { env: environment });
+    info(`[implemented] installed ${apk} on ${serial}; enrollment and Center approval remain explicit steps in the app.`);
+    return;
+  }
+  const environment = cosmosTestEnvironment();
+  validateHostToolchains({ includeRust: true, env: environment });
+  const sdk = androidHome(environment);
+  const ndk = path.join(sdk, 'ndk', pinnedNdkVersion());
+  if (!fs.existsSync(path.join(ndk, 'source.properties'))) {
+    fail(`Android NDK ${pinnedNdkVersion()} is required under ${path.join(sdk, 'ndk')} (the version the Pin builder pins).`);
+  }
+  const rustup = environment.RUSTUP_HOME || path.join(require('node:os').homedir(), '.rustup');
+  const toolchains = fs.existsSync(path.join(rustup, 'toolchains')) ? fs.readdirSync(path.join(rustup, 'toolchains')) : [];
+  if (!toolchains.some((name) => fs.existsSync(path.join(rustup, 'toolchains', name, 'lib', 'rustlib', 'aarch64-linux-android')))) {
+    fail('Install the Android Rust target for the pinned toolchain: rustup target add aarch64-linux-android');
+  }
+  const native = timedRun('Android verified WebRTC inputs', 'python3', [
+    path.join(ROOT, 'cosmos/native/prepare.py'), '--cache', path.join(BUILD_DIR, 'webrtc'), '--target', 'android-arm64',
+  ], { env: environment, capture: true }).stdout.trim();
+  if (!native.startsWith(path.join(BUILD_DIR, 'webrtc') + path.sep)) {
+    throw new Error('Native inputs must remain in the verified external cache');
+  }
+  const buildEnvironment = { ...environment, LK_CUSTOM_WEBRTC: native, ANDROID_NDK_HOME: ndk, ANDROID_NDK_ROOT: ndk };
+  timedRun('Android shared client library', 'cargo', [
+    'ndk', '-t', 'arm64-v8a', '--platform', '29', 'build', '--locked', '--release',
+    '--package', 'cosmos-surface-client-ffi', '--lib',
+  ], { cwd: path.join(ROOT, 'cosmos'), env: buildEnvironment });
+  const libraryName = 'libcosmos_surface_client_ffi.so';
+  const jniLibs = path.join(base, 'jniLibs');
+  fs.rmSync(jniLibs, { recursive: true, force: true });
+  fs.mkdirSync(path.join(jniLibs, 'arm64-v8a'), { recursive: true, mode: 0o700 });
+  fs.copyFileSync(
+    path.join(environment.CARGO_TARGET_DIR, 'aarch64-linux-android', 'release', libraryName),
+    path.join(jniLibs, 'arm64-v8a', libraryName),
+  );
+  const gradleBuild = path.join(base, 'gradle-build');
+  const gradleArguments = [
+    '--no-daemon', '--console=plain',
+    '--project-cache-dir', path.join(base, 'gradle-project-cache'),
+    `-PcosmosBuildDir=${gradleBuild}`,
+    `-PcosmosJniLibs=${jniLibs}`,
+    `-PcosmosWebrtcJar=${path.join(native, 'libwebrtc.jar')}`,
+    `-Pkotlin.project.persistent.dir=${path.join(base, 'kotlin-persistent')}`,
+  ];
+  if (operation === 'check') {
+    timedRun('Android client unit tests', 'sh', ['./gradlew', ...gradleArguments, 'testDebugUnitTest'], {
+      cwd: projectPath, env: buildEnvironment,
+    });
+  }
+  timedRun('Android client APK', 'sh', ['./gradlew', ...gradleArguments, 'assembleDebug'], {
+    cwd: projectPath, env: buildEnvironment,
+  });
+  const built = path.join(gradleBuild, '_app', 'outputs', 'apk', 'debug', 'app-debug.apk');
+  if (!fs.existsSync(built)) throw new Error(`Gradle did not produce ${built}`);
+  fs.copyFileSync(built, apk);
+  if (operation === 'check') {
+    info('[implemented] Android client library cross-compilation, unit tests and APK assembly passed; nothing was installed.');
+    return;
+  }
+  info(`[implemented] development APK: ${apk}`);
+  info('[observed] Debug-signed local build; distribution signing, Play or device acceptance remain separate. Install with ./revival client install android --serial SERIAL --confirm.');
 }
 
 module.exports = { clientCommand };

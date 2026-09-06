@@ -1,0 +1,5 @@
+<resources>
+    <color name="cosmos_icon_background">#090B0C</color>
+    <color name="cosmos_text">#58F4F1</color>
+    <color name="cosmos_glow">#27E6DF</color>
+</resources>
