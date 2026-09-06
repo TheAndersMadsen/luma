@@ -329,6 +329,30 @@
       "limitation": "Frame assembly only. Playback and acknowledgment belong to platform code; no audio decoding, device output or physical acceptance is established."
     },
     {
+      "id": "recent-context-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn recent_context_note",
+      "scope": "Defines the owner's bounded recent context: a completed place lookup leaves only the user's own query text, its source surface and class for ten minutes; a later turn from any origin at or below the shared-room ceiling is offered it as one logged sentence of cognition context and may re-propose the same place lookup under its own origin's permission and an explicit target screen.",
+      "limitation": "One memory kind, one entry per owner, no owner-visible listing or deletion yet beyond expiry. Provider content stays transient; the memory is not evidence that the place was rendered, remembered correctly or wanted again."
+    },
+    {
+      "id": "recent-context-state-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/lookup.rs",
+      "anchor": "fn recent_place_context_is_remembered_offered_and_expired_under_the_shared_room_ceiling",
+      "scope": "Defines that only a completed place lookup with a bounded query leaves recent context, that the current fence alone is offered it, that a stale fence is refused, and that expiry clears it during reconcile.",
+      "limitation": "In-memory state definition only; no cross-device or physical acceptance."
+    },
+    {
+      "id": "recent-context-conversation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/places_service_tests.rs",
+      "anchor": "async fn ambiance_places_conversation_leaves_recent_context_for_the_next_request",
+      "scope": "Defines that a browser's completed place lookup is remembered as its own query, that the following request's cognition is offered it exactly once with the source surface in the ledger, and that durable state and ledger still carry no provider content across both turns.",
+      "limitation": "Synthetic provider, cognition and browser fixture. It does not establish a Pin origin, a Pixel render, navigation or the owner's actual intent."
+    },
+    {
       "id": "speech-disclosure-owner-api-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/surface_api.rs",
@@ -946,8 +970,8 @@
       "sourceSections": ["4.2", "4.4", "4.6", "5.3", "7"],
       "requirement": "A Pin request opens maps on Pixel for the restaurant the owner just selected on a computer, using the existing scoped task context.",
       "acceptance": "Resolve the exact selected place ID, address and coordinates from authorized current context, clarify ambiguity, then bind the maps action to the selected Pixel and its current permission/connection. Verify the intended destination opens; distinguish app launch from actual navigation start and keep unknown effects explicit. Test stale selections, two places with the same name, locked/unavailable phone and replay.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": ["recent-context-definition", "recent-context-state-test-definition", "recent-context-conversation-test-definition", "routing-hint-policy-test-definition"]
     },
     {
       "id": "private-message-personal-continuation",

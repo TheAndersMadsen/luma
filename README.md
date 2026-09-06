@@ -308,6 +308,17 @@ only, never occupancy, privacy or actor evidence. Losing the foreground fails
 dispatch-time revalidation, so a shown card is cancelled and the logged
 fallback receives its own new action.
 
+A completed place lookup now leaves bounded recent context for the owner: the
+user's own query text with its source surface and privacy class, for ten
+minutes, in the durable runtime state (provider content stays transient). The
+next request from any surface at or below the shared-room ceiling is offered
+that context as one sentence of cognition context, and the offer is logged
+against the turn. "Show me the way to the restaurant I just found on the
+computer" therefore becomes a new place lookup under the asking origin's own
+lookup permission, routed by the usual policy and an explicit target such as
+the phone. Owner listing and deletion of this memory beyond expiry, and other
+context kinds, are later increments.
+
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
 `android_tv`) only from explicit request text such as "show this on the TV".
 Policy treats it as the paper's hint: it adds a bounded rank component to

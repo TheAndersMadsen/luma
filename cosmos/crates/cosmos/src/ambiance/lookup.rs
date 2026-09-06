@@ -152,6 +152,7 @@ pub(super) struct Completion {
     pub evidence_digest: String,
     pub privacy: PrivacyClass,
     pub visual: Option<super::visual::Reference>,
+    pub query_text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,15 +471,39 @@ impl RuntimeState {
         let turn = self.turn.as_mut().unwrap();
         turn.privacy = receipt.privacy;
         turn.lookup.as_mut().unwrap().receipt = Some(receipt.clone());
-        Ok((
-            receipt.clone(),
-            vec![RuntimeData::LookupCompleted {
-                fence,
-                id: lookup.id,
-                policy_revision: lookup.policy_revision,
-                receipt,
-            }],
-        ))
+        let source_surface = turn.fence.origin_surface;
+        let mut events = vec![RuntimeData::LookupCompleted {
+            fence,
+            id: lookup.id,
+            policy_revision: lookup.policy_revision,
+            receipt: receipt.clone(),
+        }];
+        // A completed place lookup leaves the owner's own query text as
+        // bounded recent context. Provider content stays transient.
+        if lookup.request.provider.provider.service() == LookupService::Places
+            && receipt.visual.is_some()
+            && receipt.privacy <= PrivacyClass::SharedRoom
+            && let Some(text) = completion
+                .query_text
+                .filter(|text| !text.trim().is_empty() && text.len() <= 512)
+        {
+            let expires_at_ms = now.saturating_add(super::state::RECENT_CONTEXT_MS);
+            self.recent_context = Some(super::state::RecentContext {
+                kind: super::state::RecentContextKind::PlaceQuery,
+                text,
+                source_surface,
+                privacy: receipt.privacy,
+                created_at_ms: now,
+                expires_at_ms,
+            });
+            events.push(RuntimeData::RecentContextRemembered {
+                context: super::state::RecentContextKind::PlaceQuery,
+                source_surface,
+                privacy: receipt.privacy,
+                expires_at_ms,
+            });
+        }
+        Ok((receipt, events))
     }
 }
 
@@ -911,6 +936,7 @@ mod tests {
                         lookup: lookup.clone(),
                         evidence_digest: hash(b"actual bounded evidence"),
                         privacy,
+                        query_text: None,
                     },
                     now,
                 )
@@ -1325,7 +1351,8 @@ mod tests {
                         fence: f.fence.clone(),
                         lookup: lookup.clone(),
                         evidence_digest: receipt.evidence_digest.clone(),
-                        privacy: PrivacyClass::SharedRoom
+                        privacy: PrivacyClass::SharedRoom,
+                        query_text: None,
                     },
                     131
                 )
@@ -1412,7 +1439,8 @@ mod tests {
                         fence: f.fence.clone(),
                         lookup: changed,
                         evidence_digest: hash(b"evidence"),
-                        privacy: PrivacyClass::SharedRoom
+                        privacy: PrivacyClass::SharedRoom,
+                        query_text: None,
                     },
                     126
                 )
@@ -1430,7 +1458,8 @@ mod tests {
                     fence: f.fence.clone(),
                     lookup: lookup.clone(),
                     evidence_digest: "not-a-digest".into(),
-                    privacy: PrivacyClass::SharedRoom
+                    privacy: PrivacyClass::SharedRoom,
+                    query_text: None,
                 },
                 127
             ),
@@ -1498,7 +1527,8 @@ mod tests {
                             fence: stale,
                             lookup: lookup.clone(),
                             evidence_digest: hash(b"evidence"),
-                            privacy: PrivacyClass::SharedRoom
+                            privacy: PrivacyClass::SharedRoom,
+                            query_text: None,
                         },
                         125
                     )
@@ -1525,7 +1555,8 @@ mod tests {
                         fence: f.fence.clone(),
                         lookup,
                         evidence_digest: hash(b"late evidence"),
-                        privacy: PrivacyClass::SharedRoom
+                        privacy: PrivacyClass::SharedRoom,
+                        query_text: None,
                     },
                     120 + LOOKUP_MS
                 )
@@ -1641,7 +1672,8 @@ mod tests {
                         fence: f.fence.clone(),
                         lookup,
                         evidence_digest: hash(b"revoked late evidence"),
-                        privacy: PrivacyClass::SharedRoom
+                        privacy: PrivacyClass::SharedRoom,
+                        query_text: None,
                     },
                     132
                 )
@@ -1740,7 +1772,8 @@ mod tests {
                     fence: f.fence.clone(),
                     lookup,
                     evidence_digest: hash(b"replacement late evidence"),
-                    privacy: PrivacyClass::SharedRoom
+                    privacy: PrivacyClass::SharedRoom,
+                    query_text: None,
                 },
                 130
             )
@@ -2234,6 +2267,7 @@ mod tests {
                                 lookup,
                                 evidence_digest: hash(b"revoked service evidence"),
                                 privacy: PrivacyClass::SharedRoom,
+                                query_text: None,
                             },
                             126
                         )
@@ -2389,6 +2423,7 @@ mod tests {
                             evidence_digest: hash(b"bounded place evidence"),
                             privacy: PrivacyClass::Private,
                             visual,
+                            query_text: None,
                         },
                         125
                     ),
@@ -2419,6 +2454,7 @@ mod tests {
                         evidence_digest: hash(b"bounded place evidence"),
                         privacy: PrivacyClass::SharedRoom,
                         visual: Some(visual.clone()),
+                        query_text: None,
                     },
                     125,
                 )
@@ -2592,6 +2628,7 @@ mod tests {
                 evidence_digest: hash(b"transient place evidence"),
                 privacy: PrivacyClass::SharedRoom,
                 visual: Some(visual.clone()),
+                query_text: None,
             },
             121,
         )
@@ -2715,6 +2752,7 @@ mod tests {
                     evidence_digest: hash(b"actual bounded evidence"),
                     privacy: PrivacyClass::SharedRoom,
                     visual: Some(visual_reference(135)),
+                    query_text: None,
                 },
                 121
             ),
@@ -3076,6 +3114,7 @@ mod tests {
                     evidence_digest: hash(b"transient place evidence"),
                     privacy: PrivacyClass::SharedRoom,
                     visual: Some(visual_reference(140)),
+                    query_text: None,
                 },
                 121,
             )
@@ -3240,5 +3279,79 @@ mod tests {
             .unwrap(),
             RuntimeResult::Blocked
         ));
+    }
+
+    #[test]
+    fn recent_place_context_is_remembered_offered_and_expired_under_the_shared_room_ceiling() {
+        let mut fixture = Fixture::ready(Kind::Browser);
+        fixture
+            .set_service_policy(
+                LookupService::Places,
+                0,
+                Some(service_policy(LookupService::Places)),
+                112,
+            )
+            .unwrap();
+        let RuntimeResult::LookupStarted(lookup) =
+            fixture.start_service(LookupService::Places, 120).unwrap()
+        else {
+            panic!("places lookup capability")
+        };
+        // A web receipt or an absent query leaves no memory; a place query does.
+        let RuntimeResult::LookupCompleted(_) = fixture
+            .apply(
+                RuntimeOperation::CompleteLookup {
+                    fence: fixture.fence.clone(),
+                    lookup: lookup.clone(),
+                    evidence_digest: hash(b"actual bounded evidence"),
+                    privacy: PrivacyClass::SharedRoom,
+                    visual: Some(visual_reference(130 + 60_000)),
+                    query_text: Some("observatory Copenhagen".into()),
+                },
+                130,
+            )
+            .unwrap()
+        else {
+            panic!("committed lookup receipt")
+        };
+        let remembered = fixture
+            .state
+            .recent_context
+            .clone()
+            .expect("recent place query");
+        assert_eq!(
+            remembered.kind,
+            super::super::state::RecentContextKind::PlaceQuery
+        );
+        assert_eq!(remembered.text, "observatory Copenhagen");
+        assert_eq!(remembered.source_surface, fixture.fence.origin_surface);
+        assert_eq!(remembered.privacy, PrivacyClass::SharedRoom);
+        assert_eq!(
+            remembered.expires_at_ms,
+            130 + super::super::state::RECENT_CONTEXT_MS
+        );
+        // The current turn is offered the memory once per request; a stale
+        // fence gets nothing, and expiry clears it for everyone.
+        let RuntimeResult::RecentContext(Some(offered)) = fixture
+            .apply(
+                RuntimeOperation::RecentContext {
+                    fence: fixture.fence.clone(),
+                },
+                140,
+            )
+            .unwrap()
+        else {
+            panic!("offered recent context")
+        };
+        assert_eq!(offered, remembered);
+        let mut stale = fixture.fence.clone();
+        stale.generation += 1;
+        assert!(matches!(
+            fixture.apply(RuntimeOperation::RecentContext { fence: stale }, 141),
+            Err(RuntimeError::Stale)
+        ));
+        let expiry = 130 + super::super::state::RECENT_CONTEXT_MS;
+        fixture.state.reconcile(&fixture.records, expiry);
+        assert!(fixture.state.recent_context.is_none());
     }
 }

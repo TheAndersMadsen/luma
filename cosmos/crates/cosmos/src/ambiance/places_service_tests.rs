@@ -1,5 +1,5 @@
 use super::*;
-use crate::ambiance::{Action, ActionStatus, Channel, InputStamp, RuntimeData, ledger::LedgerEvent};
+use crate::ambiance::{Action, ActionStatus, BrowserControl, Channel, InputStamp, RecentContextKind, RoomProof, RuntimeData, ledger::LedgerEvent};
 use crate::backends::{
     lookup::{LookupProviderIdentity, LookupService},
     places::{self, LookupEvidence, LookupPlace},
@@ -823,4 +823,68 @@ async fn ambiance_places_conversation_owner_revocation_retires_cached_content_wi
     assert!(f.runtime.visual_card(f.principal(), &action).is_none());
     assert_eq!(f.calls.load(Ordering::SeqCst), 1);
     f.assert_content_free_state().await;
+}
+
+/// "The restaurant I just found on the computer": a completed place lookup
+/// leaves the owner's own query as bounded recent context, and the next
+/// request's cognition is offered it under the ledger's eye. Provider content
+/// still never enters durable state.
+#[tokio::test]
+async fn ambiance_places_conversation_leaves_recent_context_for_the_next_request() {
+    let f = places_fixture(200, source_response(), false).await;
+    f.allow_places().await;
+    let RuntimeResult::Proposed(first) = f.request(f.stamp(1)).await.unwrap() else {
+        panic!("structured Places proposal")
+    };
+    let state = f.store.ambiance_runtime_state(f.principal()).await;
+    let context = state.recent_context.clone().expect("recent place query");
+    assert_eq!(context.text.trim(), QUERY);
+    assert_eq!(context.source_surface, f.browser.surface_id);
+    assert_eq!(context.privacy, PrivacyClass::SharedRoom);
+    f.assert_content_free_state().await;
+    f.store
+        .runtime(
+            f.principal(),
+            RuntimeOperation::RoomControl {
+                connection: RoomProof::Browser(f.browser.clone()),
+                stamp: InputStamp {
+                    epoch: f.epoch,
+                    sequence: 2,
+                    instance_id: first.turn_id,
+                },
+                control: BrowserControl::Cancel {
+                    turn_id: first.turn_id,
+                    generation: first.generation,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let RuntimeResult::Proposed(second) = f.request(f.stamp(3)).await.unwrap() else {
+        panic!("second structured Places proposal")
+    };
+    assert_ne!(second.turn_id, first.turn_id);
+    let ledger = f.store.ambiance_ledger_events(f.principal()).await;
+    let offered = ledger.iter().filter(|event| match event {
+        LedgerEvent::Runtime(event) => matches!(
+            &event.data,
+            RuntimeData::RecentContextOffered { fence, context, source_surface, .. }
+                if fence.turn_id == second.turn_id
+                    && *context == RecentContextKind::PlaceQuery
+                    && *source_surface == f.browser.surface_id
+        ),
+        _ => false,
+    });
+    assert_eq!(offered.count(), 1);
+    assert!(ledger.iter().any(|event| matches!(
+        event,
+        LedgerEvent::Runtime(event) if matches!(event.data, RuntimeData::RecentContextRemembered { .. })
+    )));
+    assert_eq!(f.calls.load(Ordering::SeqCst), 2);
+    // Two conversational turns, still no provider content in durable state.
+    let state = serde_json::to_string(&f.store.ambiance_runtime_state(f.principal()).await).unwrap();
+    let ledger = serde_json::to_string(&ledger).unwrap();
+    for content in [PLACE_ID, PLACE_NAME, ADDRESS, SOURCE_URL, ATTRIBUTION, PROVIDER_KEY] {
+        assert!(!state.contains(content) && !ledger.contains(content), "{content}");
+    }
 }

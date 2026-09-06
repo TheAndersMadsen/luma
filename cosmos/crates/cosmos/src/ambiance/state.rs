@@ -167,6 +167,12 @@ pub enum RuntimeOperation {
         evidence_digest: String,
         privacy: PrivacyClass,
         visual: Option<super::visual::Reference>,
+        /// The user's own query text, retained as bounded recent context.
+        query_text: Option<String>,
+    },
+    /// Offer the owner's recent context to the current turn's cognition.
+    RecentContext {
+        fence: TurnFence,
     },
     SetDisclosurePolicy {
         surface_id: Uuid,
@@ -322,6 +328,7 @@ pub enum RuntimeResult {
     LookupStarted(super::lookup::Lookup),
     LookupCurrent,
     LookupCompleted(super::lookup::Receipt),
+    RecentContext(Option<RecentContext>),
     PinOpened {
         connection: super::PinConnection,
         duplicate: bool,
@@ -474,6 +481,30 @@ struct OutputProposal {
     confirmation: Option<DisplayConfirmation>,
     hint: Option<policy::RoutingTarget>,
 }
+/// Bounded owner memory of the last completed place lookup: the user's own
+/// query text, never provider content. It is scoped to the owner, classed by
+/// the turn that produced it and offered to a later turn only as bounded
+/// cognition context, so "the restaurant I just found on the computer" can be
+/// looked up again under the new origin's own lookup permission.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecentContext {
+    pub kind: RecentContextKind,
+    pub text: String,
+    pub source_surface: Uuid,
+    pub privacy: PrivacyClass,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecentContextKind {
+    PlaceQuery,
+}
+
+pub const RECENT_CONTEXT_MS: i64 = 600_000;
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeState {
@@ -496,6 +527,8 @@ pub struct RuntimeState {
     pub lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
     #[serde(default)]
     pub place_lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
+    #[serde(default)]
+    pub recent_context: Option<RecentContext>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -669,6 +702,18 @@ pub enum RuntimeData {
         id: Uuid,
         policy_revision: u64,
         receipt: super::lookup::Receipt,
+    },
+    RecentContextRemembered {
+        context: RecentContextKind,
+        source_surface: Uuid,
+        privacy: PrivacyClass,
+        expires_at_ms: i64,
+    },
+    RecentContextOffered {
+        fence: TurnFence,
+        context: RecentContextKind,
+        source_surface: Uuid,
+        privacy: PrivacyClass,
     },
     ProviderDisclosureStarted {
         fence: TurnFence,
@@ -1130,6 +1175,13 @@ impl RuntimeState {
     /// heartbeats do not alter the origin incarnation or eligibility.
     pub fn reconcile(&mut self, records: &BTreeMap<Uuid, Record>, now: i64) -> Vec<RuntimeData> {
         let mut events = self.reconcile_native(records, now);
+        if self
+            .recent_context
+            .as_ref()
+            .is_some_and(|c| now >= c.expires_at_ms)
+        {
+            self.recent_context = None;
+        }
         for (id, connection) in &mut self.pin_connections {
             if !connection.closed && !records.get(id).is_some_and(|r| connection.current(r, now)) {
                 connection.closed = true;
@@ -1872,6 +1924,7 @@ impl RuntimeState {
                 evidence_digest,
                 privacy,
                 visual,
+                query_text,
             } => {
                 let (receipt, appended) = self.complete_lookup(
                     records,
@@ -1881,12 +1934,34 @@ impl RuntimeState {
                         evidence_digest,
                         privacy,
                         visual,
+                        query_text,
                     },
                     now,
                 )?;
                 events.extend(appended);
                 events.extend(self.reconcile(records, now));
                 RuntimeResult::LookupCompleted(receipt)
+            }
+            RuntimeOperation::RecentContext { fence } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished || turn.fence.origin_surface != fence.origin_surface {
+                    return Err(RuntimeError::Stale);
+                }
+                // Memory is offered only at or below the shared-room ceiling
+                // every origin already starts from; nothing above it is stored.
+                let offered = self
+                    .recent_context
+                    .clone()
+                    .filter(|c| now < c.expires_at_ms && c.privacy <= PrivacyClass::SharedRoom);
+                if let Some(context) = &offered {
+                    events.push(RuntimeData::RecentContextOffered {
+                        fence,
+                        context: context.kind,
+                        source_surface: context.source_surface,
+                        privacy: context.privacy,
+                    });
+                }
+                RuntimeResult::RecentContext(offered)
             }
             RuntimeOperation::SetDisclosurePolicy {
                 surface_id,
