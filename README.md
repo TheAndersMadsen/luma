@@ -168,9 +168,9 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.6` and deployed at
+The current server preview is published as `v0.2.0-ambiance.7` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`0bf93c0435cd8e094e625d852dad7a45d731ae88` and environment `production`.
+`ed547d8ab1d1eccc3d30a26d511633d3f34b3392` and environment `production`.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. The upgrade preserved the configured profiles,
 connections and nonblank credentials. Web lookup's exact-commit CI and built
@@ -227,8 +227,8 @@ independent Google Maps permission while preserving Web grants. It accepts one
 explicitly named place/locality query and displays a basic address list on the
 approved Center screen, with Google Maps and supplied third-party attribution.
 This permission covers query text and visual output, not wearer location,
-navigation, spoken place results or personal history. Validation and deployment
-of this increment remain pending; the live v6 preview retains Web lookup only.
+navigation, spoken place results or personal history. It is included in the
+deployed v7 preview together with the shared-display increment below.
 
 Place results use a bounded process-local cache and expire after 60 seconds.
 The durable action contains only an expiring content reference and digest;
