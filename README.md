@@ -1974,6 +1974,13 @@ shared cards and plays Cosmos-synthesized spoken replies once the installation
 is approved at the speech profile; document capture and handoff are later
 capability increments, and installation approval does not grant them.
 
+Approval no longer needs pasted JSON. Each client offers "Approve in Center",
+a link to the surfaces page carrying its public descriptor as a fragment, and
+the Mac panel also renders that link as a QR code to scan with a phone. Center
+reads the fragment locally (it never reaches the server), fills the review,
+clears it from the address bar and still shows the fingerprint next to the
+installation's own so the owner confirms a match before approving.
+
 Keychain binds the installation identity to the application that created it.
 For ad-hoc signed code that is the executable path plus the exact build, so
 every rebuild is a new application and the app reports the stored identity as

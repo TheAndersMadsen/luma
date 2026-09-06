@@ -82,10 +82,11 @@ class MainActivity : ComponentActivity() {
                             Text("Public installation descriptor", color = CosmosPalette.secondary, fontSize = 12.sp)
                             Text(descriptor.json(), color = CosmosPalette.text, fontSize = 12.sp)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { approve(descriptor.approvalUrl(state.serverOrigin)) }) { Text("Approve in Center") }
                                 OutlinedButton(onClick = { copy(descriptor.json()) }) { Text("Copy descriptor") }
                                 OutlinedButton(onClick = { share(descriptor.json()) }) { Text("Share…") }
                             }
-                            Text("In Center, approve this installation under Native installations. Compare the fingerprint before confirming.",
+                            Text("Approve in Center opens the review with this descriptor filled in. Compare the fingerprint before confirming.",
                                 color = CosmosPalette.secondary, fontSize = 12.sp)
                         }
                         OutlinedTextField(draft, { draft = it.take(4000) }, label = { Text("Ask Cosmos (public text)") },
@@ -118,6 +119,11 @@ class MainActivity : ComponentActivity() {
         Phase.CONNECTING -> "Connecting to Cosmos…"
         Phase.CONNECTED -> if (state.visible) "Connected · visible shared display" else "Connected for public text"
         Phase.BLOCKED -> "Connection stopped. Resolve the reported error before continuing."
+    }
+
+    private fun approve(url: String) {
+        try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+        catch (_: ActivityNotFoundException) { copy(url) }
     }
 
     private fun copy(text: String) {

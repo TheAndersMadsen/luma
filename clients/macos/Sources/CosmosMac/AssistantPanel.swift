@@ -1,4 +1,6 @@
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -47,11 +49,19 @@ public struct AssistantPanel: View {
                                 Button("Save…", action: saveDescriptor)
                                     .accessibilityLabel("Save public descriptor")
                             }
-                            Button("Open Center approval") {
-                                if let url = model.selectedServer?.surfacesURL { NSWorkspace.shared.open(url) }
+                            if let approval = approvalURL {
+                                if let code = QRCodeImage.render(approval.absoluteString) {
+                                    Image(nsImage: code)
+                                        .interpolation(.none)
+                                        .resizable()
+                                        .frame(width: 160, height: 160)
+                                        .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
+                                        .accessibilityLabel("Approval QR code for Center")
+                                }
+                                Text("Scan with your phone, or open the link here. Center shows the same fingerprint; approve only if they match.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Button("Approve in Center") { NSWorkspace.shared.open(approval) }
                             }
-                            Text("In Center, approve this installation and a browser tab as a shared display.")
-                                .font(.caption).foregroundStyle(.secondary)
                         }
                         HStack {
                             Button(model.snapshot.needsReconnect || model.snapshot.pendingOpen ? "Reconnect" : "Connect", action: model.connect)
@@ -142,6 +152,11 @@ public struct AssistantPanel: View {
         .frame(minWidth: 420, idealWidth: 440, maxWidth: 520, minHeight: 540, idealHeight: 700)
     }
 
+    private var approvalURL: URL? {
+        guard let data = model.publicDescriptorData() else { return nil }
+        return model.selectedServer?.approvalURL(descriptorData: data)
+    }
+
     private func copyDescriptor() {
         guard let data = model.publicDescriptorData(), let text = String(data: data, encoding: .utf8) else { return }
         let pasteboard = NSPasteboard.general
@@ -227,4 +242,20 @@ private enum CosmosPanelPalette {
     static let response = Color(red: 88 / 255, green: 244 / 255, blue: 241 / 255)
     static let primary = Color(red: 242 / 255, green: 247 / 255, blue: 248 / 255)
     static let secondary = Color(red: 164 / 255, green: 183 / 255, blue: 190 / 255)
+}
+
+/// Renders one QR code from the approval link. The link carries only the public
+/// descriptor; rendering it locally sends nothing anywhere.
+enum QRCodeImage {
+    static func render(_ text: String) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(text.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        let representation = NSCIImageRep(ciImage: scaled)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
+    }
 }

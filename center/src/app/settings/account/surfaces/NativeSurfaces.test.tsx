@@ -315,3 +315,18 @@ it.each(["pagehide", "edit"])("discards late imported content after %s", async c
   expect(screen.queryByRole("group", { name: "Review native installation" })).not.toBeInTheDocument();
   expect(mock).toHaveBeenCalledTimes(1);
 });
+
+it("a linked descriptor fragment prefills the review once and never reaches the address bar again", async () => {
+  const mock = vi.fn(async () => Response.json({ native: [] }));
+  vi.stubGlobal("fetch", mock);
+  const encoded = btoa(JSON.stringify(descriptor)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  window.history.replaceState(null, "", `/settings/account/surfaces#descriptor=${encoded}`);
+  render(<NativeSurfaces />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Review installation" })).toBeEnabled());
+  expect(window.location.hash).toBe("");
+  expect((screen.getByLabelText("Public installation descriptor") as HTMLTextAreaElement).value).toBe(JSON.stringify(descriptor));
+  window.history.replaceState(null, "", "/settings/account/surfaces#descriptor=not-a-descriptor");
+  render(<NativeSurfaces />);
+  await screen.findByText("The linked installation descriptor is not valid. Paste or import it instead.");
+  window.history.replaceState(null, "", "/settings/account/surfaces");
+});

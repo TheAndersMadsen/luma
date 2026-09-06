@@ -27,6 +27,18 @@ public struct ServerEndpoint: Equatable, Sendable {
     }
 
     public var surfacesURL: URL { URL(string: origin + "/settings/account/surfaces")! }
+
+    /// Center's approval page with the public descriptor carried as a link
+    /// fragment, so a scan or a click prefills the review. The fragment never
+    /// leaves the browser; the descriptor holds only public enrollment data.
+    public func approvalURL(descriptorData: Data) -> URL? {
+        guard descriptorData.count <= 1024 else { return nil }
+        let encoded = descriptorData.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return URL(string: origin + "/settings/account/surfaces#descriptor=" + encoded)
+    }
 }
 
 public struct TextAdmission: Equatable, Sendable {

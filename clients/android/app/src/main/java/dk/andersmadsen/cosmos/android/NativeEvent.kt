@@ -8,6 +8,12 @@ import java.util.UUID
 data class Descriptor(val enrollmentId: String, val publicKey: String, val platform: String, val approval: String) {
     fun json(): String = JSONObject().put("enrollmentId", enrollmentId).put("publicKey", publicKey)
         .put("platform", platform).put("approval", approval).toString()
+
+    /** Center's approval page with this public descriptor as a link fragment; it never leaves the browser. */
+    fun approvalUrl(serverOrigin: String): String {
+        val encoded = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json().toByteArray())
+        return serverOrigin.trimEnd('/') + "/settings/account/surfaces#descriptor=" + encoded
+    }
 }
 
 data class Admission(val turnId: UUID, val generation: Long, val duplicate: Boolean)

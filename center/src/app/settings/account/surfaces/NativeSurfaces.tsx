@@ -44,6 +44,26 @@ export function NativeSurfaces() {
       if (generation.current === current) setError("Native approval status is unavailable. Refresh before making changes.");
     } finally { if (generation.current === current) { active.current = null; setBusy(false); } }
   }, [invalidate]);
+  // A client may hand its public descriptor over as a link fragment (for
+  // example from a QR code). The fragment never reaches the server; it is
+  // consumed once, validated like pasted text and cleared from the address.
+  const linked = useRef<string | null>(null);
+  if (linked.current === null && typeof window !== "undefined") {
+    const match = /(?:^#|&)descriptor=([A-Za-z0-9_-]{1,1400})(?:&|$)/u.exec(window.location.hash);
+    linked.current = match ? match[1] : "";
+    if (match) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  useEffect(() => {
+    const encoded = linked.current;
+    if (!encoded || rows === undefined) return;
+    linked.current = "";
+    try {
+      const text = new TextDecoder().decode(Uint8Array.from(atob(encoded.replaceAll("-", "+").replaceAll("_", "/")), char => char.charCodeAt(0)));
+      parseNativeDescriptorText(text);
+      descriptorRead.current++;
+      setSource(text); setReview(null); setError(""); setMessage("");
+    } catch { setError("The linked installation descriptor is not valid. Paste or import it instead."); }
+  }, [rows]);
   useEffect(() => {
     const resume = () => { if (document.visibilityState === "hidden") invalidate(); else void refresh(); };
     window.addEventListener("focus", resume);

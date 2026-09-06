@@ -34,7 +34,8 @@
       "DELETE /surface-api/v1/native/:surfaceId": "{expectedRevision}; response {native: NativeSurface}"
     },
     "revision": "Create uses expectedRevision 0. Reapproval/revocation uses the current approval revision. Exact active approval retry preserves revision. Liveness does not change approval revision.",
-    "locator": "Enrollment locators are globally unique and cannot transfer owners, including after revocation. Descriptor/key/platform are immutable; a different key requires a new enrollment locator."
+    "locator": "Enrollment locators are globally unique and cannot transfer owners, including after revocation. Descriptor/key/platform are immutable; a different key requires a new enrollment locator.",
+    "link": "Clients may hand the public descriptor to Center as the fragment `#descriptor=<unpadded base64url JSON>` on /settings/account/surfaces, typed, opened or scanned from a QR code. Center consumes the fragment locally, validates it exactly like pasted text, clears it from the address bar and still requires the owner's fingerprint comparison and explicit approval; the fragment is never sent to a server."
   },
   "challenge": {
     "route": "POST /runtime-api/v1/native/challenge",

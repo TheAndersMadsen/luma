@@ -50,4 +50,13 @@ class NativeEventTest {
         val disconnected = base.format(places).replace("\"connected\":true", "\"connected\":false")
         assertNull(NativeEvent.decode(disconnected.toByteArray()).display)
     }
+
+    @Test
+    fun approvalLinkCarriesTheDescriptorAsAnUnpaddedFragment() {
+        val descriptor = Descriptor("11111111-1111-4111-8111-111111111111", "k", "android", "native-shared-speech-v3")
+        val url = descriptor.approvalUrl("https://center.example/")
+        val fragment = url.substringAfter("#descriptor=")
+        assertEquals("https://center.example/settings/account/surfaces#descriptor=", url.substringBefore(fragment))
+        assertEquals(descriptor.json(), String(java.util.Base64.getUrlDecoder().decode(fragment)))
+    }
 }

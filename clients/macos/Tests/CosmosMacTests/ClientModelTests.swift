@@ -529,6 +529,14 @@ final class ClientModelTests: XCTestCase {
         XCTAssertEqual(model.message, "The public descriptor could not be saved. Choose another location and retry.")
     }
 
+    func testApprovalLinkCarriesTheDescriptorAsAnUnpaddedFragment() throws {
+        let server = try ServerEndpoint("https://center.example")
+        let data = Data("{\"a\":1}".utf8)
+        let url = try XCTUnwrap(server.approvalURL(descriptorData: data))
+        XCTAssertEqual(url.absoluteString, "https://center.example/settings/account/surfaces#descriptor=eyJhIjoxfQ")
+        XCTAssertNil(server.approvalURL(descriptorData: Data(repeating: 0x20, count: 1025)))
+    }
+
     @MainActor
     func testDeliveredCardIsAcknowledgedOnceAndClearedWhenRetired() async throws {
         let client = try MockClientBridge(snapshot: ClientSnapshot(phase: .connected, visible: true))
