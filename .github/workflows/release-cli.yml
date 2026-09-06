@@ -171,6 +171,20 @@ jobs:
             exit 1
           fi
           df -h "$RUNNER_TEMP"
+      - name: Restore Cosmos compiler caches
+        # The Dockerfile's cargo cache mounts live inside the disposable
+        # builder, so every run recompiled both targets from scratch. The
+        # mounts are carried between runs here; the image build itself is
+        # unchanged and keeps its exact pinned inputs.
+        if: matrix.name == 'cosmos'
+        id: cosmos-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cosmos-build-cache
+          key: cosmos-build-cache-${{ hashFiles('cosmos/Cargo.lock', 'cosmos/Dockerfile', 'cosmos/native/*.json', 'cosmos/native/*.sh') }}-${{ github.sha }}
+          restore-keys: |
+            cosmos-build-cache-${{ hashFiles('cosmos/Cargo.lock', 'cosmos/Dockerfile', 'cosmos/native/*.json', 'cosmos/native/*.sh') }}-
+            cosmos-build-cache-
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -179,8 +193,22 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-      - name: Set up Buildx
+      - id: buildx
+        name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Inject Cosmos compiler caches into the builder
+        if: matrix.name == 'cosmos'
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "cosmos-build-cache/registry-amd64": { "target": "/usr/local/cargo/registry", "id": "cosmos-cargo-registry-amd64" },
+              "cosmos-build-cache/registry-arm64": { "target": "/usr/local/cargo/registry", "id": "cosmos-cargo-registry-arm64" },
+              "cosmos-build-cache/target-amd64": { "target": "/workspace/cosmos/target", "id": "cosmos-target-amd64" },
+              "cosmos-build-cache/target-arm64": { "target": "/workspace/cosmos/target", "id": "cosmos-target-arm64" }
+            }
+          skip-extraction: ${{ steps.cosmos-cache.outputs.cache-hit }}
       - id: image
         name: Build and publish immutable image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
