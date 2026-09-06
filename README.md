@@ -182,9 +182,12 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.10` and deployed at
+The current server preview is published as `v0.2.0-ambiance.11` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`6eb1b1c1c20f8fd6fc4bba78ae76ad81842d8206` and environment `production`.
+`772c514a5b4dae4559567f5cf5c7e702b54d55ab` and environment `production`. That
+release was built on the workstation after GitHub Actions minutes ran out: the
+Cosmos image was built and pushed locally, the other four images were reused
+from `v0.2.0-ambiance.10`, and its GitHub release carries no sigstore bundle.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. The upgrade preserved the configured profiles,
 connections and nonblank credentials. Web lookup's exact-commit CI and built
