@@ -91,6 +91,9 @@ class SurfaceController(context: Context) {
                 delay(200)
             }
         }
+        // An existing installation journal means this phone was set up before:
+        // open it on launch so a retained connection rejoins without a tap.
+        if (journal.read() != null) prepare(_state.value.serverOrigin)
     }
 
     /**
@@ -106,15 +109,26 @@ class SurfaceController(context: Context) {
         val now = System.currentTimeMillis()
         if (reconnectDueAt == 0L) { reconnectDueAt = now + backoffMs(reconnectAttempt); return }
         if (now < reconnectDueAt) return
+        if (reconnecting) return
         reconnectDueAt = 0L
         reconnectAttempt = (reconnectAttempt + 1).coerceAtMost(6)
         Log.d(TAG, "automatic reconnect attempt $reconnectAttempt")
-        command("connect") { NativeSurface.connect(handle) }
-        if (_state.value.phase == Phase.CONNECTED) {
-            reconnectAttempt = 0
-            if (wantedVisible) command("set_visible") { NativeSurface.setVisible(handle, true) }
+        // The attempt runs beside the poll loop: a command settles only when the
+        // loop folds its snapshot, so awaiting it here would stall both.
+        reconnecting = true
+        scope.launch {
+            try {
+                command("connect") { NativeSurface.connect(handle) }
+                if (_state.value.phase == Phase.CONNECTED) {
+                    reconnectAttempt = 0
+                    if (wantedVisible) command("set_visible") { NativeSurface.setVisible(handle, true) }
+                }
+            } finally {
+                reconnecting = false
+            }
         }
     }
+    @Volatile private var reconnecting = false
 
     private fun backoffMs(attempt: Int): Long = when (attempt) { 0 -> 1_500L; 1 -> 3_000L; 2 -> 6_000L; 3 -> 12_000L; else -> 30_000L }
 
