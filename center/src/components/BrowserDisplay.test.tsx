@@ -465,3 +465,24 @@ it("answers a choice list by click, by digit and with the arrow keys, sending th
   await act(async () => { fireEvent.keyDown(screen.getByRole("textbox"), { key: "1" }); }); await flush();
   expect(requests()).toEqual(["Second café", "Third"]);
 });
+
+it("says the tab must be in front while replies are on but this tab is behind another", async () => {
+  render(<BrowserDisplay />); await approve(false);
+  expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "Ask Cosmos…");
+  expect(screen.getByText("Replies appear here or on the device that suits them best.")).toBeVisible();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+  await act(async () => { fireEvent(document, new Event("visibilitychange")); }); await flush();
+  await waitFor(() => expect(screen.getByText("On, but this tab is in the background. Bring it to the front to show replies.")).toBeVisible());
+  // The display is on. Saying "turn it on" or "waiting for the connection"
+  // sends the owner looking for a switch that is already on.
+  expect(screen.getByRole("switch", { name: "Show replies in this browser" })).toBeChecked();
+  expect(screen.getByText("Replies are on in this browser. Bring this tab to the front to ask from it.")).toBeVisible();
+  expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "Bring this tab to the front to ask…");
+  expect(screen.queryByText("Turn on replies in this browser to ask Cosmos from this tab.")).toBeNull();
+  expect(screen.queryByPlaceholderText("Waiting for the connection…")).toBeNull();
+  // Bringing it back is the one thing to do, and it is enough.
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  await act(async () => { fireEvent(document, new Event("visibilitychange")); }); await flush();
+  await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
+  expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "Ask Cosmos…");
+});

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NATIVE_SURFACE_POSTURE } from "@/lib/contracts/nativeSurfaces";
+import { nativePosture, type NativePlatform } from "@/lib/contracts/nativeSurfaces";
 import { BROWSER_SURFACE_POSTURE } from "@/lib/contracts/surfaces";
 import { PIN_SURFACE_POSTURE } from "@/lib/contracts/pinSurfaces";
 
@@ -17,7 +17,7 @@ const browser = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const pin = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const turn = "10000000-0000-4000-8000-000000000001";
 const actionId = "20000000-0000-4000-8000-000000000001";
-const native = (surfaceId: string, platform: string) => ({ ...NATIVE_SURFACE_POSTURE, surfaceId, enrollmentId: surfaceId, platform, revision: 1,
+const native = (surfaceId: string, platform: NativePlatform) => ({ ...nativePosture(platform), surfaceId, enrollmentId: surfaceId, platform, revision: 1,
   publicKeyFingerprint: "f".repeat(64), revoked: false });
 const lists: Record<string, unknown> = {
   "/surface-api/v1/native": { native: [native(phone, "android"), native(mac, "macos")] },
@@ -50,7 +50,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it("reads the owner's ledger and device lists with the owner bearer and names devices by kind only", async () => {
   const activity = await readActivity();
   expect(activity).toEqual({ state: "ready", unnamed: false, rows: [{ turnId: turn, startedAt: 1_757_000_000_000, asked: "Asked from your Ai Pin", outcome: "Shown in a browser",
-    why: { candidates: ["A browser could show a card.", "Your phone could not show a card — its app was not in front."], hint: "You asked for the browser", privacy: "This reply was safe to show on a screen other people can see.", expression: false } }] });
+    why: { events: [], candidates: ["A browser could show a card.", "Your phone could not show a card — its app was not in front."], hint: "You asked for the browser", privacy: "This reply was safe to show on a screen other people can see.", expression: false } }] });
   const calls = vi.mocked(fetch).mock.calls.map(([url, options]) => [String(url), (options?.headers as Record<string, string>).authorization]);
   expect(calls).toEqual(expect.arrayContaining([
     ["http://cosmos.test/surface-api/v1/ledger?limit=300", "Bearer server-only"], ["http://cosmos.test/surface-api/v1/native", "Bearer server-only"],

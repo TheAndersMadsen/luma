@@ -1,7 +1,7 @@
 import { createHash, webcrypto } from "node:crypto";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NATIVE_APPROVAL, NATIVE_SURFACE_POSTURE, type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
+import { legacySpeechPosture, NATIVE_APPROVAL, nativePosture, type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import { Devices } from "./Devices";
 import { fingerprintLines } from "./fingerprint";
 
@@ -14,18 +14,18 @@ const descriptor: NativeDescriptor = {
   platform: "android_tv", approval: NATIVE_APPROVAL,
 };
 const serialized = JSON.stringify(descriptor);
-const first: NativeSurface = { ...NATIVE_SURFACE_POSTURE, surfaceId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+const first: NativeSurface = { ...nativePosture("android_tv"), surfaceId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   enrollmentId: descriptor.enrollmentId, platform: descriptor.platform, revision: 1, publicKeyFingerprint: fingerprint, revoked: false,
-  display: true, speech: true, connected: false, visible: false, privateDisplay: false };
-const second: NativeSurface = { ...first, surfaceId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-  enrollmentId: "22222222-2222-2222-2222-222222222222", platform: "linux", revision: 7 };
+  display: true, speech: true, actions: ["action.play"], confirms: false, connected: false, visible: false, privateDisplay: false };
+const second: NativeSurface = { ...first, ...nativePosture("linux"), surfaceId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  enrollmentId: "22222222-2222-2222-2222-222222222222", platform: "linux", revision: 7, actions: ["action.open"], confirms: true };
 const path = "/api/surfaces/native";
 const approved = "Approved. Cosmos shows replies on this device while its app is in front.";
 const removed = "Removed. This device no longer shows replies.";
 const empty = "No phones, TVs or computers yet";
 const firstCard = "TV";
 const secondCard = "Linux PC";
-const PERMISSION = /^\/api\/surfaces\/([0-9a-f-]{36})\/(speech-disclosure|private-display|screen-context|web-lookup|places-lookup)$/u;
+const PERMISSION = /^\/api\/surfaces\/([0-9a-f-]{36})\/(speech-disclosure|private-display|screen-context|web-lookup|places-lookup|device-actions|device-commands)$/u;
 
 beforeEach(() => {
   vi.stubGlobal("crypto", webcrypto);
@@ -169,8 +169,9 @@ it("shows this browser and a calm empty state, then requires review and a separa
 });
 
 it("shows each device as a plain card: status words from the runtime, capabilities from recorded permissions, no identifiers", async () => {
-  const phone: NativeSurface = { ...first, surfaceId: "cccccccc-cccc-cccc-cccc-cccccccccccc", enrollmentId: "33333333-3333-3333-3333-333333333333",
-    platform: "android", connected: true, visible: true, privateDisplay: true };
+  const phone: NativeSurface = { ...first, ...nativePosture("android"), surfaceId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+    enrollmentId: "33333333-3333-3333-3333-333333333333", platform: "android", actions: ["action.open", "action.route"], confirms: true,
+    connected: true, visible: true, privateDisplay: true };
   const rows = [phone, { ...second, connected: true, visible: false }, first];
   const searx = { provider: "searxng", endpoint: "https://search.example.test/search", configurationDigest: "a".repeat(64) };
   const mock = upstream(rows, null, (surfaceId, kind) => {
@@ -468,4 +469,104 @@ it("says calmly that the list is out of date after the tab was hidden, and keeps
   fireEvent.click(screen.getByRole("button", { name: "Refresh devices" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Cosmos could not be reached just now. Choose Refresh devices to try again.");
   expect(screen.queryByText(/out of date/u)).not.toBeInTheDocument();
+});
+
+/*
+ * Approving a device again bumps its revision, and every permission Cosmos
+ * holds for it is bound to the old one. The page has to say that before the
+ * click, and be able to grant each one again after it.
+ */
+it("says what reapproving drops before the click, then grants each one again at the value it had", async () => {
+  // A Linux installation still on the profile from before device actions.
+  const stale = { ...second, ...legacySpeechPosture(), surfaceId: first.surfaceId, enrollmentId: descriptor.enrollmentId,
+    platform: descriptor.platform, revision: 8, speech: true, actions: [], confirms: false };
+  const reapproved = { ...stale, ...nativePosture(descriptor.platform), revision: 9, actions: ["action.play"], confirms: false };
+  const speechPolicy = { provider: { provider: "azure_speech", region: "westeurope" }, maximumClass: "shared_room", transcription: false, synthesis: true };
+  const searx = { provider: "searxng", endpoint: "https://search.example.test/search", configurationDigest: "a".repeat(64) };
+  const held: Record<string, unknown> = {
+    "private-display": { approval: { approvalRevision: 8, revision: 2, policy: { maximumClass: "private" } } },
+    "screen-context": { approval: { approvalRevision: 8, revision: 1, policy: { maximumClass: "private" } } },
+    "speech-disclosure": { approval: { approvalRevision: 8, revision: 3, policy: speechPolicy } },
+    "web-lookup": { approval: { approvalRevision: 8, revision: 1, policy: { provider: searx, maximumClass: "shared_room" } },
+      providers: [searx], binding: { approvalRevision: 8, incarnation: null } },
+  };
+  const writes: [string, unknown][] = [];
+  const revision = { current: 8 };
+  const mock = Object.assign(vi.fn(async (url: RequestInfo | URL, options?: RequestInit): Promise<Response> => {
+    const target = String(url);
+    if (target === path && !options?.method) return Response.json({ native: [] });
+    if (target === `${path}/enrollments/${descriptor.enrollmentId}`) return Response.json({ native: stale });
+    if (target === "/api/admin/integrations") return Response.json({ error: "no" }, { status: 403 });
+    if (target === "/api/devices/runtime") return Response.json({ pins: [] });
+    if (target === "/api/devices/pair") return Response.json({ devices: [] });
+    if (target === path && options?.method === "POST") {
+      revision.current = 9;
+      return Response.json({ native: reapproved });
+    }
+    const permission = PERMISSION.exec(target);
+    if (!permission) throw new Error(`Unexpected request: ${target}`);
+    const kind = permission[2];
+    if (options?.method === "POST") {
+      const input = JSON.parse(String(options.body));
+      writes.push([kind, input]);
+      const approval = { approvalRevision: input.approvalRevision, revision: input.expectedRevision + 1, policy: input.policy };
+      return Response.json(kind.endsWith("lookup")
+        ? { approval, providers: [searx], binding: { approvalRevision: input.approvalRevision, incarnation: null } }
+        : { approval });
+    }
+    // Before the reapproval this device holds four permissions; after it, none.
+    const answer = revision.current === 8 ? held[kind] : undefined;
+    if (answer) return Response.json(answer);
+    return Response.json(kind.endsWith("lookup")
+      ? { approval: null, providers: kind === "web-lookup" ? [searx] : [], binding: { approvalRevision: revision.current, incarnation: null } }
+      : { approval: null });
+  }), { revisions: new Map<string, number>() });
+  vi.stubGlobal("fetch", mock);
+
+  render(<Devices />); await ready(); openAdd();
+  const inspected = within(await review());
+  expect(inspected.getByText(/Approving again drops what you have already allowed this device/u)).toBeVisible();
+  const dropping = within(inspected.getByRole("group", { name: "Permissions this drops" }));
+  expect(dropping.getAllByRole("listitem").map(item => item.textContent))
+    .toEqual(["Show private replies here", "Use what’s on the screen", "Speak replies", "Look things up on the web"]);
+  // Nothing has been written yet: reading what it holds is not changing it.
+  expect(writes).toHaveLength(0);
+
+  approve();
+  await screen.findByText(approved);
+  const panel = within(await screen.findByRole("region", { name: "Restore permissions" }));
+  expect(panel.getByText(/dropped 4 permissions/u)).toBeVisible();
+  expect(writes).toHaveLength(0);
+  fireEvent.click(panel.getByRole("button", { name: "Grant these again" }));
+  const results = await screen.findByRole("list", { name: "Restored permissions" });
+  await waitFor(() => expect(within(results).queryByText("Working…")).not.toBeInTheDocument());
+  expect(within(results).getAllByRole("listitem").map(item => item.textContent)).toEqual([
+    "Show private replies here — Granted again.",
+    "Use what’s on the screen — Granted again.",
+    "Speak replies — Granted again.",
+    "Look things up on the web — Granted again.",
+  ]);
+  // A class ceiling is restored before anything capped by it, and each write is
+  // made against the NEW revision from a fresh read: nothing is carried over.
+  expect(writes.map(([kind]) => kind)).toEqual(["private-display", "screen-context", "speech-disclosure", "web-lookup"]);
+  for (const [, input] of writes) expect(input).toMatchObject({ approvalRevision: 9, expectedRevision: 0 });
+  expect(writes.map(([, input]) => (input as { policy: unknown }).policy)).toEqual([
+    { maximumClass: "private" }, { maximumClass: "private" }, speechPolicy, { provider: searx, maximumClass: "shared_room" },
+  ]);
+});
+
+it("offers nothing to restore when the device held nothing, and never claims a permission it could not read", async () => {
+  const stale = { ...second, ...legacySpeechPosture(), surfaceId: first.surfaceId, enrollmentId: descriptor.enrollmentId,
+    platform: descriptor.platform, revision: 8, speech: true, actions: [], confirms: false };
+  const mock = upstream([], stale, (_surfaceId, kind) => kind === "speech-disclosure" ? { error: "unavailable" } : undefined);
+  render(<Devices />); await ready(); openAdd();
+  const inspected = within(await review());
+  // A permission that could not be read is never restored from a guess, and an
+  // unread permission is not announced as one this drops.
+  expect(inspected.queryByRole("group", { name: "Permissions this drops" })).not.toBeInTheDocument();
+  mock.mockResolvedValueOnce(Response.json({ native: { ...stale, ...nativePosture(descriptor.platform), revision: 9,
+    actions: ["action.play"], confirms: false } }));
+  approve();
+  await screen.findByText(approved);
+  expect(screen.queryByRole("region", { name: "Restore permissions" })).not.toBeInTheDocument();
 });

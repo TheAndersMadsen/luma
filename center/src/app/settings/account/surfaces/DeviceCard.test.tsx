@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { NATIVE_SURFACE_POSTURE, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
+import { nativePosture, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import { SPEECH_DISCLOSURE_APPROVAL } from "@/lib/contracts/speechDisclosure";
 import { LOOKUP_SERVICES, type LookupProvider } from "@/lib/contracts/lookupDisclosure";
 import { PRIVATE_DISPLAY_APPROVAL } from "@/lib/contracts/privateDisplay";
@@ -10,20 +10,22 @@ import { DeviceCard } from "./DeviceCard";
 import { fingerprintLines } from "./fingerprint";
 
 const fingerprint = createHash("sha256").update("device").digest("hex");
-const row: NativeSurface = { ...NATIVE_SURFACE_POSTURE, surfaceId: "11111111-1111-4111-8111-111111111111", enrollmentId: "22222222-2222-4222-8222-222222222222",
-  platform: "android", revision: 3, publicKeyFingerprint: fingerprint, revoked: false, display: true, speech: true, connected: true, visible: true, privateDisplay: false };
+const row: NativeSurface = { ...nativePosture("android"), surfaceId: "11111111-1111-4111-8111-111111111111", enrollmentId: "22222222-2222-4222-8222-222222222222",
+  platform: "android", revision: 3, publicKeyFingerprint: fingerprint, revoked: false, display: true, speech: true,
+  actions: ["action.open", "action.route"], confirms: true, connected: true, visible: true, privateDisplay: false };
 const searx: LookupProvider = { provider: "searxng", endpoint: "https://search.example.test/search", configurationDigest: "a".repeat(64) };
 const serp: LookupProvider = { provider: "serp_api", endpoint: "https://serpapi.com/search.json", configurationDigest: "b".repeat(64) };
 const google: LookupProvider = { provider: "google_places", endpoint: "https://places.googleapis.com/v1/places:searchText", configurationDigest: "c".repeat(64) };
 const speechPolicy = { provider: { provider: "azure_speech", region: "westeurope" }, maximumClass: "shared_room", transcription: false, synthesis: true };
 const base = `/api/surfaces/${row.surfaceId}`;
-type Kind = "speech-disclosure" | "private-display" | "screen-context" | "web-lookup" | "places-lookup";
+type Kind = "speech-disclosure" | "private-display" | "screen-context" | "web-lookup" | "places-lookup" | "device-actions" | "device-commands";
 type Approval = { approvalRevision: number; revision: number; policy: unknown } | null;
 type Providers = { web: LookupProvider[]; places: LookupProvider[] };
 
 /** A small honest Cosmos: reads answer from state, writes apply compare-and-set and echo the exact policy at the next revision. */
-function cosmos(initial: Partial<Record<Kind, Approval>> = {}, providers: Providers = { web: [searx], places: [google] }, rejects: Kind[] = []) {
-  const state: Record<Kind, Approval> = { "speech-disclosure": null, "private-display": null, "screen-context": null, "web-lookup": null, "places-lookup": null, ...initial };
+function cosmos(initial: Partial<Record<Kind, Approval>> = {}, providers: Providers = { web: [searx], places: [google] }, rejects: Kind[] = [], forbids: Kind[] = []) {
+  const state: Record<Kind, Approval> = { "speech-disclosure": null, "private-display": null, "screen-context": null, "web-lookup": null, "places-lookup": null,
+    "device-actions": null, "device-commands": null, ...initial };
   const view = (kind: Kind) => kind.endsWith("lookup")
     ? { approval: state[kind], providers: providers[kind === "web-lookup" ? "web" : "places"], binding: { approvalRevision: row.revision, incarnation: null } }
     : { approval: state[kind] };
@@ -32,6 +34,8 @@ function cosmos(initial: Partial<Record<Kind, Approval>> = {}, providers: Provid
     if (!String(url).startsWith(`${base}/`) || !(kind in state)) throw new Error(`Unexpected request: ${url}`);
     if (options?.method === "POST") {
       const input = JSON.parse(String(options.body));
+      // A definite no from Cosmos: the policy is well formed and it declined it.
+      if (forbids.includes(kind)) return Response.json({ error: "forbidden" }, { status: 403 });
       if (rejects.includes(kind) || input.expectedRevision !== (state[kind]?.revision ?? 0)) return new Response(null, { status: 409 });
       state[kind] = { approvalRevision: row.revision, revision: input.expectedRevision + 1, policy: input.policy };
     }
@@ -321,4 +325,151 @@ it("Details shows identifiers on demand and Remove this device asks first, then 
   fireEvent.click(screen.getByRole("button", { name: "Remove this device" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
   expect(props.onRemove).toHaveBeenCalledWith(row);
+});
+
+/*
+ * The two permissions that let a device do something rather than show or say
+ * something. Both write one whole policy document, so a half-written list is
+ * never sent and the switch alone never grants anything.
+ */
+const mac: NativeSurface = { ...nativePosture("macos"), ...row, platform: "macos", manifest: nativePosture("macos").manifest,
+  actions: ["action.open", "action.run"], confirms: true };
+const tv: NativeSurface = { ...nativePosture("android_tv"), ...row, platform: "android_tv", manifest: nativePosture("android_tv").manifest,
+  actions: ["action.play"], confirms: false };
+const add = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+it("says once that these apply to this device only, and offers only the operations this device's manifest declares", async () => {
+  cosmos(); render(<DeviceCard {...props} />); await settled(); manage();
+  expect(screen.getAllByText("These two permissions apply to this device only. Nothing here changes what any other device may do.")).toHaveLength(1);
+  // A phone declares open and route, and never a task.
+  expect(toggle("Let this device act")).toBeInTheDocument();
+  expect(screen.queryByRole("switch", { name: "Tasks on this device" })).not.toBeInTheDocument();
+  cleanup();
+  cosmos(); render(<DeviceCard {...props} row={tv} />); await settled(); manage();
+  expect(toggle("Let this device act")).toBeInTheDocument();
+  expect(screen.queryByRole("switch", { name: "Tasks on this device" })).not.toBeInTheDocument();
+  // The prerequisite lives where the providers are chosen, not buried.
+  fireEvent.click(toggle("Let this device act"));
+  expect(screen.getByText(/Settings → Device Preferences → Apps → Special app access → Notification access → Cosmos/u)).toBeVisible();
+  expect(screen.getByText(/the honest report is\s+“Cannot confirm”/u)).toBeVisible();
+  expect(screen.queryByLabelText("Website")).not.toBeInTheDocument();
+  cleanup();
+  // An approval from before device actions existed can hold neither.
+  cosmos(); render(<DeviceCard {...props} row={{ ...row, actions: [], confirms: false }} />); await settled(); manage();
+  expect(screen.queryByRole("switch", { name: "Let this device act" })).not.toBeInTheDocument();
+  expect(screen.getByText(/Approve it again to choose what it may open, play or run/u)).toBeVisible();
+});
+
+it("Let this device act writes the whole list once, sorted, and never a permission that names nothing", async () => {
+  const mock = cosmos(); render(<DeviceCard {...props} />); await settled(); manage();
+  fireEvent.click(toggle("Let this device act"));
+  expect(posts(mock)).toHaveLength(0);
+  expect(screen.getByText("Add at least one thing this device may act on, then choose Save.")).toBeVisible();
+  const save = screen.getByRole("button", { name: "Save what it may do" });
+  expect(save).toBeDisabled();
+  add("Website", " ZED.dev ");
+  fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+  add("Website", "github.com");
+  fireEvent.click(screen.getByRole("button", { name: "Add website" }));
+  fireEvent.click(screen.getByLabelText("Let it show the way to a place in Google Maps"));
+  expect(save).toBeEnabled();
+  fireEvent.click(save);
+  await screen.findByText("Cosmos confirmed what this device may do.");
+  expect(posts(mock)).toHaveLength(1);
+  expect(JSON.parse(String(posts(mock)[0][1]?.body))).toEqual({
+    approval: "approve-device-actions-v1", approvalRevision: 3, expectedRevision: 0,
+    // Sorted, because that is the list Cosmos stores and echoes back.
+    policy: { maximumClass: "shared_room", open: { hosts: ["github.com", "zed.dev"], apps: [], roots: [] }, route: { app: "google_maps" } },
+  });
+  expect(screen.getByText("Shows shared replies · Acts on your behalf")).toBeVisible();
+  fireEvent.click(toggle("Let this device act"));
+  await screen.findByText("Cosmos confirmed this device may no longer act.");
+  expect(JSON.parse(String(posts(mock)[1][1]?.body))).toMatchObject({ expectedRevision: 1, policy: null });
+});
+
+it("caps what an action may carry by this device's own private-display ceiling", async () => {
+  cosmos(); render(<DeviceCard {...props} />); await settled(); manage();
+  fireEvent.click(toggle("Let this device act"));
+  const field = screen.getByLabelText("The most private thing this may carry") as HTMLSelectElement;
+  expect(Array.from(field.options).map(option => option.value)).toEqual(["public", "shared_room"]);
+  expect(screen.getByText(/Turn on “Show private replies here” first to allow more/u)).toBeVisible();
+  cleanup();
+  // With the private-display permission, the ceiling it names is the ceiling here.
+  cosmos({ "private-display": { approvalRevision: 3, revision: 1, policy: { maximumClass: "private" } } });
+  render(<DeviceCard {...props} />); await settled(); manage();
+  fireEvent.click(toggle("Let this device act"));
+  const raised = screen.getByLabelText("The most private thing this may carry") as HTMLSelectElement;
+  expect(Array.from(raised.options).map(option => option.value)).toEqual(["public", "shared_room", "near_user", "private"]);
+  expect(screen.queryByText(/Turn on “Show private replies here” first/u)).not.toBeInTheDocument();
+});
+
+it("Tasks on this device is macOS only, fixes argv one part per line, and stops at eight", async () => {
+  const mock = cosmos(); render(<DeviceCard {...props} row={mac} />); await settled(); manage();
+  fireEvent.click(toggle("Tasks on this device"));
+  expect(screen.getByText(/Cosmos can ask this Mac to run one of them; it can never write a command/u)).toBeVisible();
+  const addTask = () => fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+  expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
+  add("What you call it", "Project tests");
+  add("Short name", "project-tests");
+  add("The command, one part per line", "./revival\ncheck cosmos\n\n");
+  add("Folder it runs in", "/Users/owner/Projects/app");
+  fireEvent.click(screen.getByLabelText("This task changes files"));
+  add("Give up after", "120");
+  addTask();
+  fireEvent.click(screen.getByRole("button", { name: "Save these tasks" }));
+  await screen.findByText("Cosmos confirmed the tasks this device may run.");
+  expect(JSON.parse(String(posts(mock)[0][1]?.body))).toEqual({
+    approval: "approve-device-command-v1", approvalRevision: 3, expectedRevision: 0,
+    policy: { maximumClass: "shared_room", offerOutputToCognition: false, entries: [{
+      // "check cosmos" is ONE argument: there is no shell here to split it.
+      id: "project-tests", label: "Project tests", argv: ["./revival", "check cosmos"],
+      cwd: "/Users/owner/Projects/app", mutates: true, budgetMs: 120_000,
+    }] },
+  });
+  expect(screen.getByText("Shows shared replies · Runs your tasks")).toBeVisible();
+  // Eight is the most this device can hold, and the editor says so rather than failing at the route.
+  for (let index = 1; index < 8; index++) {
+    add("What you call it", `Task ${index}`);
+    add("Short name", `task-${index}`);
+    add("The command, one part per line", "./revival");
+    add("Folder it runs in", "/Users/owner");
+    addTask();
+  }
+  expect(screen.getByText("Eight tasks is the most this device can hold. Remove one to add another.")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
+  expect(screen.getByText(/of 4096 bytes used/u)).toBeVisible();
+});
+
+it("says what to do about a task label Cosmos calls too sensitive, and changes nothing", async () => {
+  const mock = cosmos({}, { web: [searx], places: [google] }, [], ["device-commands"]);
+  render(<DeviceCard {...props} row={mac} />); await settled(); manage();
+  fireEvent.click(toggle("Tasks on this device"));
+  add("What you call it", "Export my medical records");
+  add("Short name", "export-records");
+  add("The command, one part per line", "./export");
+  add("Folder it runs in", "/Users/owner");
+  fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save these tasks" }));
+  await screen.findByText("Rename this task: Cosmos treats that wording as too sensitive to route anywhere.");
+  expect(posts(mock)).toHaveLength(1);
+  // A definite no changed nothing, so the entry the owner wrote is still there to rename.
+  expect(screen.getByText("Export my medical records")).toBeVisible();
+  expect(screen.getByRole("switch", { name: "Tasks on this device" })).toBeChecked();
+  // Nothing needs re-reading and nothing needs to be turned back on: the switch
+  // still works, and the "it may still have been saved" sentence would be a lie.
+  expect(screen.getByRole("switch", { name: "Tasks on this device" })).toBeEnabled();
+  expect(screen.getByText("Cosmos would not accept this. Nothing changed.")).toBeVisible();
+  expect(screen.queryByText(/may still have been saved/u)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+});
+
+it("lets a phone be allowed only to show the way somewhere, without a list it never wanted", async () => {
+  const mock = cosmos(); render(<DeviceCard {...props} />); await settled(); manage();
+  fireEvent.click(toggle("Let this device act"));
+  // An open block that names nothing is not a permission, so it is dropped
+  // rather than making a route-only phone unsavable.
+  fireEvent.click(screen.getByLabelText("Let it show the way to a place in Google Maps"));
+  fireEvent.click(screen.getByRole("button", { name: "Save what it may do" }));
+  await screen.findByText("Cosmos confirmed what this device may do.");
+  expect(JSON.parse(String(posts(mock)[0][1]?.body)).policy).toEqual({ maximumClass: "shared_room", route: { app: "google_maps" } });
 });

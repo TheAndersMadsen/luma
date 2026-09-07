@@ -9,7 +9,8 @@ import styles from "./surfaces.module.css";
 import { fingerprintLines } from "./fingerprint";
 import { PermissionSwitch } from "./PermissionSwitch";
 import { LOOKUP, LookupSwitch, SpeechSwitch, useSpeechRegion } from "./SurfaceSwitches";
-import { activeLookupProvider, lookupPermission, lookupPolicy, PRIVATE_POLICY, privatePermission, SCREEN_CONTEXT_POLICY, screenContextPermission, speechPermission, speechPolicy, usePermission, type Outcome } from "./permissions";
+import { actionCeiling, BLAST_RADIUS, DeviceActsEditor, DeviceTasksEditor } from "./DeviceActionEditors";
+import { activeLookupProvider, deviceActionsPermission, deviceCommandsPermission, lookupPermission, lookupPolicy, PRIVATE_POLICY, privatePermission, SCREEN_CONTEXT_POLICY, screenContextPermission, speechPermission, speechPolicy, usePermission, type Outcome } from "./permissions";
 
 /** The owner's own words for a kind of device — the same names the Mac, Linux, phone and TV clients use. */
 export const DEVICE_LABELS = { android: "Phone", android_tv: "TV", macos: "Mac", linux: "Linux PC" } as const satisfies Record<NativePlatform, string>;
@@ -47,6 +48,13 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
   const priv = usePermission(useMemo(() => privatePermission(row.surfaceId, row.revision), [row.surfaceId, row.revision]), !tv);
   // Screen text stays on the personal device; a TV is a shared screen and never reads it.
   const screenContext = usePermission(useMemo(() => screenContextPermission(row.surfaceId, row.revision), [row.surfaceId, row.revision]), !tv);
+  // An installation whose approved manifest declares no action channel cannot
+  // hold either permission, so neither is read for it.
+  const canAct = row.actions.length > 0;
+  const runsTasks = row.actions.includes("action.run");
+  const acts = usePermission(useMemo(() => deviceActionsPermission(row.surfaceId, row.revision), [row.surfaceId, row.revision]),
+    canAct && row.actions.some(channel => channel !== "action.run"));
+  const tasks = usePermission(useMemo(() => deviceCommandsPermission(row.surfaceId, row.revision), [row.surfaceId, row.revision]), runsTasks);
   const [open, setOpen] = useState(offerSetup);
   const [details, setDetails] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -58,11 +66,17 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
   const providers = { web: activeLookupProvider(web.snapshot), places: activeLookupProvider(places.snapshot) } as const;
   const privateOn = priv.snapshot !== undefined ? priv.snapshot?.policy != null : row.privateDisplay;
   const screenOn = screenContext.snapshot?.policy != null;
+  // An action permission can never raise a posture, only spend one: its class
+  // is capped by this installation's own private-display ceiling.
+  const ceiling = actionCeiling(priv.snapshot?.policy?.maximumClass ?? null);
+  const actsOn = acts.snapshot?.policy != null;
+  const tasksOn = tasks.snapshot?.policy != null;
   const states = [speech, web, places, ...(tv ? [] : [priv, screenContext])];
   const reading = states.some(state => state.snapshot === undefined && state.failure === null);
   const unreadable = states.some(state => state.failure !== null);
   const capabilities = ["Shows shared replies", ...(speaks ? ["Speaks replies"] : []), ...(providers.web ? ["Looks things up"] : []),
-    ...(providers.places ? ["Finds places"] : []), ...(privateOn && !tv ? ["Shows private replies"] : []), ...(screenOn && !tv ? ["Uses what's on the screen"] : [])];
+    ...(providers.places ? ["Finds places"] : []), ...(privateOn && !tv ? ["Shows private replies"] : []), ...(screenOn && !tv ? ["Uses what's on the screen"] : []),
+    ...(actsOn ? ["Acts on your behalf"] : []), ...(tasksOn ? ["Runs your tasks"] : [])];
 
   async function togglePrivate(next: boolean) {
     await priv.commit(() => ({ policy: next ? PRIVATE_POLICY : null }),
@@ -138,6 +152,14 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
         reading={screenContext.snapshot === undefined && screenContext.failure === null} failure={screenContext.failure} message={screenContext.message}
         onChange={next => void toggleScreenContext(next)} onRetry={screenContext.failure === "changed" ? onRefreshDevices : () => void screenContext.load()}
         description={SCREEN_CONTEXT} privacy={SCREEN_CONTEXT_PRIVACY} /> : null}
+      {/* Said once, above both, because an owner most easily assumes the opposite. */}
+      {canAct ? <p className={styles.line}>{BLAST_RADIUS}</p> : null}
+      {row.actions.some(channel => channel !== "action.run")
+        ? <DeviceActsEditor row={row} state={acts} ceiling={ceiling} personal={!tv} onRefreshDevices={onRefreshDevices} /> : null}
+      {runsTasks ? <DeviceTasksEditor row={row} state={tasks} ceiling={ceiling} personal={!tv} onRefreshDevices={onRefreshDevices} /> : null}
+      {!canAct ? <p className={styles.line}>
+        This device was approved before Cosmos could act on a device. Approve it again to choose what it may open, play or run.
+      </p> : null}
       <div className={styles.actions}>
         <button type="button" className={styles.linkButton} aria-expanded={details} onClick={() => setDetails(!details)}>Details</button>
       </div>

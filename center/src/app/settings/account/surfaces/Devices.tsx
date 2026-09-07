@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { record } from "@/lib/contracts/surfaces";
-import { NATIVE_DESCRIPTOR_BYTES, nativePublicKeyFingerprint, parseNativeDescriptorText, parseNativeSurface, parseNativeSurfaces,
+import { NATIVE_APPROVAL, NATIVE_DESCRIPTOR_BYTES, nativePublicKeyFingerprint, parseNativeDescriptorText, parseNativeSurface, parseNativeSurfaces,
   type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import { PIN_APPROVAL, parsePairedPinDevices, parsePinSurface, parsePinSurfaces, type PinSurface } from "@/lib/contracts/pinSurfaces";
 import { SPEECH_REGION } from "@/lib/contracts/speechDisclosure";
@@ -12,8 +12,19 @@ import { BrowserCard } from "./BrowserCard";
 import { DeviceCard, DEVICE_LABELS } from "./DeviceCard";
 import { PinCard } from "./PinCard";
 import { fingerprintLines } from "./fingerprint";
+import { DROPPED_TITLE, heldNames, NOTHING_HELD, readHeldPolicies, restoreHeldPolicies,
+  type HeldPolicies, type RestoreStep } from "./Reapproval";
 
-type Review = { descriptor: NativeDescriptor; fingerprint: string; existing: NativeSurface | null };
+type Review = { descriptor: NativeDescriptor; fingerprint: string; existing: NativeSurface | null;
+  /** What this device already holds, read before the reapproval that drops it. */
+  held: HeldPolicies };
+/** After a reapproval, the permissions it dropped and how putting each one back went. */
+type Restore = { surfaceId: string; revision: number; held: HeldPolicies; steps: RestoreStep[]; running: boolean; started: boolean };
+const RESTORE_OUTCOME: Record<RestoreStep["outcome"], string> = {
+  restored: "Granted again.",
+  skipped: "Was not on.",
+  failed: "Could not be granted again. Turn it on below.",
+};
 const PATH = "/api/surfaces/native";
 const PIN_PATH = "/api/devices/runtime";
 const PAIR_PATH = "/api/devices/pair";
@@ -54,6 +65,7 @@ export function Devices() {
   const [manual, setManual] = useState(false);
   const [source, setSource] = useState("");
   const [review, setReview] = useState<Review | null>(null);
+  const [restore, setRestore] = useState<Restore | null>(null);
   const [approved, setApproved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -69,7 +81,7 @@ export function Devices() {
     generation.current++; active.current?.abort(); active.current = null;
     pinActive.current?.abort(); pinActive.current = null;
     descriptorRead.current++;
-    setRows(undefined); setSource(""); setReview(null); setApproved(null);
+    setRows(undefined); setSource(""); setReview(null); setRestore(null); setApproved(null);
     setPins(undefined); setPaired(undefined); setApprovedPin(null); setPinBusy(false);
     setPinFailed(false); setPairFailed(false);
     setBusy(false); setMessage(""); setError("");
@@ -203,7 +215,12 @@ export function Devices() {
       signal.throwIfAborted();
       if (existing && (existing.enrollmentId !== descriptor.enrollmentId || existing.platform !== descriptor.platform
         || existing.publicKeyFingerprint !== fingerprint)) throw new Error("native_descriptor_changed");
-      if (generation.current === current) setReview({ descriptor, fingerprint, existing });
+      // Approving again drops every permission this device holds. Read them
+      // now, while they still exist, so the owner is told before they click
+      // and Cosmos can offer to grant each one again afterwards.
+      const held = existing && !existing.revoked ? await readHeldPolicies(existing, signal) : NOTHING_HELD;
+      signal.throwIfAborted();
+      if (generation.current === current) setReview({ descriptor, fingerprint, existing, held });
     } catch {
       if (generation.current === current) setError("This device could not be verified. Check its details and read the device list again.");
     } finally { if (generation.current === current) { active.current = null; setBusy(false); } }
@@ -211,14 +228,14 @@ export function Devices() {
   async function change(chosen: Review | NativeSurface) {
     if (active.current || rows === undefined) return;
     const approving = "descriptor" in chosen;
-    if (approving ? chosen !== review || chosen.existing && !chosen.existing.revoked && chosen.existing.speech
+    if (approving ? chosen !== review || chosen.existing && !chosen.existing.revoked && chosen.existing.approval === NATIVE_APPROVAL
       : !rows.some(row => row.surfaceId === chosen.surfaceId && row.revision === chosen.revision)) return;
     descriptorRead.current++;
     const expectedRevision = approving ? chosen.existing?.revision ?? 0 : chosen.revision;
     const current = generation.current;
     const controller = new AbortController(); active.current = controller;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
-    setBusy(true); setMessage(""); setError("");
+    setBusy(true); setMessage(""); setError(""); setRestore(null);
     try {
       const response = await fetch(approving ? PATH : `${PATH}/${chosen.surfaceId}`, {
         method: approving ? "POST" : "DELETE", headers: { "content-type": "application/json" }, cache: "no-store", signal,
@@ -236,7 +253,15 @@ export function Devices() {
       setRows(parseNativeSurfaces({ native: [...rows.filter(row => row.enrollmentId !== saved.enrollmentId), ...(saved.revoked ? [] : [saved])] }));
       setReview(null); setSource("");
       if (saved.revoked) { setApproved(null); setMessage("Removed. This device no longer shows replies."); }
-      else { setAdding(false); setManual(false); setApproved(saved.surfaceId); setMessage("Approved. Cosmos shows replies on this device while its app is in front."); }
+      else {
+        setAdding(false); setManual(false); setApproved(saved.surfaceId);
+        setMessage("Approved. Cosmos shows replies on this device while its app is in front.");
+        // The reapproval dropped what it held. Offer each one back, at the
+        // value it had, rather than leaving the owner to remember the list.
+        if (approving && heldNames(chosen.held).length) {
+          setRestore({ surfaceId: saved.surfaceId, revision: saved.revision, held: chosen.held, steps: [], running: false, started: false });
+        }
+      }
     } catch {
       if (generation.current !== current) return;
       // A lost response may follow a committed write. A fresh owner read is
@@ -281,7 +306,24 @@ export function Devices() {
       setError("Cosmos did not confirm the change. Refresh devices before retrying; the request may have committed.");
     } finally { if (generation.current === current) { pinActive.current = null; setPinBusy(false); } }
   }
-  const alreadyApproved = review?.existing !== null && review?.existing !== undefined && !review.existing.revoked && review.existing.speech;
+  const alreadyApproved = review?.existing !== null && review?.existing !== undefined && !review.existing.revoked
+    && review.existing.approval === NATIVE_APPROVAL;
+  const willDrop = review && review.existing && !review.existing.revoked ? heldNames(review.held) : [];
+
+  /** Grants each dropped permission again at the value it had, one step at a time. */
+  async function putBack(pending: Restore) {
+    if (pending.running) return;
+    const current = generation.current;
+    // Seven permissions, each read fresh and written on its own, one at a time.
+    const signal = AbortSignal.timeout(60000);
+    setRestore({ ...pending, running: true, started: true, steps: [] });
+    const steps: RestoreStep[] = [];
+    await restoreHeldPolicies(pending.surfaceId, pending.revision, pending.held, signal, step => {
+      steps.push(step);
+      if (generation.current === current) setRestore({ ...pending, running: true, started: true, steps: [...steps] });
+    });
+    if (generation.current === current) setRestore({ ...pending, running: false, started: true, steps });
+  }
   const waiting = adding && busy && review === null && rows !== undefined;
   // An unreadable approval list is never rendered as "no Pin". A roster this
   // page could not read hides only the Pins that have no approval yet.
@@ -309,8 +351,17 @@ export function Devices() {
         <code className={styles.fingerprint}>{fingerprintLines(review.fingerprint).map((line, index) => <span key={index}>{line}</span>)}</code>
         {alreadyApproved ? <p className={styles.line}>This device is already approved.</p> : <>
           {review.existing?.revoked ? <p className={styles.line}>You removed this device earlier. Approving it again lets it show replies; its other permissions stay off until you turn them on.</p>
-            : review.existing ? <p className={styles.line}>This device was approved before spoken replies existed. Approving it again adds them, and its app reconnects.</p>
+            : review.existing ? <p className={styles.line}>This device was approved before Cosmos could act on a device. Approving it again lets you choose what it may open, play or run, and its app reconnects.</p>
               : <p className={styles.line}>This device is waiting for your approval.</p>}
+          {/* A permission is granted against a posture. Approving again changes
+              the posture, so Cosmos drops every one of them — said before the
+              click, never discovered afterwards. */}
+          {willDrop.length ? <div className={styles.confirm} role="group" aria-label="Permissions this drops">
+            <p className={styles.line}>Approving again drops what you have already allowed this device. Cosmos can grant each one again, at the value it has now, as soon as it is approved.</p>
+            <ul className={styles.steps} aria-label="Permissions this drops">
+              {willDrop.map(name => <li key={name}>{DROPPED_TITLE[name]}</li>)}
+            </ul>
+          </div> : null}
         </>}
         <div className={styles.actions}>
           {alreadyApproved ? null : <button type="button" className={styles.primary} disabled={busy || rows === undefined} onClick={() => void change(review)}>Approve this device</button>}
@@ -338,6 +389,26 @@ export function Devices() {
     </section> : null}
     {message ? <p className={styles.confirmation} role="status">{message}</p> : null}
     {error ? <p className={styles.alert} role="alert">{error}</p> : null}
+    {restore ? <section className={`${settings.section} ${styles.card}`} aria-label="Restore permissions">
+      <div className={styles.cardHeader}><h2 className={styles.cardTitle}>Put its permissions back</h2></div>
+      <p className={styles.line}>
+        Approving this device again dropped {heldNames(restore.held).length === 1 ? "one permission" : `${heldNames(restore.held).length} permissions`}.
+        Cosmos can grant each one again, at the value it had. Nothing is carried over: each is granted against the new approval.
+      </p>
+      {restore.started ? <ul className={styles.steps} aria-label="Restored permissions">
+        {restore.steps.map(step => <li key={step.name}><strong>{DROPPED_TITLE[step.name]}</strong> — {RESTORE_OUTCOME[step.outcome]}</li>)}
+        {restore.running ? <li role="status">Working…</li> : null}
+      </ul> : <ul className={styles.steps} aria-label="Permissions to restore">
+        {heldNames(restore.held).map(name => <li key={name}>{DROPPED_TITLE[name]}</li>)}
+      </ul>}
+      <div className={styles.actions}>
+        {restore.started && !restore.running ? null
+          : <button type="button" className={styles.primary} disabled={restore.running} onClick={() => void putBack(restore)}>Grant these again</button>}
+        <button type="button" className={styles.quiet} disabled={restore.running} onClick={() => { setRestore(null); void refresh(); }}>
+          {restore.started && !restore.running ? "Done" : "Not now"}
+        </button>
+      </div>
+    </section> : null}
     <ul className={styles.cards}>
       {/* A fresh approval is a fresh card: its permissions belong to that exact revision. */}
       {pinRows.map(row => <li key={`${row.deviceId ?? "pin"}:${row.pin?.revision ?? 0}`}>

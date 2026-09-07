@@ -9,6 +9,7 @@ const FAILURE: Record<PermissionFailure, string> = {
   unavailable: "This setting could not be read.",
   changed: "This device’s approval changed.",
   unconfirmed: "Cosmos did not confirm the change. It may still have been saved, so check again before retrying.",
+  refused: "Cosmos would not accept this. Nothing changed.",
 };
 
 type Props = {

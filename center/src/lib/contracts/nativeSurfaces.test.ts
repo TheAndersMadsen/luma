@@ -4,7 +4,8 @@ import { expect, it } from "vitest";
 import {
   NATIVE_APPROVAL,
   NATIVE_DESCRIPTOR_BYTES,
-  NATIVE_SURFACE_POSTURE,
+  nativeManifest,
+  nativePosture,
   nativePublicKeyFingerprint,
   parseNativeApprovalInput,
   parseNativeDescriptor,
@@ -30,33 +31,117 @@ const DESCRIPTOR = {
   enrollmentId: ENROLLMENT_ID,
   publicKey: PUBLIC_KEY,
   platform: "macos",
-  approval: "native-shared-speech-v3",
+  approval: "native-device-action-v4",
 };
-const APPROVED_POSTURE = {
-  name: "Native device",
-  approval: "native-shared-speech-v3",
-  manifest: {
+const CARD = { maxClass: "shared_room", shared: true };
+const ACKNOWLEDGED = ["acknowledged", "degraded"];
+const BASE_CONSTRAINTS = ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"];
+const ACTION_CONSTRAINTS = [...BASE_CONSTRAINTS, "effect_unverified"];
+const OPEN = { maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 10000 };
+
+/*
+ * The four manifests Cosmos publishes, written out rather than derived, so a
+ * drift in `surface_registry::native_manifest` fails here instead of quietly
+ * making every approved installation unreadable. What a device may be asked to
+ * do differs by what its operating system can honestly report.
+ */
+const MANIFESTS: Record<string, unknown> = {
+  macos: {
     class: "native",
-    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true }, "audio.tts": { maxClass: "shared_room", shared: true } } },
-    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
-    expression: { "visual.card": ["acknowledged", "degraded"], "audio.tts": ["acknowledged", "degraded"] },
+    capabilities: {
+      input: ["text.public", "state.visibility", "context.screen", "action.report"],
+      output: {
+        "visual.card": CARD, "audio.tts": CARD, "action.open": OPEN,
+        "action.run": { maxClass: "shared_room", shared: true, risk: "high", idempotent: false, reportBudgetMs: 900000 },
+        "confirm.tap": { ...CARD, attestation: ["foreground_tap", "device_owner_auth"] },
+      },
+    },
+    constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation"],
+    expression: {
+      "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
+      "action.run": ["thinking", "acknowledged", "degraded"], "confirm.tap": ["confirming", "awaiting_permission"],
+    },
     cognition: { declaredClass: 0, models: [] },
-    authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
+    authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
   },
+  linux: {
+    class: "native",
+    capabilities: {
+      input: ["text.public", "state.visibility", "context.screen", "action.report"],
+      output: { "visual.card": CARD, "audio.tts": CARD, "action.open": OPEN, "confirm.tap": { ...CARD, attestation: ["foreground_tap"] } },
+    },
+    constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation"],
+    expression: {
+      "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
+      "confirm.tap": ["confirming", "awaiting_permission"],
+    },
+    cognition: { declaredClass: 0, models: [] },
+    authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
+  },
+  android: {
+    class: "native",
+    capabilities: {
+      input: ["text.public", "state.visibility", "context.screen", "action.report"],
+      output: {
+        "visual.card": CARD, "audio.tts": CARD, "action.open": OPEN,
+        "action.route": { maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 20000 },
+        "confirm.tap": { ...CARD, attestation: ["foreground_tap"] },
+      },
+    },
+    constraints: [...ACTION_CONSTRAINTS, "foreground_or_assistant_session_only"],
+    expression: {
+      "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
+      "action.route": ACKNOWLEDGED, "confirm.tap": ["confirming", "awaiting_permission"],
+    },
+    cognition: { declaredClass: 0, models: [] },
+    authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
+  },
+  // A television is bystander-perceivable by construction: no ceremony venue,
+  // no screen context and no command.
+  android_tv: {
+    class: "native",
+    capabilities: {
+      input: ["text.public", "state.visibility", "action.report"],
+      output: {
+        "visual.card": CARD, "audio.tts": CARD,
+        "action.play": { maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 30000 },
+      },
+    },
+    constraints: ACTION_CONSTRAINTS,
+    expression: { "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.play": ACKNOWLEDGED },
+    cognition: { declaredClass: 0, models: [] },
+    authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
+  },
+};
+const POSTURE_FIELDS = {
+  name: "Native device",
   trustLevel: 0,
   occupancy: "unknown",
   actorIdentity: "unknown",
   renderVerified: false,
   playbackVerified: false,
 };
+const APPROVED_POSTURE = { ...POSTURE_FIELDS, approval: "native-device-action-v4", manifest: MANIFESTS.macos };
+const LEGACY_SPEECH_POSTURE = {
+  ...POSTURE_FIELDS,
+  approval: "native-shared-speech-v3",
+  manifest: {
+    class: "native",
+    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": CARD, "audio.tts": CARD } },
+    constraints: BASE_CONSTRAINTS,
+    expression: { "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED },
+    cognition: { declaredClass: 0, models: [] },
+    authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
+  },
+};
 const LEGACY_POSTURE = {
-  ...APPROVED_POSTURE,
+  ...POSTURE_FIELDS,
   approval: "native-shared-display-v2",
   manifest: {
     class: "native",
-    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": { maxClass: "shared_room", shared: true } } },
-    constraints: ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"],
-    expression: { "visual.card": ["acknowledged", "degraded"] },
+    capabilities: { input: ["text.public", "state.visibility"], output: { "visual.card": CARD } },
+    constraints: BASE_CONSTRAINTS,
+    expression: { "visual.card": ACKNOWLEDGED },
     cognition: { declaredClass: 0, models: [] },
     authority: { mayOriginate: ["state.change", "user.request"], reflexive: [] },
   },
@@ -65,6 +150,8 @@ const SURFACE = {
   ...APPROVED_POSTURE,
   display: true,
   speech: true,
+  actions: ["action.open", "action.run"],
+  confirms: true,
   surfaceId: SURFACE_ID,
   enrollmentId: ENROLLMENT_ID,
   platform: "macos",
@@ -77,7 +164,7 @@ const SURFACE = {
 };
 
 it("accepts the four explicit native platforms and normalizes enrollment UUID case", () => {
-  expect(NATIVE_APPROVAL).toBe("native-shared-speech-v3");
+  expect(NATIVE_APPROVAL).toBe("native-device-action-v4");
   for (const platform of ["macos", "linux", "android", "android_tv"]) {
     expect(parseNativeDescriptor({ ...DESCRIPTOR, enrollmentId: ENROLLMENT_ID.toUpperCase(), platform }))
       .toEqual({ ...DESCRIPTOR, platform });
@@ -174,13 +261,35 @@ it("requires exact revision-bound mutation inputs and preserves room for the nex
   }
 });
 
+it("matches Cosmos per platform: exactly the channels that platform declares, and no other manifest is a known posture", () => {
+  for (const [platform, manifest] of Object.entries(MANIFESTS)) {
+    expect(nativeManifest(platform as "macos")).toEqual(manifest);
+    expect(nativePosture(platform as "macos")).toEqual({ ...POSTURE_FIELDS, approval: NATIVE_APPROVAL, manifest });
+  }
+  // Only macOS may be asked to run a task, and only a device that is not a
+  // television may host a confirmation ceremony.
+  const surface = (platform: string) => parseNativeSurface({ ...SURFACE, platform, manifest: MANIFESTS[platform] });
+  expect(surface("macos").actions).toEqual(["action.open", "action.run"]);
+  expect(surface("linux").actions).toEqual(["action.open"]);
+  expect(surface("android").actions).toEqual(["action.open", "action.route"]);
+  expect(surface("android_tv").actions).toEqual(["action.play"]);
+  expect(surface("android_tv").confirms).toBe(false);
+  for (const platform of ["macos", "linux", "android"]) expect(surface(platform).confirms).toBe(true);
+  // A manifest is bound to the record's OWN platform: an Android manifest on a
+  // Mac record is unknown, not "some known manifest".
+  expect(() => parseNativeSurface({ ...SURFACE, platform: "macos", manifest: MANIFESTS.android })).toThrow("unsupported_native_posture");
+  expect(() => parseNativeSurface({ ...SURFACE, platform: "android_tv", manifest: MANIFESTS.macos })).toThrow("unsupported_native_posture");
+});
+
 it("keeps the fixed posture at shared text input, one shared visual card and one spoken reply with no inferred actor or autonomy", () => {
-  expect(NATIVE_SURFACE_POSTURE).toEqual(APPROVED_POSTURE);
   expect(parseNativeSurface(SURFACE)).toEqual(SURFACE);
-  // An earlier display-only approval still renders cards, but it plays no speech until reapproved.
-  const { display: _display, speech: _speech, ...withoutOutputs } = SURFACE;
+  // Earlier approvals still render and speak, and declare no action channel
+  // until the owner approves the installation again.
+  const { display: _display, speech: _speech, actions: _actions, confirms: _confirms, ...withoutOutputs } = SURFACE;
+  const speechOnly = { ...withoutOutputs, ...LEGACY_SPEECH_POSTURE };
+  expect(parseNativeSurface(speechOnly)).toEqual({ ...speechOnly, display: true, speech: true, actions: [], confirms: false });
   const legacy = { ...withoutOutputs, ...LEGACY_POSTURE };
-  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: true, speech: false });
+  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: true, speech: false, actions: [], confirms: false });
   expect(() => parseNativeSurface({ ...legacy, manifest: APPROVED_POSTURE.manifest })).toThrow("unsupported_native_posture");
   expect(() => parseNativeSurface({ ...SURFACE, approval: LEGACY_POSTURE.approval })).toThrow("unsupported_native_posture");
   for (const key of Object.keys(APPROVED_POSTURE)) {
@@ -188,13 +297,18 @@ it("keeps the fixed posture at shared text input, one shared visual card and one
     delete incomplete[key];
     expect(() => parseNativeSurface(incomplete)).toThrow("unsupported_native_posture");
   }
-  const manifest = APPROVED_POSTURE.manifest;
+  const manifest = APPROVED_POSTURE.manifest as { capabilities: { input: string[]; output: Record<string, unknown> }; constraints: string[]; expression: Record<string, unknown>; authority: { mayOriginate: string[]; reflexive: string[] } };
   for (const changed of [
     { ...manifest, hiddenAuthority: true },
     { ...manifest, capabilities: { ...manifest.capabilities, input: [...manifest.capabilities.input, "audio.capture"] } },
     { ...manifest, capabilities: { ...manifest.capabilities, output: { ...manifest.capabilities.output, "audio.tts": { maxClass: "private" } } } },
+    // A raised action ceiling is a posture claim, not a permission: only the
+    // owner's own private-display grant lifts what an action may carry.
+    { ...manifest, capabilities: { ...manifest.capabilities, output: { ...manifest.capabilities.output, "action.run": { ...OPEN, maxClass: "private" } } } },
+    { ...manifest, capabilities: { ...manifest.capabilities, output: { ...manifest.capabilities.output, "action.play": OPEN } } },
     { ...manifest, capabilities: { ...manifest.capabilities, output: { "visual.card": { maxClass: "private", shared: false } } } },
     { ...manifest, constraints: manifest.constraints.slice(1) },
+    { ...manifest, constraints: manifest.constraints.filter(name => name !== "no_effect_isolation") },
     { ...manifest, expression: { ...manifest.expression, success: true } },
     { ...manifest, cognition: { declaredClass: 1, models: [] } },
     { ...manifest, cognition: { declaredClass: 0, models: ["local-model"] } },

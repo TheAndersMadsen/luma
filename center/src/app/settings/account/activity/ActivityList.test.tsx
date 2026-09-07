@@ -6,9 +6,9 @@ import { ActivityList } from "./ActivityList";
 const NOW = Date.UTC(2026, 8, 7, 14, 30);
 const rows = [
   { turnId: "10000000-0000-4000-8000-000000000002", startedAt: Date.UTC(2026, 8, 7, 14, 5), asked: "Asked from your phone", outcome: "Shown on your Mac",
-    why: { candidates: ["Your Mac could show a card.", "Your TV could not show a card — its app was not in front."], hint: "You asked for the Mac", privacy: "This reply was safe to show on a screen other people can see.", expression: false } },
+    why: { events: [], candidates: ["Your Mac could show a card.", "Your TV could not show a card — its app was not in front."], hint: "You asked for the Mac", privacy: "This reply was safe to show on a screen other people can see.", expression: false } },
   { turnId: "10000000-0000-4000-8000-000000000001", startedAt: Date.UTC(2026, 8, 6, 22, 41), asked: "Asked from your Mac", outcome: "Nowhere to show it",
-    why: { candidates: [], hint: null, privacy: "This reply was private to you.", expression: true } },
+    why: { events: [], candidates: [], hint: null, privacy: "This reply was private to you.", expression: true } },
 ];
 
 afterEach(() => { vi.useRealTimers(); });

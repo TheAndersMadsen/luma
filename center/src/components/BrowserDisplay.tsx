@@ -182,6 +182,12 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
   const [sent, setSent] = useState("");
   const [sending, setSending] = useState(false);
   const ready = active && tab.tabStatus === "visible";
+  /*
+   * The display is ON and this tab is simply behind another one. That is not
+   * "off" and it is not "connecting": saying either sent an owner to look for
+   * a switch that was already on. It is one thing to do, and only one.
+   */
+  const backgrounded = active && tab.tabStatus === "hidden";
   useEffect(() => { if (!ready) { setDraft(""); setSent(""); setSending(false); } }, [ready]);
   const status = tab.status;
   const turnOpen = OPEN_STATES.includes(status.title);
@@ -215,14 +221,15 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
         <span className={styles.nebula} aria-hidden="true" />
         <h2 className={styles.emptyTitle}>Ask anything</h2>
         <p className={styles.emptyBody}>{ready ? "Replies appear here or on the device that suits them best."
-          : "Turn on replies in this browser to ask Cosmos from this tab."}</p>
+          : backgrounded ? "Replies are on in this browser. Bring this tab to the front to ask from it."
+            : "Turn on replies in this browser to ask Cosmos from this tab."}</p>
         <ul className={styles.examples}>{EXAMPLES.map(example => <li key={example}>
           <button type="button" className={styles.example} disabled={!ready || sending} onClick={() => send(example)}>{example}</button>
         </li>)}</ul>
       </div> : null}
     </div>
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); send(draft); }}>
-      <input aria-label="Ask Cosmos" placeholder={ready ? "Ask Cosmos…" : "Waiting for the connection…"} maxLength={4000}
+      <input aria-label="Ask Cosmos" placeholder={ready ? "Ask Cosmos…" : backgrounded ? "Bring this tab to the front to ask…" : "Waiting for the connection…"} maxLength={4000}
         value={draft} disabled={!ready || sending} autoComplete="off" onKeyDown={promptKeys} onChange={event => setDraft(event.target.value)} />
       <button type="submit" className={styles.send} disabled={!ready || sending || !draft.trim()}>Send</button>
     </form>

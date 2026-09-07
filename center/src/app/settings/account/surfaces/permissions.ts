@@ -5,6 +5,8 @@ import { LOOKUP_SERVICES, parseLookupState, type LookupPolicy, type LookupProvid
 import { PRIVATE_DISPLAY_APPROVAL, parsePrivateDisplayApproval, type PrivateDisplayApproval, type PrivateDisplayPolicy } from "@/lib/contracts/privateDisplay";
 import { SCREEN_CONTEXT_APPROVAL, parseScreenContextApproval, type ScreenContextApproval, type ScreenContextPolicy } from "@/lib/contracts/screenContext";
 import { LOCAL_VOICE_APPROVAL, parseLocalVoiceApproval, type LocalVoiceApproval, type LocalVoicePolicy } from "@/lib/contracts/localVoice";
+import { DEVICE_ACTIONS_APPROVAL, parseDeviceActionApproval, type DeviceActionApproval, type DeviceActionPolicy } from "@/lib/contracts/deviceActions";
+import { DEVICE_COMMANDS_APPROVAL, parseDeviceCommandApproval, type DeviceCommandApproval, type DeviceCommandPolicy } from "@/lib/contracts/deviceCommands";
 
 const TIMEOUT = 10000;
 
@@ -23,10 +25,21 @@ async function get(path: string, signal: AbortSignal): Promise<unknown> {
   signal.throwIfAborted();
   return body;
 }
+/**
+ * Cosmos answered a definite no. The write did not commit, so the snapshot the
+ * owner read is still current and they can change the input and try again
+ * without a fresh read — unlike a lost reply, which may have committed.
+ */
+export class PermissionRefused extends Error {
+  constructor(readonly status: number) { super("refused"); }
+}
 async function post(path: string, body: unknown, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, cache: "no-store", signal, body: JSON.stringify(body) });
   signal.throwIfAborted();
-  if (!response.ok) throw new Error("unconfirmed");
+  if (!response.ok) {
+    if (response.status === 400 || response.status === 403) throw new PermissionRefused(response.status);
+    throw new Error("unconfirmed");
+  }
   const result: unknown = await response.json();
   signal.throwIfAborted();
   return result;
@@ -113,6 +126,52 @@ export function localVoicePermission(surfaceId: string, approvalRevision: number
   };
 }
 
+/**
+ * "Let this device act": what one installation may be asked to open, whether it
+ * may route to a place, and which media providers it may play. Cosmos refuses
+ * an operation this installation's approved manifest never declared, and caps
+ * the class by that installation's own private-display ceiling.
+ */
+export function deviceActionsPermission(surfaceId: string, approvalRevision: number): Permission<DeviceActionApproval | null, DeviceActionPolicy> {
+  const path = `/api/surfaces/${surfaceId}/device-actions`;
+  return {
+    async read(signal) {
+      const saved = parseDeviceActionApproval(await get(path, signal));
+      if (saved && saved.approvalRevision !== approvalRevision) throw new Error("approval_changed");
+      return saved;
+    },
+    async write(snapshot, policy, signal) {
+      const expectedRevision = snapshot?.revision ?? 0;
+      const saved = parseDeviceActionApproval(await post(path, { approval: DEVICE_ACTIONS_APPROVAL, approvalRevision, expectedRevision, policy }, signal));
+      if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
+      return saved;
+    },
+  };
+}
+
+/**
+ * "Tasks on this device": the commands the owner authored for one macOS
+ * installation. `argv` is a fixed array written here by a person; there is no
+ * shell string and no parameter, so nothing a model or a page says can become
+ * an argument.
+ */
+export function deviceCommandsPermission(surfaceId: string, approvalRevision: number): Permission<DeviceCommandApproval | null, DeviceCommandPolicy> {
+  const path = `/api/surfaces/${surfaceId}/device-commands`;
+  return {
+    async read(signal) {
+      const saved = parseDeviceCommandApproval(await get(path, signal));
+      if (saved && saved.approvalRevision !== approvalRevision) throw new Error("approval_changed");
+      return saved;
+    },
+    async write(snapshot, policy, signal) {
+      const expectedRevision = snapshot?.revision ?? 0;
+      const saved = parseDeviceCommandApproval(await post(path, { approval: DEVICE_COMMANDS_APPROVAL, approvalRevision, expectedRevision, policy }, signal));
+      if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
+      return saved;
+    },
+  };
+}
+
 /** A native surface's lookup binding names its exact approval and has no browser incarnation. */
 export function lookupPermission(service: LookupService, surfaceId: string, approvalRevision: number): Permission<LookupState, LookupPolicy> {
   const definition = LOOKUP_SERVICES[service];
@@ -146,7 +205,7 @@ export function activeLookupProvider(state: LookupState | undefined): LookupProv
   return recorded && state.providers.some(provider => exact(provider, recorded)) ? recorded : null;
 }
 
-export type PermissionFailure = "unavailable" | "changed" | "unconfirmed";
+export type PermissionFailure = "unavailable" | "changed" | "unconfirmed" | "refused";
 /** Decides the write from the snapshot it will be written against, or explains why none is needed. */
 export type Change<S, P> = (snapshot: S) => { policy: P | null } | { skip: string };
 export type Outcome = { result: "confirmed" } | { result: "skipped"; reason: string } | { result: "failed"; failure: PermissionFailure };
@@ -212,10 +271,17 @@ export function usePermission<S, P>(permission: Permission<S, P>, enabled = true
       if (epoch !== generation.current) return { result: "failed", failure: "unavailable" };
       setSnapshot(saved); setMessage(confirmation);
       return { result: "confirmed" };
-    } catch {
-      // A timed-out or rejected write may have committed. Only a fresh read can say.
-      if (epoch === generation.current) { setSnapshot(undefined); setFailure("unconfirmed"); }
-      return { result: "failed", failure: "unconfirmed" };
+    } catch (error) {
+      // A definite no changed nothing, so the snapshot the owner read is still
+      // current and the next attempt needs no fresh read.
+      if (error instanceof PermissionRefused) {
+        if (epoch === generation.current) setFailure("refused");
+        return { result: "failed", failure: "refused" };
+      }
+      // A timed-out or lost write may have committed. Only a fresh read can say.
+      const failed: PermissionFailure = error instanceof Error && error.message === "approval_changed" ? "changed" : "unconfirmed";
+      if (epoch === generation.current) { setSnapshot(undefined); setFailure(failed); }
+      return { result: "failed", failure: failed };
     } finally { if (epoch === generation.current) { active.current = null; setBusy(false); } }
   }, [begin, permission, setSnapshot]);
   useEffect(() => {

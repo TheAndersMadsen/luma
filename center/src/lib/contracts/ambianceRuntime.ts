@@ -29,7 +29,7 @@ export interface RenderCommand {
 }
 export const PRIVACY_CLASSES = ["public", "shared_room", "near_user", "private", "sensitive"] as const;
 export type PrivacyClass = typeof PRIVACY_CLASSES[number];
-export const TURN_STATES = ["working", "waiting", "shown", "spoken", "nowhere", "unknown"] as const;
+export const TURN_STATES = ["working", "waiting", "confirming", "acting", "shown", "spoken", "done", "refused", "nowhere", "unknown"] as const;
 export type TurnState = typeof TURN_STATES[number];
 /** Where one turn stands, content-free: the runtime names a kind of device, never text or a device ID. */
 export interface TurnStatus {

@@ -369,3 +369,102 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* The two device-action permissions: a switch row, then the owner's own lists. */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-200);
+}
+
+.editorGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editorLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.entry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--hu-radius-control);
+  background: var(--hu-colors-penumbra-300, rgba(0, 0, 0, 0.24));
+}
+
+.entryText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--hu-colors-crater-base);
+}
+
+.entryTitle {
+  color: var(--hu-colors-white);
+  overflow-wrap: anywhere;
+}
+
+.entryDetail {
+  font-size: 13px;
+  color: var(--hu-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* argv, exactly as it will be spawned: one fixed element per line. */
+.argv {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.addRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.addRow .field {
+  margin-top: 0;
+}
+
+.checkField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--hu-colors-crater-base);
+}
+
+.budget {
+  font-size: 13px;
+  color: var(--hu-text-muted);
+}
+
+/* A row whose left column is a whole editor keeps its switch beside the title,
+   not floating in the middle of a list the owner is typing into. */
+.tallRow {
+  align-items: flex-start;
+}

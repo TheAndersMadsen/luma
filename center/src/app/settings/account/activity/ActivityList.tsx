@@ -61,6 +61,9 @@ export function ActivityList({ activity }: { activity: Activity }) {
                   <details className={styles.why}>
                     <summary>Why</summary>
                     <div className={styles.reason}>
+                      {/* What actually happened first: a confirmation, a device's own
+                          report, a stop, a limit. Then where it could have gone. */}
+                      {row.why.events.length ? <ul>{row.why.events.map((line, position) => <li key={position}>{line}</li>)}</ul> : null}
                       {row.why.candidates.length ? <ul>{row.why.candidates.map((line, position) => <li key={position}>{line}</li>)}</ul>
                         : <p>Cosmos recorded no device choice for this turn.</p>}
                       {row.why.hint ? <p>{row.why.hint}</p> : null}
