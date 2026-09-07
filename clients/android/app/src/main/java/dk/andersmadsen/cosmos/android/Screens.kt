@@ -43,8 +43,12 @@ fun deviceName(platform: String?): String? = when (platform) {
     else -> null
 }
 
-/** Said under "Cannot confirm"; the request is never replayed on the owner's behalf. */
-const val CANNOT_CONFIRM_DETAIL = "I can't confirm whether that request was handled. It was not sent again."
+/**
+ * The one short sentence under "Cannot confirm". The state word already says the
+ * outcome is unknown, so this adds the only other thing worth knowing: nothing
+ * was replayed on the owner's behalf.
+ */
+const val CANNOT_CONFIRM_DETAIL = "That request was not sent again."
 
 /** One sentence on what happened, one on what to do; nothing technical and no identifiers. */
 fun explain(code: String): String = when (code) {
@@ -139,6 +143,10 @@ fun SurfaceState.presence(ask: Ask? = null): Presence {
         unreported -> Presence("Working", null, Tone.ACTIVE, false)
         status != null -> Presence(status.line(), status.detail(), status.tone(), !status.running())
         busy -> Presence("Working", null, Tone.ACTIVE, false)
+        // An abandoned request is the outcome of the last thing the owner did, so
+        // it is said here in the one status vocabulary and then fades quiet, rather
+        // than standing on the panel as a notice of its own.
+        hasUnknownOutcome -> Presence("Cannot confirm", CANNOT_CONFIRM_DETAIL, Tone.QUIET, true)
         else -> Presence("Connected", null, Tone.LIVE, true)
     }
 }
@@ -218,16 +226,12 @@ sealed interface AssistContext {
     data object NoRole : AssistContext
 }
 
+/**
+ * The chip is everything the sheet says about the screen it opened over: it names
+ * what is attached and nothing is attached when it is absent. What Cosmos does
+ * with screen text is explained in Center, not over the owner's app.
+ */
 fun AssistContext.chipLabel(): String? = (this as? AssistContext.Attached)?.let { "Using: ${it.context.app} screen" }
-
-/** The calm line under the ask field; null when there is nothing to say. */
-fun AssistContext.line(): String? = when (this) {
-    AssistContext.Pending, AssistContext.Removed -> null
-    is AssistContext.Attached -> "The text that was on screen. The reply stays on this phone."
-    AssistContext.Locked -> "The screen was locked, so nothing from it is used."
-    AssistContext.Unavailable -> "No screen text was available."
-    AssistContext.NoRole -> "Cosmos can use screen text once it is your assistant."
-}
 
 /** What the TV stage shows over its content; the set-up and approve screens are not stages. */
 sealed interface TvStage {
@@ -307,6 +311,23 @@ fun SurfaceState.taskCard(nowMs: Long, platform: String): TaskCard? {
 }
 
 /**
+ * The one line a television is ever allowed under its content, and usually none
+ * at all. A command is its state word only — a shared room learns nothing about
+ * what the command was — the connection is its own word, and otherwise it is
+ * whatever single sentence the panel owes. Never a hint, never an explanation,
+ * never two of them joined together.
+ */
+fun SurfaceState.tvNotice(nowMs: Long): String? {
+    val task = taskCard(nowMs, DevicePolicy.TV)
+    if (task != null) return task.state
+    return when (sessionStatus()) {
+        SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
+        SessionStatus.DISCONNECTED -> SessionStatus.DISCONNECTED.label
+        SessionStatus.CONNECTED -> notice()
+    }
+}
+
+/**
  * Snapshots whose message is worth a quiet notice; the pill and waveform
  * already convey the steady states. A report is here for the one thing it can
  * say — that the command it named had already been replaced — and says nothing
@@ -319,9 +340,6 @@ fun SurfaceState.notice(): String? = when {
     operation in NOTICED_OPERATIONS -> message
     else -> null
 }?.ifBlank { null }
-
-/** Shown beside [notice] while the journal remembers an abandoned operation; the Mac says the same. */
-const val UNKNOWN_OUTCOME_NOTICE = "A previous request has an unknown outcome. It will not be replayed automatically; you can send a new request once connected."
 
 /** The request can still be withdrawn while its admission is the newest thing on screen. */
 fun SurfaceState.offersCancel(): Boolean = canCancel && operation == "send_text"

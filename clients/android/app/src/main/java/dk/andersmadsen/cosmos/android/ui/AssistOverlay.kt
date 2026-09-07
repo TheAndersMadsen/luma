@@ -12,10 +12,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -50,7 +48,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.traversalIndex
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -65,11 +63,9 @@ import dk.andersmadsen.cosmos.android.SheetBody
 import dk.andersmadsen.cosmos.android.SurfaceState
 import dk.andersmadsen.cosmos.android.chipLabel
 import dk.andersmadsen.cosmos.android.isComplete
-import dk.andersmadsen.cosmos.android.line
 import dk.andersmadsen.cosmos.android.notice
 import dk.andersmadsen.cosmos.android.presence
 import dk.andersmadsen.cosmos.android.sheetBody
-import dk.andersmadsen.cosmos.android.suggestions
 import kotlin.math.roundToInt
 
 /** What the overlay can ask its host, the assist activity or the voice session, to do. */
@@ -199,7 +195,7 @@ private fun SheetBodyView(
         }
         is SheetBody.Now -> NowLine(body.text)
         is SheetBody.Note -> Text(
-            body.text, color = CosmosPalette.secondary, fontSize = 15.sp, lineHeight = 21.sp,
+            body.text, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine,
             modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         )
         // Once there is something in the field the prompts have done their job and step aside.
@@ -217,30 +213,17 @@ private fun NowLine(text: String) {
         verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         CosmosWaveform(AssistantState.THINKING, Modifier.size(width = 30.dp, height = 22.dp).padding(top = 2.dp))
-        Text(text, color = CosmosPalette.primary, fontSize = 16.sp, lineHeight = 22.sp, modifier = Modifier.weight(1f))
+        Text(text, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine, modifier = Modifier.weight(1f))
     }
 }
 
-/** Nothing asked yet: a horizon of the kit nebula, then the prompts that work today under it. */
+/** Nothing asked yet: a horizon of the kit nebula, and one row of small prompt chips under it. */
 @Composable
 private fun EmptyState(hasScreenContext: Boolean, onPrompt: (String) -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         CosmosHorizon()
-        for (prompt in suggestions(hasScreenContext)) SuggestionRow(prompt, onPrompt)
+        CosmosSuggestionRow(hasScreenContext, enabled = true, onPrompt = onPrompt)
     }
-}
-
-@Composable
-private fun SuggestionRow(prompt: String, onPrompt: (String) -> Unit) {
-    val label = stringResource(R.string.suggestion, prompt)
-    Text(
-        prompt, color = CosmosPalette.primary, fontSize = 15.sp, lineHeight = 20.sp,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-            .clickable(role = Role.Button) { onPrompt(prompt) }
-            .background(CosmosPalette.card, RoundedCornerShape(16.dp))
-            .padding(horizontal = 16.dp, vertical = 14.dp)
-            .semantics { contentDescription = label },
-    )
 }
 
 /** A failure or a pending operation, as one sentence with the action that can help. */
@@ -250,7 +233,7 @@ private fun SheetNotice(state: SurfaceState, actions: AssistOverlayActions) {
     val failed = state.alert || state.phase == Phase.BLOCKED
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
-            text, color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = 13.sp, lineHeight = 18.sp,
+            text, color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
         if (state.phase != Phase.CONNECTED) {
@@ -259,30 +242,32 @@ private fun SheetNotice(state: SurfaceState, actions: AssistOverlayActions) {
     }
 }
 
-/** The honest chip: which app's text is attached, removable with one tap. */
+/**
+ * One line about the screen behind the sheet, and only when there is something to
+ * say: the chip names the app whose text is attached and one tap removes it. When
+ * nothing is attached there is no chip, which is the whole of what the sheet says
+ * about it — a locked screen, a screen the system offered nothing from and a chip
+ * the owner took off all look the same, because they are: nothing travels.
+ */
 @Composable
 fun AssistContextRow(context: AssistContext, onRemove: () -> Unit, onChooseAssistant: () -> Unit, modifier: Modifier = Modifier) {
     val label = context.chipLabel()
-    val line = context.line()
-    if (label == null && line == null) return
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (label != null) {
-            val remove = stringResource(R.string.remove_context)
-            Row(
-                Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = remove, onClick = onRemove)
-                    .background(CosmosPalette.card, CircleShape)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                    .semantics { contentDescription = "$label. $remove" },
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(label, color = CosmosPalette.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                Text("✕", color = CosmosPalette.secondary, fontSize = 14.sp)
-            }
-        }
-        if (line != null) Text(line, color = CosmosPalette.secondary.copy(alpha = .75f), fontSize = 12.sp, lineHeight = 17.sp)
-        if (context == AssistContext.NoRole) {
-            Spacer(Modifier.height(2.dp))
-            TextButton(onChooseAssistant) { Text(stringResource(R.string.choose_assistant)) }
-        }
+    // Without the assistant role there is no screen text to offer, only the one
+    // control that changes that; it is a button, not a sentence to read.
+    if (context == AssistContext.NoRole) {
+        TextButton(onChooseAssistant, modifier) { Text(stringResource(R.string.choose_assistant)) }
+        return
+    }
+    if (label == null) return
+    val remove = stringResource(R.string.remove_context)
+    Row(
+        modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClickLabel = remove, onClick = onRemove)
+            .background(CosmosPalette.card, CircleShape)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .semantics { contentDescription = "$label. $remove" },
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(label, color = CosmosPalette.primary, fontSize = CosmosType.quiet, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("✕", color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
     }
 }

@@ -28,7 +28,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dk.andersmadsen.cosmos.android.CreditPart
 import dk.andersmadsen.cosmos.android.DisplayCard
 import dk.andersmadsen.cosmos.android.DisplayContent
@@ -46,13 +45,13 @@ fun DisplayCardView(card: DisplayCard, onCommitted: (DisplayCard) -> Unit, modif
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             if (card.private) {
                 // States the class Cosmos routed at; it is not a claim that nobody else can see the screen.
-                Text(stringResource(R.string.private_reply), color = CosmosPalette.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.private_reply), color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
                 Spacer(Modifier.height(8.dp))
             }
             when (val content = card.content) {
                 is DisplayContent.Text -> CosmosMessage(content.text)
                 is DisplayContent.Choices -> {
-                    Text(content.title, color = CosmosPalette.primary, fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+                    Text(content.title, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(10.dp))
                     for (item in content.items) {
                         val label = "${item.id}. ${item.title}"
@@ -63,33 +62,32 @@ fun DisplayCardView(card: DisplayCard, onCommitted: (DisplayCard) -> Unit, modif
                             Modifier.fillMaxWidth().heightIn(min = 48.dp).then(choose).padding(vertical = 10.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text(item.id, color = CosmosPalette.glow, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(28.dp))
+                            Text(item.id, color = CosmosPalette.glow, fontSize = CosmosType.body, modifier = Modifier.width(28.dp))
                             Column {
-                                Text(item.title, color = CosmosPalette.primary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                                if (item.detail.isNotBlank()) Text(item.detail, color = CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp)
+                                Text(item.title, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine)
+                                if (item.detail.isNotBlank()) Text(item.detail, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine)
                             }
                         }
                     }
-                    if (onChoose != null) Text(stringResource(R.string.choose_one), color = CosmosPalette.secondary, fontSize = 12.sp)
                 }
                 is DisplayContent.Places -> {
-                    Text(content.query, color = CosmosPalette.primary, fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+                    Text(content.query, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(10.dp))
-                    if (content.items.isEmpty()) Text(stringResource(R.string.no_places), color = CosmosPalette.secondary, fontSize = 15.sp)
+                    if (content.items.isEmpty()) Text(stringResource(R.string.no_places), color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
                     for (item in content.items) {
-                        Text(item.name, color = CosmosPalette.primary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                        Text(item.address, color = CosmosPalette.secondary, fontSize = 15.sp, lineHeight = 21.sp)
+                        Text(item.name, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine)
+                        Text(item.address, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine)
                         item.sourceUrl?.let { url ->
                             Text(buildAnnotatedString {
                                 withLink(LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = CosmosPalette.glow, textDecoration = TextDecoration.Underline)))) {
                                     append(stringResource(R.string.view_on_maps))
                                 }
-                            }, fontSize = 14.sp, modifier = Modifier.heightIn(min = 44.dp).padding(top = 4.dp))
+                            }, fontSize = CosmosType.quiet, modifier = Modifier.heightIn(min = 44.dp).padding(top = 4.dp))
                         }
                         Spacer(Modifier.height(10.dp))
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(stringResource(R.string.maps_credit), color = CosmosPalette.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.maps_credit), color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
                     for (credit in content.credits) {
                         Text(buildAnnotatedString {
                             for (part in credit) when (part) {
@@ -97,7 +95,7 @@ fun DisplayCardView(card: DisplayCard, onCommitted: (DisplayCard) -> Unit, modif
                                 is CreditPart.Link -> withLink(LinkAnnotation.Url(part.href,
                                     TextLinkStyles(SpanStyle(color = CosmosPalette.glow, textDecoration = TextDecoration.Underline)))) { append(part.text) }
                             }
-                        }, color = CosmosPalette.secondary, fontSize = 12.sp)
+                        }, color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
                     }
                 }
             }

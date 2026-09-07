@@ -17,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -66,6 +68,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -74,6 +77,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dk.andersmadsen.cosmos.android.Presence
 import dk.andersmadsen.cosmos.android.R
 import dk.andersmadsen.cosmos.android.Tone
+import dk.andersmadsen.cosmos.android.suggestions
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlinx.coroutines.delay
@@ -101,6 +105,18 @@ object CosmosPalette {
     /** A card inset into the sheet: a step darker than the ground, with a quiet edge. */
     val card = Color(0xFF0A1013)
     val cardBorder = Color(0xFF22333A)
+}
+
+/**
+ * Two sizes on every assistant surface and no others: [body] for the thing the
+ * owner came to read, [quiet] for everything that is only glanced at. Both carry
+ * generous line height, and nothing is bold except a reply.
+ */
+object CosmosType {
+    val body = 17.sp
+    val bodyLine = 25.sp
+    val quiet = 14.sp
+    val quietLine = 20.sp
 }
 
 /** True when the owner turned system animations off; every transition then cuts instead of moving. */
@@ -177,9 +193,11 @@ fun PresenceLine(presence: Presence, modifier: Modifier = Modifier) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             Box(Modifier.size(7.dp).background(tint, CircleShape))
-            Text(presence.line, color = CosmosPalette.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(presence.line, color = CosmosPalette.primary, fontSize = CosmosType.quiet)
         }
-        presence.detail?.let { Text(it, color = CosmosPalette.secondary, fontSize = 13.sp, lineHeight = 18.sp) }
+        presence.detail?.let {
+            Text(it, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine)
+        }
     }
 }
 
@@ -251,9 +269,36 @@ fun CosmosCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.(
 fun CosmosMessage(text: String, modifier: Modifier = Modifier) {
     SelectionContainer(modifier.fillMaxWidth()) {
         Text(
-            text = text, color = CosmosPalette.primary, fontSize = 17.sp, lineHeight = 24.sp,
+            text = text, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine,
             fontFamily = FontFamily.SansSerif, modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp),
         )
+    }
+}
+
+/**
+ * The prompts, as one row of small chips that scrolls sideways rather than a stack
+ * of full-width rows. They are an offer, not something to read: the caller drops
+ * the row the moment there is anything in the field.
+ */
+@Composable
+fun CosmosSuggestionRow(screenContext: Boolean, enabled: Boolean, onPrompt: (String) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for (prompt in suggestions(screenContext)) {
+            val label = stringResource(R.string.suggestion, prompt)
+            Text(
+                prompt, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (enabled) CosmosPalette.primary else CosmosPalette.secondary, fontSize = CosmosType.quiet,
+                modifier = Modifier.heightIn(min = 44.dp)
+                    .clickable(role = Role.Button, enabled = enabled) { onPrompt(prompt) }
+                    .background(CosmosPalette.card, CircleShape)
+                    .border(1.dp, CosmosPalette.cardBorder, CircleShape)
+                    .padding(horizontal = 14.dp, vertical = 11.dp)
+                    .semantics { contentDescription = label },
+            )
+        }
     }
 }
 

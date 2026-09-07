@@ -102,13 +102,13 @@ import dk.andersmadsen.cosmos.android.Screen
 import dk.andersmadsen.cosmos.android.SessionStatus
 import dk.andersmadsen.cosmos.android.SurfaceState
 import dk.andersmadsen.cosmos.android.TvStage
-import dk.andersmadsen.cosmos.android.UNKNOWN_OUTCOME_NOTICE
 import dk.andersmadsen.cosmos.android.notice
 import dk.andersmadsen.cosmos.android.pageRanges
 import dk.andersmadsen.cosmos.android.screen
 import dk.andersmadsen.cosmos.android.serverLabel
 import dk.andersmadsen.cosmos.android.sessionStatus
 import dk.andersmadsen.cosmos.android.taskCard
+import dk.andersmadsen.cosmos.android.tvNotice
 import dk.andersmadsen.cosmos.android.tvStage
 import dk.andersmadsen.cosmos.android.action.DevicePolicy
 import kotlinx.coroutines.delay
@@ -208,12 +208,9 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
         status != SessionStatus.CONNECTED && state.canConnect -> TvStageAction(connectLabel, actions.connect)
         else -> TvStageAction(askLabel) { if (asking || state.canSend) asking = !asking }
     }
-    val notice = when {
-        task != null -> listOfNotNull(task.state, task.sentence, task.elapsed).joinToString(" · ")
-        status == SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
-        status == SessionStatus.DISCONNECTED -> stringResource(R.string.tv_connect_hint)
-        else -> state.notice()
-    }
+    // A television shows the answer, the question band and nothing else; whatever is
+    // left to say is one word or one sentence, and the rule for that lives in tvNotice.
+    val notice = state.tvNotice(now)
     // Back closes the paged view, then the ask field, then sends the current reply or transcript away.
     BackHandler(enabled = reading) { reading = false }
     BackHandler(enabled = asking) { asking = false }
@@ -533,8 +530,8 @@ private fun TvAnswerPages(text: String) {
     ) {
         Column(Modifier.fillMaxSize().padding(horizontal = maxWidth * .05f, vertical = maxHeight * .05f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             TvPagedText(text, page, onPages = { pages = it }, Modifier.weight(1f).fillMaxWidth())
-            Text(
-                if (pages > 1) stringResource(R.string.tv_page_of, page + 1, pages) else stringResource(R.string.tv_back_to_return),
+            if (pages > 1) Text(
+                stringResource(R.string.tv_page_of, page + 1, pages),
                 fontSize = 15.sp, color = CosmosPalette.secondary, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
@@ -566,7 +563,7 @@ private fun TvSetupScreen(state: SurfaceState, actions: SurfaceActions) {
     TvTextScreen(
         status = stringResource(if (preparing) R.string.setup_busy else R.string.tv_not_set_up),
         action = TvActionSpec(stringResource(if (preparing) R.string.setup_busy else R.string.tv_setup_action), state.canPrepare) { actions.prepare(state.serverOrigin) },
-        notice = listOfNotNull(state.notice(), UNKNOWN_OUTCOME_NOTICE.takeIf { state.hasUnknownOutcome }).joinToString(" · ").ifEmpty { null },
+        notice = state.notice(),
         failed = state.alert || state.phase == Phase.BLOCKED,
     ) {
         Text(stringResource(R.string.tv_setup_title), fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, color = CosmosPalette.primary)
@@ -617,10 +614,9 @@ private fun TvTextScreen(status: String, action: TvActionSpec, notice: String?, 
             }
             Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.Center, content = content)
             TvAction(action.label, action.onClick, Modifier.focusRequester(focus), action.enabled)
-            Text(
-                notice ?: stringResource(R.string.tv_hint),
-                fontSize = 15.sp, lineHeight = 21.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                color = if (notice != null && failed) CosmosPalette.error else CosmosPalette.secondary,
+            if (notice != null) Text(
+                notice, fontSize = 15.sp, lineHeight = 21.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                color = if (failed) CosmosPalette.error else CosmosPalette.secondary,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }

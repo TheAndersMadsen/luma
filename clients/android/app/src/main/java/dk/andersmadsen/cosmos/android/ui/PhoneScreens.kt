@@ -1,7 +1,6 @@
 package dk.andersmadsen.cosmos.android.ui
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,7 +51,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -94,7 +92,6 @@ import dk.andersmadsen.cosmos.android.Screen
 import dk.andersmadsen.cosmos.android.SessionStatus
 import dk.andersmadsen.cosmos.android.SheetBody
 import dk.andersmadsen.cosmos.android.SurfaceState
-import dk.andersmadsen.cosmos.android.UNKNOWN_OUTCOME_NOTICE
 import dk.andersmadsen.cosmos.android.isComplete
 import dk.andersmadsen.cosmos.android.notice
 import dk.andersmadsen.cosmos.android.offersCancel
@@ -103,7 +100,6 @@ import dk.andersmadsen.cosmos.android.screen
 import dk.andersmadsen.cosmos.android.serverLabel
 import dk.andersmadsen.cosmos.android.sessionStatus
 import dk.andersmadsen.cosmos.android.sheetBody
-import dk.andersmadsen.cosmos.android.suggestions
 import kotlinx.coroutines.delay
 
 /** Everything either layout can ask the activity to do; the activity owns intents and permissions. */
@@ -169,9 +165,9 @@ private fun SetupScreen(state: SurfaceState, actions: SurfaceActions) {
             )
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(serverLabel(server), color = CosmosPalette.secondary, fontSize = 15.sp)
+                Text(serverLabel(server), color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
                 Text(
-                    stringResource(R.string.change), color = CosmosPalette.glow, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                    stringResource(R.string.change), color = CosmosPalette.glow, fontSize = CosmosType.quiet,
                     modifier = Modifier.heightIn(min = 48.dp).clickable(role = Role.Button) { editing = true }.padding(horizontal = 12.dp, vertical = 14.dp),
                 )
             }
@@ -203,7 +199,7 @@ private fun ApproveScreen(state: SurfaceState, approvalRequested: Boolean, actio
         Body(stringResource(R.string.approve_body))
         CosmosPanel(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(stringResource(R.string.pairing_code), color = CosmosPalette.secondary, fontSize = 13.sp)
+                Text(stringResource(R.string.pairing_code), color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
                 Spacer(Modifier.height(12.dp))
                 FingerprintLines(descriptor)
             }
@@ -212,7 +208,7 @@ private fun ApproveScreen(state: SurfaceState, approvalRequested: Boolean, actio
         ProgressLine(state, approvalRequested, actions)
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             QrCodeImage(url, stringResource(R.string.approval_qr), Modifier.width(200.dp))
-            Text(stringResource(R.string.approve_scan), color = CosmosPalette.secondary, fontSize = 13.sp, textAlign = TextAlign.Center)
+            Text(stringResource(R.string.approve_scan), color = CosmosPalette.secondary, fontSize = CosmosType.quiet, textAlign = TextAlign.Center)
         }
         Disclosure(details, { details = it }) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -235,11 +231,11 @@ private fun ProgressLine(state: SurfaceState, approvalRequested: Boolean, action
     ) {
         if (state.busy) {
             CircularProgressIndicator(Modifier.size(18.dp), color = CosmosPalette.glow, strokeWidth = 2.dp)
-            Text(stringResource(R.string.checking_with_center), color = CosmosPalette.secondary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(stringResource(R.string.checking_with_center), color = CosmosPalette.secondary, fontSize = CosmosType.quiet, modifier = Modifier.weight(1f))
         } else {
             Text(
                 if (failed) state.message else stringResource(R.string.waiting_for_approval),
-                color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp,
+                color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine,
                 modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
             )
             OutlinedButton(actions.connect, enabled = state.canConnect) {
@@ -250,9 +246,9 @@ private fun ProgressLine(state: SurfaceState, approvalRequested: Boolean, action
 }
 
 /**
- * The connected phone. The first moment of a connection is confirmed plainly and
- * then fades into quiet presence; after that the screen holds one reply, the
- * request in flight, or the empty state, with the ask bar at the bottom.
+ * The connected phone: the mark, the status line, the ask bar, and whatever the
+ * owner's last request produced. Nothing else has to be read, so the screen holds
+ * one reply, the request in flight, or the quiet empty state.
  */
 @Composable
 private fun SessionScreen(state: SurfaceState, actions: SurfaceActions) {
@@ -263,17 +259,11 @@ private fun SessionScreen(state: SurfaceState, actions: SurfaceActions) {
     val body = state.sheetBody(ask)
     LaunchedEffect(body) { if (body !is SheetBody.Now) ask = null }
     val status = state.sessionStatus()
-    // The welcome confirmation: shown once the room is joined, gone a couple of seconds later.
-    var welcome by remember { mutableStateOf(false) }
-    LaunchedEffect(status) {
-        if (status == SessionStatus.CONNECTED) { welcome = true; delay(2_200); welcome = false }
-    }
     Column(Modifier.fillMaxSize()) {
         PresenceLine(state.presence(ask), Modifier.padding(top = 8.dp, bottom = 4.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val maxCard = (maxHeight - 24.dp).coerceAtLeast(120.dp)
             when {
-                welcome && body is SheetBody.Empty -> Welcome()
                 body is SheetBody.Reply -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
                     // Choosing an option is a request like any other: Cosmos decides where its reply goes.
                     DisplayCardView(body.card, onCommitted = actions.committed, Modifier.fillMaxWidth().heightIn(max = maxCard), onChoose = { title ->
@@ -299,7 +289,7 @@ private fun SessionScreen(state: SurfaceState, actions: SurfaceActions) {
                     }
                 }
                 // A whole prompt is sent; one that trails off becomes the start of the field.
-                else -> EmptyScreen(state.canSend) { prompt ->
+                else -> EmptyScreen(state.canSend, draft.isBlank()) { prompt ->
                     if (isComplete(prompt) && state.canSend) {
                         ask = Ask(prompt, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
                         actions.send(prompt, target)
@@ -327,46 +317,19 @@ private fun SessionScreen(state: SurfaceState, actions: SurfaceActions) {
     }
 }
 
-/** "Connected", once, in the middle of the screen, fading in and then away on its own. */
+/**
+ * The quiet screen: the kit nebula, and one row of small prompt chips above it that
+ * steps aside the moment there is anything in the field. Nothing here is a sentence,
+ * because nothing here has been asked yet.
+ */
 @Composable
-private fun Welcome() {
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val fade by animateFloatAsState(if (shown) 1f else 0f, calmly(250), label = "welcome")
-    Column(
-        Modifier.fillMaxSize().alpha(fade).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(stringResource(R.string.connected_confirmation), color = CosmosPalette.primary, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
-        Hint(stringResource(R.string.connected_body))
-    }
-}
-
-/** The quiet screen: the kit nebula under three prompts that work today. */
-@Composable
-private fun EmptyScreen(enabled: Boolean, onPrompt: (String) -> Unit) {
+private fun EmptyScreen(enabled: Boolean, idle: Boolean, onPrompt: (String) -> Unit) {
     Box(Modifier.fillMaxSize()) {
         CosmosNebula(Modifier.align(Alignment.BottomCenter), dim = .5f)
-        Column(
-            Modifier.fillMaxWidth().align(Alignment.Center).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            for (prompt in suggestions(false)) {
-                val label = stringResource(R.string.suggestion, prompt)
-                Text(
-                    prompt, color = if (enabled) CosmosPalette.primary else CosmosPalette.secondary, fontSize = 16.sp,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                        .clickable(role = Role.Button, enabled = enabled) { onPrompt(prompt) }
-                        .background(CosmosPalette.card.copy(alpha = .9f), RoundedCornerShape(16.dp))
-                        .padding(horizontal = 18.dp, vertical = 15.dp)
-                        .semantics { contentDescription = label },
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(stringResource(R.string.privacy_footer), color = CosmosPalette.secondary.copy(alpha = .7f), fontSize = 12.sp,
-                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-        }
+        if (idle) CosmosSuggestionRow(
+            screenContext = false, enabled = enabled, onPrompt = onPrompt,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+        )
     }
 }
 
@@ -380,7 +343,7 @@ private fun AskedLine(text: String) {
         verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         CosmosWaveform(AssistantState.THINKING, Modifier.size(width = 34.dp, height = 24.dp).padding(top = 2.dp))
-        Text(text, color = CosmosPalette.primary, fontSize = 17.sp, lineHeight = 24.sp, modifier = Modifier.weight(1f))
+        Text(text, color = CosmosPalette.primary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine, modifier = Modifier.weight(1f))
     }
 }
 
@@ -391,7 +354,7 @@ private fun SpeakingLine(state: SurfaceState) {
         Spacer(Modifier.width(10.dp))
         Text(
             if (state.speaking) stringResource(R.string.speaking) else stringResource(R.string.spoken_reply),
-            color = CosmosPalette.secondary, fontSize = 13.sp, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            color = CosmosPalette.secondary, fontSize = CosmosType.quiet, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
     }
 }
@@ -425,15 +388,15 @@ private fun TaskCardView(card: TaskCard, actions: SurfaceActions) {
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                card.state, color = CosmosPalette.primary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                card.state, color = CosmosPalette.primary, fontSize = CosmosType.quiet,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
             Spacer(Modifier.weight(1f))
             // Reserved either way, so the line does not jump when it appears.
-            Text(card.elapsed ?: "", color = CosmosPalette.secondary, fontSize = 14.sp)
+            Text(card.elapsed ?: "", color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
         }
-        card.sentence?.let { Text(it, color = CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp) }
-        card.next?.let { Text(it, color = CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp) }
+        card.sentence?.let { Text(it, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine) }
+        card.next?.let { Text(it, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine) }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (card.canCancel) TextButton(actions.cancelTask) { Text(stringResource(R.string.cancel_request)) }
             TextButton(actions.closeTask) { Text(stringResource(R.string.close_assistant)) }
@@ -496,20 +459,23 @@ private fun CeremonySheet(ceremony: Ceremony, actions: SurfaceActions) {
     }
 }
 
-/** Pending, retry, unknown-outcome and failure messages, kept quiet but never hidden. */
+/**
+ * The one notice: a failure or a pending operation the owner can still act on,
+ * as a single sentence with the control that helps. An abandoned earlier request
+ * is not one of these — it is the status line's own outcome and is said there.
+ */
 @Composable
 fun Notice(state: SurfaceState, actions: SurfaceActions, modifier: Modifier = Modifier) {
-    val text = state.notice()
-    if (text == null && !state.hasUnknownOutcome) return
+    val text = state.notice() ?: return
     val failed = state.alert || state.phase == Phase.BLOCKED
     Column(
         modifier.fillMaxWidth().padding(top = 12.dp).background(CosmosPalette.card, RoundedCornerShape(16.dp))
             .border(1.dp, CosmosPalette.cardBorder, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (text != null) Text(text, color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = 13.sp, lineHeight = 18.sp,
+        Text(text, color = if (failed) CosmosPalette.error else CosmosPalette.secondary,
+            fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-        if (state.hasUnknownOutcome) Text(UNKNOWN_OUTCOME_NOTICE, color = CosmosPalette.secondary, fontSize = 13.sp, lineHeight = 18.sp)
         if (state.canRetry || state.offersCancel()) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (state.canRetry) TextButton(actions.retry) { Text(stringResource(R.string.retry)) }
             if (state.offersCancel()) TextButton(actions.cancel) { Text(stringResource(R.string.cancel_request)) }
@@ -563,7 +529,7 @@ private fun DestinationButton(destination: Destination, onClick: () -> Unit) {
     val label = stringResource(R.string.continue_on_current, destination.label)
     val open = stringResource(R.string.continue_on_choose)
     Text(
-        "${destination.label} ▾", color = CosmosPalette.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+        "${destination.label} ▾", color = CosmosPalette.primary, fontSize = CosmosType.quiet,
         modifier = Modifier.heightIn(min = 48.dp)
             .clickable(role = Role.Button, onClickLabel = open, onClick = onClick)
             .background(CosmosPalette.card, CircleShape).padding(horizontal = 16.dp, vertical = 14.dp)
@@ -575,7 +541,7 @@ private fun DestinationButton(destination: Destination, onClick: () -> Unit) {
 @Composable
 private fun DestinationRow(chosen: Destination, onSelect: (Destination) -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(stringResource(R.string.continue_on), color = CosmosPalette.secondary, fontSize = 12.sp)
+        Text(stringResource(R.string.continue_on), color = CosmosPalette.secondary, fontSize = CosmosType.quiet)
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -583,7 +549,7 @@ private fun DestinationRow(chosen: Destination, onSelect: (Destination) -> Unit)
             for (destination in Destination.entries) {
                 val current = destination == chosen
                 Text(
-                    destination.label, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    destination.label, fontSize = CosmosType.quiet,
                     color = if (current) CosmosPalette.background else CosmosPalette.primary,
                     modifier = Modifier.heightIn(min = 48.dp)
                         .semantics { selected = current }
@@ -652,17 +618,17 @@ private fun PrimaryButton(label: String, enabled: Boolean, busy: Boolean = false
 
 @Composable
 private fun Step(number: Int) = Text(
-    stringResource(R.string.step_of, number), color = CosmosPalette.secondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+    stringResource(R.string.step_of, number), color = CosmosPalette.secondary, fontSize = CosmosType.quiet,
 )
 
 @Composable
 private fun Title(text: String) = Text(text, color = CosmosPalette.primary, fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
-private fun Body(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = 16.sp, lineHeight = 22.sp)
+private fun Body(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = CosmosType.body, lineHeight = CosmosType.bodyLine)
 
 @Composable
-private fun Hint(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = 15.sp, lineHeight = 21.sp, textAlign = TextAlign.Center,
+private fun Hint(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = CosmosType.quiet, lineHeight = CosmosType.quietLine, textAlign = TextAlign.Center,
     modifier = Modifier.fillMaxWidth())
 
 @Composable

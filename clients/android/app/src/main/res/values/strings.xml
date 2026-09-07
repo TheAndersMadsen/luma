@@ -46,15 +46,11 @@
     <string name="approval_qr">Approval link for Center as a QR code</string>
     <string name="waiting_for_approval">Waiting for approval in Center…</string>
     <string name="checking_with_center">Checking with Center…</string>
-    <string name="connected_confirmation">Connected</string>
-    <string name="connected_body">Ask Cosmos anything below.</string>
-    <string name="privacy_footer">Text only · no microphone · no private memories</string>
 
     <!-- The spoken reply -->
     <string name="speaking">Speaking</string>
     <string name="spoken_reply">Spoken reply</string>
     <string name="private_reply">Private reply</string>
-    <string name="choose_one">Tap one to ask for it.</string>
     <string name="no_places">No matching places found.</string>
     <string name="view_on_maps">View on Google Maps</string>
     <string name="maps_credit">Google Maps</string>
@@ -80,14 +76,11 @@
     <string name="tv_ask">Ask Cosmos</string>
     <string name="tv_more">Read the answer</string>
     <string name="tv_setup_title">Set up this TV</string>
-    <string name="tv_setup_body">Cosmos answers here after you approve this TV. Nothing private is ever shown on a TV.</string>
+    <string name="tv_setup_body">Cosmos answers here after you approve this TV.</string>
     <string name="tv_setup_action">Set up this TV</string>
     <string name="tv_not_set_up">Not set up</string>
     <string name="tv_approve_title">Approve this TV</string>
     <string name="tv_approve_body">Scan the code with your phone to approve this TV in Center. Check that the code below matches.</string>
     <string name="tv_waiting">Waiting for approval</string>
-    <string name="tv_hint">Directional pad to move · OK to select · Back to leave</string>
-    <string name="tv_connect_hint">Disconnected · OK to connect</string>
-    <string name="tv_page_of">Page %1$d of %2$d · left and right to page · Back to return</string>
-    <string name="tv_back_to_return">Back to return</string>
+    <string name="tv_page_of">Page %1$d of %2$d</string>
 </resources>

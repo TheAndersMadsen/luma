@@ -60,9 +60,8 @@ class ScreensTest {
         assertEquals("Cosmos confirmed the connection.", connected.copy(alert = true).notice())
         assertEquals("Cosmos confirmed the connection.", connected.copy(phase = Phase.BLOCKED).notice())
         assertEquals("Cosmos confirmed the connection.", connected.copy(hasPending = true).notice())
-        // An abandoned operation gets its own standing line rather than echoing the current message.
+        // An abandoned operation is the status line's business, so it adds no notice of its own.
         assertNull(connected.copy(hasUnknownOutcome = true).notice())
-        assertTrue(UNKNOWN_OUTCOME_NOTICE.startsWith("A previous request has an unknown outcome."))
         assertEquals("Admitted.", connected.copy(operation = "send_text", message = "Admitted.").notice())
         assertEquals("Gone.", connected.copy(operation = "disconnect", message = "Gone.").notice())
     }
@@ -130,23 +129,24 @@ class ScreensTest {
         assertEquals("Shown on a device", status("shown", null).line())
         assertEquals("Nowhere to show it", status("nowhere", null).line())
         assertEquals("Cannot confirm", status("unknown", "macos").line())
-        assertEquals("I can't confirm whether that request was handled. It was not sent again.", status("unknown", null).detail())
+        // One state word and one short sentence; never two sentences under the line.
+        assertEquals("That request was not sent again.", status("unknown", null).detail())
+        assertEquals(1, CANNOT_CONFIRM_DETAIL.count { it == '.' })
         assertNull(status("shown", "macos").detail())
         assertNull(deviceName("watch"))
     }
 
     @Test
-    fun namesTheScreenChipHonestlyAndSaysWhenThereIsNoScreen() {
+    fun namesTheAttachedScreenAndSaysNothingAtAllWhenThereIsNone() {
         val attached = AssistContext.Attached(ScreenContext("Gmail", "com.google.android.gm", "Subject: Invoice"))
         assertEquals("Using: Gmail screen", attached.chipLabel())
-        assertEquals("The text that was on screen. The reply stays on this phone.", attached.line())
+        // Nothing attached is said by the chip being absent, not by a sentence about
+        // why: a locked screen, a screen the system offered nothing from and a chip
+        // the owner took off are one and the same, because nothing travels either way.
+        assertNull(AssistContext.Pending.chipLabel())
         assertNull(AssistContext.Removed.chipLabel())
-        assertNull(AssistContext.Removed.line())
-        assertNull(AssistContext.Pending.line())
         assertNull(AssistContext.Locked.chipLabel())
-        assertEquals("The screen was locked, so nothing from it is used.", AssistContext.Locked.line())
-        assertEquals("No screen text was available.", AssistContext.Unavailable.line())
-        assertEquals("Cosmos can use screen text once it is your assistant.", AssistContext.NoRole.line())
+        assertNull(AssistContext.Unavailable.chipLabel())
         assertNull(AssistContext.NoRole.chipLabel())
     }
 
@@ -200,6 +200,15 @@ class ScreensTest {
             SurfaceState(phase = Phase.PREPARED, descriptor = descriptor, connectionWanted = true, needsReconnect = true).presence())
         assertEquals(Presence("Disconnected", "Connect this phone to ask.", Tone.QUIET, true),
             SurfaceState(phase = Phase.PREPARED, descriptor = descriptor).presence())
+        // An abandoned earlier request is the outcome of the last thing the owner did,
+        // so it is said once in the same vocabulary and then fades, rather than standing
+        // on the panel as a block of its own. Anything newer outranks it.
+        assertEquals(Presence("Cannot confirm", CANNOT_CONFIRM_DETAIL, Tone.QUIET, true),
+            connected.copy(hasUnknownOutcome = true).presence())
+        assertEquals(Presence("Shown on your Mac", null, Tone.DONE, true),
+            after.copy(hasUnknownOutcome = true).presence())
+        assertEquals(Presence("Working", null, Tone.ACTIVE, false),
+            connected.copy(hasUnknownOutcome = true, busy = true).presence())
         assertTrue(working.running())
         assertTrue(waiting.running())
         assertFalse(stale.running())
@@ -235,6 +244,21 @@ class ScreensTest {
         assertEquals(SheetBody.Note("Connect this phone to ask Cosmos something."), SurfaceState(descriptor = descriptor).sheetBody(null))
         assertEquals(SheetBody.Note("Cosmos is rejoining this phone."),
             SurfaceState(descriptor = descriptor, connectionWanted = true, needsReconnect = true).sheetBody(null))
+    }
+
+    /**
+     * Before anything is asked, a person reads at most one short line. The status
+     * line is that line; nothing else on a connected, idle panel is prose.
+     */
+    @Test
+    fun aConnectedIdlePanelHasOneLineToReadAndNoNotice() {
+        val idle = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        assertEquals(Presence("Connected", null, Tone.LIVE, true), idle.presence())
+        assertNull(idle.presence().detail)
+        assertNull(idle.notice())
+        assertEquals(SheetBody.Empty, idle.sheetBody(null))
+        // The prompts are chips to tap, never sentences: each is one short line.
+        assertTrue(suggestions(true).all { it.length <= 24 && !it.contains(". ") })
     }
 
     @Test
@@ -339,6 +363,36 @@ class ScreensTest {
         // Dismissed with Back, the sheet is gone and the command is still running.
         val dismissed = asking.copy(ceremony = asking.ceremony!!.on(CeremonyEvent.Back))
         assertEquals("Working", dismissed.taskCard(15_000, DevicePolicy.PHONE)?.state)
+    }
+
+    /**
+     * The Shield is not reachable from this workstation, so the television's rule
+     * is proved here: the answer, the question band, and at most one word or one
+     * sentence beside them. Never a hint, never an explanation, never two joined.
+     */
+    @Test
+    fun theTelevisionSaysOneWordAtMostAndNeverAHint() {
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        // Idle and connected, a television says nothing at all: no D-pad hint, no tagline.
+        assertNull(connected.tvNotice(0))
+        // The connection is its own single word.
+        assertEquals("Reconnecting…",
+            SurfaceState(phase = Phase.PREPARED, descriptor = descriptor, connectionWanted = true, needsReconnect = true).tvNotice(0))
+        assertEquals("Disconnected", SurfaceState(phase = Phase.PREPARED, descriptor = descriptor).tvNotice(0))
+        // A running command is its state word alone: the room is never told what it was.
+        val running = connected.copy(task = command, taskStartedAtMs = 1_000)
+        assertEquals("Working", running.tvNotice(15_000))
+        assertFalse(running.tvNotice(15_000)!!.contains("Restaurant Barr"))
+        assertFalse(running.tvNotice(15_000)!!.contains("·"))
+        // A refusal is invisible on a shared screen, so the line goes back to nothing.
+        assertNull(running.copy(taskReport = ActionOutcome.refused(DeclineReason.NOT_PERMITTED)).tvNotice(15_000))
+        // A private command was never the television's to show, running or not.
+        assertNull(running.copy(task = command.copy(privacy = "private")).tvNotice(15_000))
+        // What is left is the one sentence the panel owes, and only that one.
+        val failed = connected.copy(alert = true, operation = "send_text", message = explain("busy"))
+        assertEquals("Cosmos is still on the last request. Wait a moment and try again.", failed.tvNotice(0))
+        // An abandoned earlier request is history and is not announced to a room.
+        assertNull(connected.copy(hasUnknownOutcome = true).tvNotice(0))
     }
 
     @Test
