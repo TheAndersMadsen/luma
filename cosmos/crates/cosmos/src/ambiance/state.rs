@@ -9,6 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const ACK_MS: i64 = 3_000;
+/// How long a shared card is held for a screen that is reachable but not in
+/// front of anyone yet. Short enough that a waiting television cannot hold
+/// the single shared-card slot against the owner's next request.
+pub const ATTENDED_WAIT_MS: i64 = 20_000;
 pub const WORKER_LEASE_MS: i64 = 75_000;
 pub const MAX_ACTIONS: usize = 32;
 
@@ -291,10 +295,27 @@ pub enum RuntimeOperation {
         worker: Uuid,
         action_id: Option<Uuid>,
     },
-    /// The runtime offered the owner's private memory to this turn's cognition.
+    /// The runtime read the owner's own notes for this turn. Reading them is
+    /// what raises the turn to the private class: a note is the owner's
+    /// content whatever the request's own words classified at.
     OfferPrivateContext {
         fence: TurnFence,
         count: u32,
+    },
+    /// Admit one note write for this turn. Cognition proposed only that the
+    /// request be kept; the runtime bounded and classified the words itself
+    /// and passes their measure, never the words.
+    WriteNote {
+        fence: TurnFence,
+        bytes: u32,
+        titled: bool,
+        privacy: PrivacyClass,
+    },
+    /// What the store actually did with the admitted note. Only this may say
+    /// a note exists, and only it decides which sentence the owner hears.
+    NoteWritten {
+        fence: TurnFence,
+        saved: bool,
     },
     /// The owner's screen-context permission for one native installation.
     ScreenContextPolicy {
@@ -518,6 +539,9 @@ pub enum RuntimeResult {
         duplicate: bool,
     },
     PrivateContextOffered,
+    NoteWriteAdmitted,
+    NoteWriteDenied(super::note::Denial),
+    NoteWritten,
     ScreenContextPolicy(Option<super::screen::Approval>),
     ScreenContextOffered,
     TurnStatus(Option<super::status::TurnStatus>),
@@ -580,6 +604,10 @@ pub struct Turn {
     pub finished: bool,
     #[serde(default)]
     pub analysis: Option<AnalysisState>,
+    /// The one note this turn was allowed to write, and what became of it.
+    /// One turn keeps at most one thing: a request is a request, not a queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<super::note::Write>,
     #[serde(default)]
     pub disclosures: Vec<super::disclosure::Disclosure>,
     #[serde(default)]
@@ -878,6 +906,9 @@ pub struct RuntimeState {
     /// Dispatched device actions in the rolling window.
     #[serde(default)]
     pub action_budget: super::action::ActionBudget,
+    /// Notes written in the rolling window.
+    #[serde(default)]
+    pub note_budget: super::note::Budget,
     /// What each installation still has to be told to stop, and why.
     #[serde(default)]
     pub revocations: Vec<Revocation>,
@@ -1138,6 +1169,28 @@ pub enum RuntimeData {
         source: String,
         count: u32,
     },
+    /// The runtime admitted one note write for this turn: how much text, and
+    /// whether it carries a title. Never a word of it, and never a digest of
+    /// one — a digest of a short note is a way to confirm a guess about it.
+    NoteWriteStarted {
+        fence: TurnFence,
+        bytes: u32,
+        titled: bool,
+        privacy: PrivacyClass,
+    },
+    /// What the store did. The only event that says a note exists, which is
+    /// what makes "Saved to your notes." an outcome rather than a claim.
+    NoteWriteCompleted {
+        turn_id: Uuid,
+        generation: u64,
+        saved: bool,
+    },
+    /// The runtime would not write a note, and why. The owner reads the reason
+    /// here; the surface that asked hears the same sentence for all of them.
+    NoteWriteDenied {
+        fence: TurnFence,
+        reason: super::note::Denial,
+    },
     ScreenContextPolicyChanged {
         surface_id: Uuid,
         approval: super::screen::Approval,
@@ -1318,6 +1371,11 @@ pub enum RuntimeData {
         generation: u64,
         action_id: Option<Uuid>,
         privacy: PrivacyClass,
+        /// The content shape the runtime bound for this reply, and the row of
+        /// the published fit table every candidate below was scored against.
+        /// Absent on decisions logged before the runtime bound one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<policy::Shape>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hint: Option<policy::RoutingTarget>,
         /// The runtime's own shared-safe expression, routed at the shared
@@ -1453,16 +1511,23 @@ impl RuntimeState {
         }
     }
 
-    /// Current availability and the incarnation an action must bind to. A
-    /// native binds to its signed connection; the registry record stays nil.
+    /// Whether anything can be sent to this surface right now, whether its
+    /// own app reports itself in front of someone, and the incarnation an
+    /// action must bind to. A native binds to its signed connection; the
+    /// registry record stays nil. Reachability blocks; attention only ranks.
     pub(super) fn presence(&self, record: &Record, now: i64) -> policy::Presence {
         match record.binding {
             Binding::Browser => policy::Presence {
-                available: record.view(now).available,
+                reachable: record.view(now).connected,
+                attended: record.view(now).connected && record.visible,
                 incarnation: record.incarnation,
             },
+            // A worn device has no foreground to lose and nothing to report
+            // about one, so there is no attention to penalise: its manifest
+            // declares no foreground constraint because it has none.
             Binding::Pin { .. } => policy::Presence {
-                available: !record.revoked,
+                reachable: !record.revoked,
+                attended: !record.revoked,
                 incarnation: record.incarnation,
             },
             Binding::Native { .. } => {
@@ -1472,7 +1537,8 @@ impl RuntimeState {
                     .and_then(|state| state.connection.as_ref())
                     .filter(|connection| connection.current(record, now));
                 policy::Presence {
-                    available: connection.is_some_and(|connection| connection.visible),
+                    reachable: connection.is_some(),
+                    attended: connection.is_some_and(|connection| connection.visible),
                     incarnation: connection
                         .map_or(Uuid::nil(), |connection| connection.incarnation),
                 }
@@ -1480,6 +1546,12 @@ impl RuntimeState {
         }
     }
 
+    /// One candidate for one record, for the channel and shape the runtime
+    /// bound. Everything read here is the record, its approved manifest, its
+    /// connection, the owner's own permissions and this turn — never the
+    /// request's words, never where the surface runs. `operation` is absent
+    /// only when the runtime is asking whether a kind of command could be
+    /// carried out at all, before there is one to bind.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn candidate(
         &self,
@@ -1487,6 +1559,7 @@ impl RuntimeState {
         record: &Record,
         origin: Uuid,
         channel: Channel,
+        shape: policy::Shape,
         privacy: PrivacyClass,
         hint: Option<policy::RoutingTarget>,
         operation: Option<&super::action::Operation>,
@@ -1502,24 +1575,18 @@ impl RuntimeState {
             && self
                 .personal_ceiling(records, record.surface_id)
                 .is_some_and(|ceiling| privacy <= ceiling);
-        // An action channel is held on the same terms whatever its class: no
-        // platform begins a command in the background, so a command waits for
-        // a foreground exactly the way a private card does, and an effect
-        // already begun is not retired the instant it succeeds by launching
-        // something in front of Cosmos. Visibility is required to begin, in
-        // `claim`, and never to continue.
-        if personal || channel.needs_foreground() {
-            presence.available = self
-                .native_connections
-                .get(&record.surface_id)
-                .and_then(|state| state.connection.as_ref())
-                .is_some_and(|connection| connection.current(record, now));
+        // A card above the shared-room ceiling is held by a native
+        // installation's own signed connection. A page in a browser has none
+        // to hold it with, so it is not reachable for one whatever the owner
+        // declared about it.
+        if personal && !matches!(record.binding, Binding::Native { .. }) {
+            presence.reachable = false;
         }
         // Native speech exists only as the runtime's own disclosed synthesis.
         // Without the origin owner's current provider permission there is no
         // speech to route, so the surface is unavailable for that channel.
         if channel == Channel::AudioTts && matches!(record.binding, Binding::Native { .. }) {
-            presence.available = presence.available
+            presence.reachable = presence.reachable
                 && self
                     .disclosure_policy(records, origin)
                     .ok()
@@ -1531,7 +1598,7 @@ impl RuntimeState {
         // own permission for it stands at the installation's current approval
         // revision, and where that permission admits this exact command.
         if channel.is_action() {
-            presence.available = presence.available
+            presence.reachable = presence.reachable
                 && match operation {
                     Some(operation) => {
                         operation.channel() == channel
@@ -1542,7 +1609,9 @@ impl RuntimeState {
                         .contains(&channel),
                 };
         }
-        policy::candidate(record, presence, origin, channel, privacy, hint, personal)
+        policy::candidate(
+            record, presence, origin, channel, shape, privacy, hint, personal,
+        )
     }
 
     /// Store transactions apply runtime admission and visibility together. A
@@ -1874,9 +1943,13 @@ impl RuntimeState {
                         .turn
                         .as_ref()
                         .is_some_and(|t| t.fence.generation == action.generation)
-                    // A private card exists on a screen only while that
-                    // screen's own foreground is reported; leaving it masks.
-                    && (action.privacy <= PrivacyClass::SharedRoom
+                    // A card exists on a screen only while that screen's own
+                    // foreground is reported. It may be held for a screen
+                    // nobody has come to yet; once it is there, walking away
+                    // masks it and the logged fallback receives it. An effect
+                    // already begun continues, because launching a player or
+                    // a map puts Cosmos itself in the background.
+                    && (action.channel != Channel::VisualCard
                         || action.status == ActionStatus::Proposed
                         || self.surface_visible(records, action.surface_id, now))
                     && records.get(&action.surface_id).is_some_and(|r| {
@@ -1887,6 +1960,7 @@ impl RuntimeState {
                                     r,
                                     self.turn.as_ref().unwrap().fence.origin_surface,
                                     action.channel,
+                                    policy::shape(&action.intent),
                                     class,
                                     None,
                                     bound_operation(&action.intent),
@@ -2010,6 +2084,7 @@ impl RuntimeState {
                         r,
                         origin,
                         previous.channel,
+                        policy::shape(&previous.intent),
                         previous.privacy,
                         None,
                         bound_operation(&previous.intent),
@@ -2026,7 +2101,18 @@ impl RuntimeState {
                     .incarnation;
                 action.status = ActionStatus::Proposed;
                 action.attempts = 0;
-                action.deadline_ms = now.saturating_add(ACK_MS).min(action.display_expires_at_ms);
+                // The fallback is held on the same terms the lead was: the
+                // acknowledgment clock for a screen someone is in front of,
+                // and the longer wait for one that has to come forward.
+                action.deadline_ms = now
+                    .saturating_add(
+                        if self.presence(&records[&selected.surface_id], now).attended {
+                            ACK_MS
+                        } else {
+                            ATTENDED_WAIT_MS
+                        },
+                    )
+                    .min(action.display_expires_at_ms);
                 action.fallbacks.retain(|id| *id != selected.surface_id);
                 events.push(RuntimeData::Repair {
                     previous_action: previous.id,
@@ -2172,6 +2258,7 @@ impl RuntimeState {
                     record,
                     turn.fence.origin_surface,
                     action.channel,
+                    policy::shape(&action.intent),
                     action.privacy,
                     None,
                     bound_operation(&action.intent),
@@ -2294,6 +2381,7 @@ impl RuntimeState {
                                 record,
                                 turn.fence.origin_surface,
                                 action.channel,
+                                policy::shape(&action.intent),
                                 action.privacy,
                                 None,
                                 bound_operation(&action.intent),
@@ -2384,6 +2472,9 @@ impl RuntimeState {
         {
             return Err(RuntimeError::Busy);
         }
+        // The runtime binds one shape for this reply, from the intent it has
+        // already validated, and every candidate below is scored against it.
+        let shape = policy::shape(&intent);
         let mut candidates: Vec<_> = records
             .values()
             .filter(|r| !r.revoked)
@@ -2393,6 +2484,7 @@ impl RuntimeState {
                     r,
                     turn.fence.origin_surface,
                     intent.channel(),
+                    shape,
                     privacy,
                     hint,
                     bound_operation(&intent),
@@ -2416,6 +2508,7 @@ impl RuntimeState {
             generation,
             action_id: id,
             privacy,
+            shape: Some(shape),
             hint,
             expression,
             candidates,
@@ -2434,7 +2527,8 @@ impl RuntimeState {
                 }
             }
             let record = &records[&surface_id];
-            let incarnation = self.presence(record, now).incarnation;
+            let presence = self.presence(record, now);
+            let incarnation = presence.incarnation;
             // A content reference is authority for exactly the surface this
             // decision named; it is checked again when the content is fetched.
             let intent = match intent {
@@ -2485,15 +2579,20 @@ impl RuntimeState {
                 } else {
                     ActionStatus::Proposed
                 },
-                deadline_ms: if waiting {
-                    now.checked_add(super::personal::PRIVATE_DISPLAY_MS)
-                        .ok_or(RuntimeError::Unavailable)?
-                        .min(display_expires_at_ms)
-                } else {
-                    now.checked_add(ACK_MS)
-                        .ok_or(RuntimeError::Unavailable)?
-                        .min(display_expires_at_ms)
-                },
+                // A card the chosen screen is not in front of yet is held for
+                // it, the way a private card already is, and for long enough
+                // that walking over to it is an answer. If nobody comes,
+                // reconcile repairs it to the next logged fallback.
+                deadline_ms: now
+                    .checked_add(if waiting {
+                        super::personal::PRIVATE_DISPLAY_MS
+                    } else if presence.attended {
+                        ACK_MS
+                    } else {
+                        ATTENDED_WAIT_MS
+                    })
+                    .ok_or(RuntimeError::Unavailable)?
+                    .min(display_expires_at_ms),
                 display_expires_at_ms,
                 attempts: 0,
                 fallbacks,
@@ -3041,6 +3140,79 @@ impl RuntimeState {
                     count,
                 });
                 RuntimeResult::PrivateContextOffered
+            }
+            // One note write per turn, admitted before anything is stored. The
+            // runtime has already bounded and classified the words; this
+            // decides only whether a note may be written at all, and says why
+            // in the owner's own ledger rather than to whoever asked.
+            RuntimeOperation::WriteNote {
+                fence,
+                bytes,
+                titled,
+                privacy,
+            } => {
+                let sensitive = privacy > PrivacyClass::Private;
+                let from_screen = {
+                    let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                    if turn.finished
+                        || turn.fence.origin_surface != fence.origin_surface
+                        || turn.note.is_some()
+                    {
+                        return Err(RuntimeError::Stale);
+                    }
+                    turn.screen_context.is_some()
+                };
+                self.note_budget.prune(now);
+                let denial = if sensitive {
+                    Some(super::note::Denial::Sensitive)
+                } else if from_screen {
+                    Some(super::note::Denial::ScreenContext)
+                } else if self.note_budget.exhausted(now) {
+                    Some(super::note::Denial::Budget)
+                } else {
+                    None
+                };
+                if let Some(reason) = denial {
+                    events.push(RuntimeData::NoteWriteDenied { fence, reason });
+                    RuntimeResult::NoteWriteDenied(reason)
+                } else {
+                    self.note_budget.spend(now);
+                    let turn = self.turn.as_mut().ok_or(RuntimeError::Stale)?;
+                    turn.note = Some(super::note::Write {
+                        bytes,
+                        titled,
+                        privacy,
+                        saved: None,
+                    });
+                    events.push(RuntimeData::NoteWriteStarted {
+                        fence,
+                        bytes,
+                        titled,
+                        privacy,
+                    });
+                    RuntimeResult::NoteWriteAdmitted
+                }
+            }
+            // What the store did, which is the only thing that may say a note
+            // exists. An admitted write that never reaches here stays unsaid.
+            RuntimeOperation::NoteWritten { fence, saved } => {
+                // Read the fence first, so a stale or cancelled turn is refused
+                // before anything is changed, then take the turn to change it.
+                self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                let turn = self.turn.as_mut().ok_or(RuntimeError::Stale)?;
+                let Some(write) = turn.note.as_mut() else {
+                    return Err(RuntimeError::Stale);
+                };
+                if write.saved.is_some() {
+                    return Err(RuntimeError::Stale);
+                }
+                write.saved = Some(saved);
+                events.push(RuntimeData::NoteWriteCompleted {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    saved,
+                });
+                RuntimeResult::NoteWriteAdmitted
             }
             RuntimeOperation::ScreenContextPolicy { surface_id } => {
                 RuntimeResult::ScreenContextPolicy(self.screen_context_policy(records, surface_id)?)
@@ -3764,6 +3936,9 @@ impl RuntimeState {
                         _ => record.incarnation,
                     },
                     origin_revision: record.revision,
+                    // A turn carries at most one note, admitted later if
+                    // cognition proposes one; it starts with none.
+                    note: None,
                     pin_incarnation: match &origin {
                         OriginProof::SequencedPin { connection, .. }
                         | OriginProof::VoicePin { connection, .. } => Some(connection.incarnation),
@@ -3785,7 +3960,15 @@ impl RuntimeState {
                     },
                     outcome: None,
                     screen_context: None,
-                    spoken: matches!(origin, OriginProof::VoiceNative { .. }),
+                    // A request the runtime heard out loud. A Pin has no
+                    // other way to be asked anything.
+                    spoken: matches!(
+                        origin,
+                        OriginProof::VoiceNative { .. }
+                            | OriginProof::Pin { .. }
+                            | OriginProof::SequencedPin { .. }
+                            | OriginProof::VoicePin { .. }
+                    ),
                 });
                 if let Some((surface_id, _, stamp)) = sequenced {
                     let cursor = self.ingress.get_mut(&surface_id).unwrap();
@@ -4017,7 +4200,7 @@ impl RuntimeState {
                     || action.generation != generation
                     // A command already begun continues while its connection
                     // is current; the room record above proved exactly that.
-                    || !(self.presence(record, now).available || action.channel.is_action())
+                    || !(self.presence(record, now).attended || action.channel.is_action())
                     || !matches!(
                         action.status,
                         ActionStatus::Dispatched
@@ -4080,7 +4263,7 @@ impl RuntimeState {
                     // A device that has begun keeps its command while its
                     // connection is current: launching a player or a map
                     // backgrounds Cosmos, and the acknowledgment follows.
-                    || !(self.presence(record, now).available || channel.is_action())
+                    || !(self.presence(record, now).attended || channel.is_action())
                     || !matches!(
                         action.status,
                         ActionStatus::Dispatched | ActionStatus::Acknowledged
@@ -4408,11 +4591,14 @@ impl RuntimeState {
                                 || (a.status == ActionStatus::AwaitingGrant
                                     && self.granted(a.id, now)))
                             && (a.channel == Channel::VisualCard || a.channel.is_action())
-                            // Dispatch-time revalidation: a private card is
-                            // claimed only by an unlocked, visible foreground,
-                            // and so is every device action whatever its class.
-                            && (a.privacy <= PrivacyClass::SharedRoom || visible)
-                            && (!a.channel.needs_foreground() || visible)
+                            // Dispatch-time revalidation: nothing is handed to
+                            // a surface that is not reporting its own
+                            // foreground. Every manifest says a card renders
+                            // only there, and no platform begins a command in
+                            // the background. A card chosen for a screen that
+                            // has not come forward is held, not delivered, and
+                            // that holding is what "waiting" means.
+                            && visible
                     })
                     .map(|a| (a.id, a.generation, a.worker, a.channel))
                     .collect();
@@ -5203,6 +5389,7 @@ mod tests {
                 &records[&id],
                 id,
                 Channel::VisualCard,
+                policy::Shape::Note,
                 class,
                 None,
                 None,
@@ -5331,7 +5518,9 @@ mod tests {
         poll(&mut state, &records, id, 103);
         let retry = poll(&mut state, &records, id, 3103).remove(0);
         assert_eq!(retry.attempts, 2);
-        records.get_mut(&other).unwrap().visible = false;
+        // The other display is gone, not merely looked away from, so there
+        // is no fallback and the outcome stays unknown.
+        records.get_mut(&other).unwrap().lease_expires_at = 6000;
         state.reconcile(&records, 6103);
         assert_eq!(
             status(&mut state, &records, id, 6104),
@@ -5510,5 +5699,109 @@ mod tests {
             .unwrap();
         assert!(matches!(result, RuntimeResult::Blocked));
         assert!(state.recent_context.is_empty());
+    }
+
+    /// A screen that is connected but reporting no foreground is still a
+    /// screen. The runtime picks it, holds the card for it, and repairs when
+    /// nobody comes; it does not quietly pretend the screen is not there.
+    #[test]
+    fn ambiance_a_card_is_held_for_a_screen_nobody_is_in_front_of_and_repairs_when_nobody_comes() {
+        let pin = crate::surface_registry::pin_surface_id("U:owner", "aabb");
+        let pin_record = transition(
+            None,
+            0,
+            pin,
+            &Mutation::ApprovePin {
+                device_id: "aabb".into(),
+            },
+            100,
+        )
+        .unwrap()
+        .0;
+        let screen = Uuid::new_v4();
+        let mut records = BTreeMap::from([(pin, pin_record), (screen, browser(screen))]);
+        records.get_mut(&screen).unwrap().visible = false;
+        let mut state = RuntimeState::default();
+        let begin_pin = |state: &mut RuntimeState, records: &BTreeMap<Uuid, Record>, now| {
+            let (result, _) = state
+                .apply(
+                    "U:owner",
+                    records,
+                    RuntimeOperation::Begin {
+                        turn_id: Uuid::new_v4(),
+                        worker: Uuid::new_v4(),
+                        origin: OriginProof::Pin {
+                            device: AuthenticatedDeviceIdentity::from_edge("aabb").unwrap(),
+                            surface_id: pin,
+                            echo_fingerprint: super::super::echo::fingerprint("what is on tonight"),
+                        },
+                        request_digest: hash(b"what is on tonight"),
+                        privacy_floor: PrivacyClass::SharedRoom,
+                    },
+                    now,
+                )
+                .unwrap();
+            let RuntimeResult::Begun(fence) = result else {
+                panic!("the turn must begin")
+            };
+            fence
+        };
+        let fence = begin_pin(&mut state, &records, 101);
+        let propose =
+            |state: &mut RuntimeState, records: &BTreeMap<Uuid, Record>, fence: &TurnFence, now| {
+                state
+                    .apply(
+                        "U:owner",
+                        records,
+                        RuntimeOperation::Propose {
+                            turn_id: fence.turn_id,
+                            generation: fence.generation,
+                            worker: fence.worker,
+                            intent: SemanticIntent::VisualTextCard {
+                                text: "Three films tonight.".into(),
+                            },
+                            privacy: PrivacyClass::SharedRoom,
+                            hint: None,
+                        },
+                        now,
+                    )
+                    .unwrap()
+            };
+        let (result, events) = propose(&mut state, &records, &fence, 102);
+        let RuntimeResult::Proposed(action) = result else {
+            panic!("a screen nobody is in front of is ranked, not skipped")
+        };
+        assert_eq!(action.surface_id, screen);
+        // It is held long enough that walking over to it is an answer.
+        assert_eq!(action.deadline_ms, 102 + ATTENDED_WAIT_MS);
+        // The decision says what shape it bound and what the screen cost for
+        // not being in front of anyone, so Center can say both.
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeData::Decision { shape: Some(policy::Shape::Note), candidates, .. }
+                if candidates.iter().any(|c| c.surface_id == screen
+                    && c.blocker.is_none()
+                    && c.attention == policy::UNATTENDED)
+        )));
+        // Nobody comes. The card is retired at its own window rather than
+        // waiting out a private display's five minutes.
+        state.reconcile(&records, 102 + ATTENDED_WAIT_MS);
+        assert_eq!(state.actions[&action.id].status, ActionStatus::Cancelled);
+        // With someone in front of it, the same request is dispatched on the
+        // ordinary acknowledgment clock and carries no penalty.
+        records.get_mut(&screen).unwrap().visible = true;
+        let mut state = RuntimeState::default();
+        let fence = begin_pin(&mut state, &records, 101);
+        let (result, events) = propose(&mut state, &records, &fence, 102);
+        let RuntimeResult::Proposed(attended) = result else {
+            panic!("the same request must still land")
+        };
+        assert_eq!(attended.surface_id, screen);
+        assert_eq!(attended.deadline_ms, 102 + ACK_MS);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeData::Decision { candidates, .. }
+                if candidates.iter().any(|c| c.surface_id == screen && c.attention == 0)
+        )));
     }
 }

@@ -23,6 +23,7 @@
       "cognition": {"declaredClass": 0, "models": []},
       "authority": {"mayOriginate": ["user.request"], "reflexive": []}
     },
+    "audience": "handheld; not a manifest field. A worn device declares one output channel and the runtime routes it as speech reaching the person wearing it. A Pin reports no foreground, so it is never penalised for attention and is never refused speech for lack of one.",
     "trustLevel": 0,
     "occupancy": "unknown",
     "actorIdentity": "unknown",

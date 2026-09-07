@@ -59,12 +59,21 @@ pub struct Approval {
 pub enum Attestation {
     /// The person held a control down; nothing else started this.
     PushToTalk,
+    /// The person said the installation's own name and nothing else started
+    /// this. It is the deliberate act a press is, said rather than pressed,
+    /// and it carries the same weight only because the client also attests
+    /// that it showed it was listening the whole time it could have heard it.
+    WakePhrase,
     /// The client showed that it was capturing for the whole capture.
     CaptureIndicator,
 }
 
+/// What every capture must attest, whichever way it began. A capture declares
+/// exactly one of the two beginnings; declaring both, or neither, is refused.
 pub const REQUIRED_ATTESTATION: [Attestation; 2] =
     [Attestation::PushToTalk, Attestation::CaptureIndicator];
+pub const WAKE_ATTESTATION: [Attestation; 2] =
+    [Attestation::WakePhrase, Attestation::CaptureIndicator];
 
 /// The client's half of one capture: what it attests and how long it held the
 /// microphone open. The sample count and the audio digest are the runtime's
@@ -112,7 +121,7 @@ impl Capture {
     /// refused too, so the declared window can never understate what was
     /// recorded.
     pub fn valid(&self) -> bool {
-        self.attestation == REQUIRED_ATTESTATION
+        (self.attestation == REQUIRED_ATTESTATION || self.attestation == WAKE_ATTESTATION)
             && self.capture_ms > 0
             && self.capture_ms <= MAX_CAPTURE_MS
             && self.samples > 0
@@ -309,7 +318,32 @@ mod tests {
         full.capture_ms = MAX_CAPTURE_MS;
         full.samples = MAX_SAMPLES;
         assert!(full.valid());
+        // A capture that began with the installation's own name is attested the
+        // same way a press is, and only with the indicator beside it.
+        let spoken = Capture {
+            attestation: WAKE_ATTESTATION.to_vec(),
+            ..valid.clone()
+        };
+        assert!(spoken.valid());
         for invalid in [
+            Capture {
+                attestation: vec![Attestation::WakePhrase],
+                ..valid.clone()
+            },
+            Capture {
+                attestation: vec![Attestation::CaptureIndicator, Attestation::WakePhrase],
+                ..valid.clone()
+            },
+            // One beginning or the other, never both: a capture cannot claim it
+            // was pressed and spoken to at the same time.
+            Capture {
+                attestation: vec![
+                    Attestation::PushToTalk,
+                    Attestation::WakePhrase,
+                    Attestation::CaptureIndicator,
+                ],
+                ..valid.clone()
+            },
             Capture {
                 attestation: vec![Attestation::PushToTalk],
                 ..valid.clone()

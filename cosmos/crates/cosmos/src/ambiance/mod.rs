@@ -10,6 +10,7 @@ pub mod ledger;
 pub mod lookup;
 pub mod native_connection;
 pub mod native_voice;
+pub mod note;
 pub mod openrouter;
 pub mod personal;
 pub mod pin_connection;

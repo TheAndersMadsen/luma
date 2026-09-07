@@ -3062,7 +3062,12 @@ mod tests {
         )
         .unwrap();
         f.records.insert(original.surface_id, hidden);
-        f.state.reconcile(&f.records, 123);
+        // The chosen page is still connected, so its card is held for it;
+        // when nobody comes back to it inside its own window the logged
+        // fallback receives its own new action.
+        assert!(f.state.reconcile(&f.records, 123).is_empty());
+        f.state
+            .reconcile(&f.records, f.state.actions[&original.id].deadline_ms);
         let replacement = f
             .state
             .actions

@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "state": "native-device-action-definition-in-progress",
   "scope": "Owner-approved installation key, signed connection, sequenced text and foreground visibility in the shared Cosmos/Center room, with one shared-room visual card acknowledged after the installation's exact render and one shared-room spoken reply synthesized by Cosmos under the origin's speech-provider disclosure, streamed as bounded frames and acknowledged after the installation's complete playback. Native capture and physical device acceptance remain unfinished.",
-  "profile": "native-voice-input-v5",
-  "legacyProfile": "native-device-action-v4, native-shared-speech-v3 and native-shared-display-v2 approvals keep connecting, rendering cards, speaking and (for v4) carrying out what the owner allowed, and declare no microphone until the owner reapproves at the current revision. The challenge carries the approval the record actually holds, so publishing this profile does not stop an installation on an earlier one from connecting; it does stop it from being spoken to, because the voice permission is not writable for a manifest that declares no input channel.",
+  "profile": "native-audience-v6",
+  "legacyProfile": "native-voice-input-v5, native-device-action-v4, native-shared-speech-v3 and native-shared-display-v2 approvals keep connecting, rendering cards, speaking, (for v5) listening and (for v4 and later) carrying out what the owner allowed, and declare no audience until the owner reapproves at the current revision. The challenge carries the approval the record actually holds, so publishing this profile does not stop an installation on an earlier one from connecting; it does stop it from being spoken to below v5, because the voice permission is not writable for a manifest that declares no input channel, and it does mean the router does not know what kind of screen it is: an installation with no declared audience is scored at the floor of whatever content shape is being routed, so it stays eligible, still wins when nothing better is connected, and never outranks an installation that did declare.",
   "descriptor": {
     "maximumBytes": 1024,
     "fields": {
       "enrollmentId": "non-nil UUID",
       "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
       "platform": "macos|linux|android|android_tv",
-      "approval": "native-voice-input-v5"
+      "approval": "native-audience-v6"
     },
     "additionalProperties": false
   },
@@ -49,7 +49,7 @@
         "enrollmentId": "non-nil UUID",
         "surfaceId": "non-nil UUID",
         "approvalRevision": "positive safe integer",
-        "approval": "the approval profile this installation's record holds: native-voice-input-v5, native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
+        "approval": "the approval profile this installation's record holds: native-audience-v6, native-voice-input-v5, native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
         "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
         "challengeId": "non-nil UUID",
         "nonce": "canonical unpadded base64url of 32 random bytes",
@@ -272,10 +272,12 @@
     "This wire contract and its vectors do not establish installed clients, production acceptance or paper conformance."
   ],
   "display": {
-    "eligibility": "A native surface is a visual.card candidate only with the current display manifest, a current signed connection and a state control reporting visible=true on that connection. Visibility is availability, never occupancy, privacy or actor evidence.",
+    "eligibility": "A native surface is a visual.card candidate with the current display manifest and a current signed connection. Its own state control reporting visible=true is no longer required to be a candidate: the runtime holds the card and the installation receives it when its foreground reports, exactly the way a private card already waits. Not reporting visible costs the surface a bounded rank penalty (blocker \"unattended\" applies only to audio.tts, which nothing can hold). Visibility is attention, never occupancy, privacy or actor evidence.",
     "frames": "Runtime render/clear frames use the browser room wire shape; the client replies {version:1,kind:\"received\",stamp} only for a frame naming its exact surface/incarnation with a matching content digest and supported credit grammar.",
     "controls": "{kind:\"state\",visible} and {kind:\"acknowledge\",actionId,turnId,generation,channel:\"visual.card\",contentDigest} share the native input cursor; acknowledge instance IDs equal the action ID and are accepted only for actions dispatched to that connection.",
-    "hint": "Cognition may propose target browser|macos|linux|android|android_tv from explicit request text. Policy adds a bounded rank component for eligible non-origin surfaces of that kind only; blocked or hidden surfaces and self-nomination gain nothing."
+    "hint": "Cognition may propose target browser|macos|linux|android|android_tv from explicit request text, and the request may carry its own. Policy adds a bounded rank component for eligible non-origin surfaces of that kind only, large enough to outrank every fit preference and never large enough to lift a blocker; blocked or hidden surfaces and self-nomination gain nothing. Naming a device stays possible and is never required.",
+    "audience": "Each output channel of the current profile declares audience \"room\", \"handheld\" or \"desk\": who that channel's output reaches. It is the only manifest word the router reads to match a reply to a screen, it is a closed published set the owner approves at reapproval, and it names no product, platform or place. An installation on an earlier profile declares none and is scored at the floor of the routed content shape.",
+    "shape": "The runtime binds one content shape per reply from the intent it validated: utterance, note, passage, roster, place, play, route, open or run, and scores every candidate against the published fit table over shape and audience. Cognition never writes or reads one."
   },
   "deviceActions": {
     "scope": "Dispatch, ceremony, outcome and the shared client. The runtime binds, decides, confirms, dispatches and records device actions, and only a device's own final report may claim one happened. Platform execution on macOS, Linux, Android and Android TV is not in this increment: every client still has to carry the commands out and report what it observed.",
@@ -293,25 +295,29 @@
           "output": {
             "visual.card": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "desk"
             },
             "audio.tts": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "desk"
             },
             "action.open": {
               "maxClass": "shared_room",
               "shared": true,
               "risk": "low",
               "idempotent": true,
-              "reportBudgetMs": 10000
+              "reportBudgetMs": 10000,
+              "audience": "desk"
             },
             "action.run": {
               "maxClass": "shared_room",
               "shared": true,
               "risk": "high",
               "idempotent": false,
-              "reportBudgetMs": 900000
+              "reportBudgetMs": 900000,
+              "audience": "desk"
             },
             "confirm.tap": {
               "maxClass": "shared_room",
@@ -319,7 +325,8 @@
               "attestation": [
                 "foreground_tap",
                 "device_owner_auth"
-              ]
+              ],
+              "audience": "desk"
             }
           }
         },
@@ -385,25 +392,29 @@
           "output": {
             "visual.card": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "desk"
             },
             "audio.tts": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "desk"
             },
             "action.open": {
               "maxClass": "shared_room",
               "shared": true,
               "risk": "low",
               "idempotent": true,
-              "reportBudgetMs": 10000
+              "reportBudgetMs": 10000,
+              "audience": "desk"
             },
             "confirm.tap": {
               "maxClass": "shared_room",
               "shared": true,
               "attestation": [
                 "foreground_tap"
-              ]
+              ],
+              "audience": "desk"
             }
           }
         },
@@ -464,32 +475,37 @@
           "output": {
             "visual.card": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "handheld"
             },
             "audio.tts": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "handheld"
             },
             "action.open": {
               "maxClass": "shared_room",
               "shared": true,
               "risk": "low",
               "idempotent": true,
-              "reportBudgetMs": 10000
+              "reportBudgetMs": 10000,
+              "audience": "handheld"
             },
             "action.route": {
               "maxClass": "shared_room",
               "shared": true,
               "risk": "low",
               "idempotent": true,
-              "reportBudgetMs": 20000
+              "reportBudgetMs": 20000,
+              "audience": "handheld"
             },
             "confirm.tap": {
               "maxClass": "shared_room",
               "shared": true,
               "attestation": [
                 "foreground_tap"
-              ]
+              ],
+              "audience": "handheld"
             }
           }
         },
@@ -553,18 +569,21 @@
           "output": {
             "visual.card": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "room"
             },
             "audio.tts": {
               "maxClass": "shared_room",
-              "shared": true
+              "shared": true,
+              "audience": "room"
             },
             "action.play": {
               "maxClass": "shared_room",
               "shared": true,
               "risk": "low",
               "idempotent": true,
-              "reportBudgetMs": 30000
+              "reportBudgetMs": 30000,
+              "audience": "room"
             }
           }
         },

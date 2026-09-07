@@ -53,6 +53,43 @@
         "9.2"
       ],
       "decision": "Exact runtime outcomes can gate controlled expressions and action templates. Arbitrary model prose is not proven universally outcome-truthful, in either native audio or generated-text TTS; invariant 10 remains unverified."
+    },
+    {
+      "id": "shape-ownership",
+      "status": "conservative-interpretation",
+      "sourceSections": [
+        "4.3",
+        "4.8"
+      ],
+      "decision": "4.8 uses shape(x) in capable(ch, shape(x)) and never says who assigns it. Cosmos assigns it the way 4.3 assigns a privacy class: runtime-side, deterministically, from the intent it has already validated, plus one byte count over the runtime's own text. The nine shapes are utterance, note, passage, roster, place, play, route, open and run. Cognition never writes one, never reads one, and never learns the fleet; letting a model name the shape would let a model name the destination through it."
+    },
+    {
+      "id": "audience-is-the-declared-shape-input",
+      "status": "conservative-interpretation",
+      "sourceSections": [
+        "4.1",
+        "4.8",
+        "5.3"
+      ],
+      "decision": "4.1 says content-shape matching consumes the capabilities dimension but does not say what a channel declares about who receives it. Cosmos adds one closed, owner-approved word per output channel — room, handheld or desk — and publishes a fit table over shape and audience as the router's shape-fit term. The word names no product, platform, brand or place, it can never appear in a blocker, and a record whose platform string Cosmos never published ranks purely on the manifest the owner approved. An installation on an earlier profile declares none and is scored at the floor of the routed shape: eligible, still able to win, never able to outrank one that declared."
+    },
+    {
+      "id": "available-vs-attended",
+      "status": "conservative-interpretation",
+      "sourceSections": [
+        "4.8",
+        "5.3"
+      ],
+      "decision": "4.8's available(s) is one predicate and 5.3 separately lists busy or locked state among the penalties. Cosmos splits them: reachable — a current signed connection or lease — is an eligibility blocker; attended — the installation's own foreground report — is a bounded rank penalty smaller than the origin term. A card, a ceremony and a command are held for a reachable installation until its foreground reports, so a screen nobody is looking at ranks below the screen the answer suits instead of vanishing from the fleet. Speech is the one channel nothing can hold, so an installation that declares no background output and reports no foreground is blocked for it, and blocker \"unattended\" says so distinctly from \"unavailable\"."
+    },
+    {
+      "id": "no-cognition-choice",
+      "status": "conservative-interpretation",
+      "sourceSections": [
+        "4.8",
+        "10"
+      ],
+      "decision": "4.8 allows the model to select the lead from the top-k of the eligible ranked set. Cosmos takes 10's own escape hatch and requires the top-ranked candidate every time. A deterministic published ranking is what answers the owner's complaint that they had to name a device; a second model round-trip does not fit the 50 ms envelope-to-bound-decision budget; and admitting model choice would reintroduce the fleet into the model's context, which every other part of this design keeps out."
     }
   ],
   "evidence": [
@@ -84,8 +121,8 @@
       "id": "native-visual-routing-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
-      "anchor": "async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_never_do",
-      "scope": "A hidden native installation is never selected even when named; after it reports visible on its signed connection the same request routes to it with the browser as fallback, the durable decision records the hint and score vector, the installation alone polls and acknowledges the exact card, and losing the foreground cancels the shown card at dispatch-time revalidation.",
+      "anchor": "async fn native_room_hinted_cards_are_held_for_the_mac_and_delivered_when_it_comes_forward",
+      "scope": "A connected installation is a card candidate whether or not its app is in front of anyone: the owner's explicit target leads, the card is held rather than handed to a background app, and it is dispatched once the installation reports its own foreground.",
       "limitation": "MemoryStore, synthetic cognition and no SFU. It proves runtime authority and receiver identity, not a physical screen, occupancy or the macOS app's actual render."
     },
     {
@@ -1039,6 +1076,46 @@
       "anchor": "pub struct Grant",
       "scope": "The ceremony as runtime state: fenced by its own turn, generation and worker, bound to the venue's current connection and to the exact description digest, carrying the attestation the bound risk requires, single use and dropped when its action, turn or process is gone.",
       "limitation": "State and rules only. The panel, the countdown, the equal-weight decline and the device-owner authentication are each client's own work."
+    },
+    {
+      "id": "content-shape-fit-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "pub const FIT: [[i32; 3]; 9]",
+      "scope": "The published fit table over content shape and declared audience, with the eligible floor, origin, hint and attention weights beside it.",
+      "limitation": "A table definition. It does not show that any request was routed, only what the scorer would compute."
+    },
+    {
+      "id": "content-shape-binding-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "pub fn shape(intent: &SemanticIntent) -> Shape",
+      "scope": "The runtime's own total, pure derivation of a reply's content shape from the validated intent, and the channel rebinding that precedes it.",
+      "limitation": "A function definition. It does not establish that cognition never influenced a shape at run time."
+    },
+    {
+      "id": "declared-audience-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/surface_registry.rs",
+      "anchor": "pub fn native_audience",
+      "scope": "The closed read of the audience word out of an installation's approved manifest, and the published profile that declares it per output channel.",
+      "limitation": "A closed read of a published value. It does not prove an owner approved any particular installation."
+    },
+    {
+      "id": "situation-routing-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "fn a_film_list_asked_of_the_pin_goes_to_the_television_and_is_never_spoken",
+      "scope": "The seven owner situations as ranking tests over one synthetic fleet, plus the ordering properties the published weights must satisfy, the older-profile floor and replay determinism.",
+      "limitation": "Synthetic records and presences. It does not exercise transport, clients or a real device."
+    },
+    {
+      "id": "attention-penalty-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
+      "anchor": "fn a_screen_nobody_is_looking_at_is_ranked_below_its_shape_never_skipped",
+      "scope": "A reachable installation reporting no foreground stays eligible for a card, carries the bounded penalty, and is refused speech with the distinct unattended blocker.",
+      "limitation": "Synthetic presence values. It does not show a real client coming forward to claim a held card."
     }
   ],
   "requirements": [
@@ -1072,7 +1149,9 @@
       "evidence": [
         "routing-hint-policy-test-definition",
         "native-visual-routing-test-definition",
-        "explicit-target-room-test-definition"
+        "explicit-target-room-test-definition",
+        "situation-routing-test-definition",
+        "content-shape-fit-definition"
       ]
     },
     {
@@ -1129,7 +1208,8 @@
         "registry-atomic-append-test-definition",
         "pin-registry-durability-test-definition",
         "runtime-postgres-atomicity-test-definition",
-        "bounded-analysis-durability-test-definition"
+        "bounded-analysis-durability-test-definition",
+        "content-shape-binding-definition"
       ]
     },
     {
@@ -1167,7 +1247,8 @@
         "origin-status-room-test-definition",
         "native-client-status-test-definition",
         "device-action-shared-expression-test-definition",
-        "device-action-class-ceiling-test-definition"
+        "device-action-class-ceiling-test-definition",
+        "situation-routing-test-definition"
       ]
     },
     {
@@ -1196,7 +1277,10 @@
       "status": "partial",
       "evidence": [
         "routing-hint-policy-test-definition",
-        "native-visual-routing-test-definition"
+        "native-visual-routing-test-definition",
+        "situation-routing-test-definition",
+        "content-shape-fit-definition",
+        "attention-penalty-test-definition"
       ]
     },
     {
@@ -1250,7 +1334,9 @@
         "stock-transport-provenance-test-definition",
         "native-installation-owner-test-definition",
         "native-installation-http-test-definition",
-        "routing-hint-policy-test-definition"
+        "routing-hint-policy-test-definition",
+        "declared-audience-definition",
+        "situation-routing-test-definition"
       ]
     },
     {
@@ -1275,7 +1361,9 @@
         "device-action-contract-definition",
         "device-action-profile-compatibility-test-definition",
         "device-action-client-frame-test-definition",
-        "device-action-ffi-test-definition"
+        "device-action-ffi-test-definition",
+        "declared-audience-definition",
+        "content-shape-fit-definition"
       ]
     },
     {
@@ -1646,7 +1734,9 @@
         "native-client-choices-test-definition",
         "device-action-dispatch-test-definition",
         "device-action-outcome-test-definition",
-        "device-action-client-frame-test-definition"
+        "device-action-client-frame-test-definition",
+        "situation-routing-test-definition",
+        "content-shape-binding-definition"
       ]
     },
     {
@@ -1668,7 +1758,8 @@
         "screen-context-owner-api-test-definition",
         "device-action-dispatch-test-definition",
         "device-action-outcome-test-definition",
-        "device-action-client-frame-test-definition"
+        "device-action-client-frame-test-definition",
+        "situation-routing-test-definition"
       ]
     },
     {
@@ -1691,7 +1782,8 @@
         "routing-hint-policy-test-definition",
         "device-action-dispatch-test-definition",
         "device-action-outcome-test-definition",
-        "device-action-client-frame-test-definition"
+        "device-action-client-frame-test-definition",
+        "situation-routing-test-definition"
       ]
     },
     {
@@ -1711,7 +1803,8 @@
         "private-routing-room-test-definition",
         "private-display-policy-test-definition",
         "center-private-display-test-definition",
-        "origin-status-room-test-definition"
+        "origin-status-room-test-definition",
+        "situation-routing-test-definition"
       ]
     },
     {

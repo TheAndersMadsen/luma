@@ -54,6 +54,81 @@ pub struct PlaceLookupRequest {
     pub then: Option<LookupThen>,
 }
 
+/// A proposal that the current request is something the owner asked to keep.
+///
+/// It carries words and nothing else: no note identifier, no store, no class
+/// that could lower the note's own, and no claim that anything was written.
+/// The runtime bounds the words, classifies them, decides whether a note may
+/// be written at all, performs the write and composes the sentence said back.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RememberRequest {
+    #[serde(deserialize_with = "note_text")]
+    pub text: String,
+    #[serde(default, deserialize_with = "note_title")]
+    pub title: Option<String>,
+    /// What the same request also asked, when it was half a note and half a
+    /// question. Ordinary informational text, classified exactly like any
+    /// other reply; it never restates what the runtime kept.
+    #[serde(default, deserialize_with = "note_reply")]
+    pub reply: Option<String>,
+}
+
+/// A proposal that the current request is asking about the owner's own saved
+/// notes. The query is the request's own words; the notes themselves never
+/// reach cognition, before or after.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecallRequest {
+    #[serde(default, deserialize_with = "note_query")]
+    pub query: Option<String>,
+}
+
+fn note_text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    if text.trim().is_empty() || text.len() > super::note::MAX_TEXT_BYTES {
+        return Err(serde::de::Error::custom("invalid bounded note text"));
+    }
+    Ok(text)
+}
+
+fn note_title<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let title = Option::<String>::deserialize(deserializer)?;
+    if title
+        .as_ref()
+        .is_some_and(|title| title.len() > super::note::MAX_TITLE_BYTES)
+    {
+        return Err(serde::de::Error::custom("invalid bounded note title"));
+    }
+    Ok(title)
+}
+
+fn note_reply<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let reply = Option::<String>::deserialize(deserializer)?;
+    if reply.as_ref().is_some_and(|reply| reply.len() > 2000) {
+        return Err(serde::de::Error::custom("invalid bounded note reply"));
+    }
+    Ok(reply
+        .map(|reply| reply.trim().to_owned())
+        .filter(|reply| !reply.is_empty()))
+}
+
+fn note_query<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let query = Option::<String>::deserialize(deserializer)?;
+    if query.as_ref().is_some_and(|query| query.len() > 200) {
+        return Err(serde::de::Error::custom("invalid bounded note query"));
+    }
+    Ok(query
+        .map(|query| query.trim().to_owned())
+        .filter(|query| !query.is_empty()))
+}
+
 /// A proposed device action names a runtime-minted reference and never an
 /// argument. Locators, argv, coordinates, package names, place ids and file
 /// paths are minted by the runtime from state it committed under a permission
@@ -205,6 +280,20 @@ pub enum Proposal {
         #[serde(default)]
         target: Option<RoutingTarget>,
     },
+    Remember {
+        remember: RememberRequest,
+        #[serde(default = "conservative_privacy")]
+        privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
+    },
+    Recall {
+        recall: RecallRequest,
+        #[serde(default = "conservative_privacy")]
+        privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
+    },
 }
 
 /// A model that omits its privacy estimate proposes nothing lower than the
@@ -222,7 +311,9 @@ impl Proposal {
             | Self::Analysis { target, .. }
             | Self::Lookup { target, .. }
             | Self::Places { target, .. }
-            | Self::Action { target, .. } => *target,
+            | Self::Action { target, .. }
+            | Self::Remember { target, .. }
+            | Self::Recall { target, .. } => *target,
         }
     }
 }
@@ -237,9 +328,17 @@ pub fn proposal_tool() -> ToolDef {
         "reference":{"type":"string","minLength":1,"maxLength":64},
         "reason":{"type":"string","minLength":1,"maxLength":200}
     }});
+    let remember = json!({"type":"object","additionalProperties":false,"required":["text"],"properties":{
+        "text":{"type":"string","minLength":1,"maxLength":super::note::MAX_TEXT_BYTES},
+        "title":{"type":"string","minLength":1,"maxLength":super::note::MAX_TITLE_BYTES},
+        "reply":{"type":"string","minLength":1,"maxLength":2000}
+    }});
+    let recall = json!({"type":"object","additionalProperties":false,"properties":{
+        "query":{"type":"string","minLength":1,"maxLength":200}
+    }});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, one numbered choice list, one bounded larger-model analysis, one web lookup, one named-place address lookup, or one device action for the current request. Supply exactly one of intent, choice_list, analysis, web_lookup, place_lookup or device_action; omit the others. Use choice_list when the user asks for options to pick from (for example films for tonight): a short title and two to eight items with a title and a short detail each; Cosmos numbers them and shows them on a screen, so a later request can name one by number. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome. Use device_action only to act on something Cosmos already put in front of you. reference must be one of the candidate identifiers listed in this turn's context; you cannot invent one, and you cannot supply a URL, file path, address, coordinate, application name, command or arguments - Cosmos resolves the identifier itself and chooses the device. operation says what to do with it: open a document or page, route to a place, play a media item, run a named task the owner already approved. reason is one short sentence for the owner's record. Proposing an action is not doing it; never claim it happened. Add then \"route\" to a place_lookup when the current text asks for directions to the place you are looking up; Cosmos runs the lookup, picks the place and chooses the device.".into(),
+        description: "Propose informational text, one numbered choice list, one bounded larger-model analysis, one web lookup, one named-place address lookup, one device action, one note to keep, or one look through the owner's saved notes for the current request. Supply exactly one of intent, choice_list, analysis, web_lookup, place_lookup, device_action, remember or recall; omit the others. Use remember when the current text asks for something to be written down, noted, saved or kept in mind, in English or Danish (\"note that I like bees\", \"husk at jeg kan lide bier\"): text is the fact itself in the owner's own words without the asking verb, title is a short name for finding it again, and reply is what to say about the rest of the request when it also asked a question. You are not writing the note and you cannot read the notes: Cosmos bounds the words, decides whether it may keep them, writes it and composes the sentence the owner hears, so never claim a note was saved and never put a password, key, card number or personal identifier in one. Use recall when the current text asks what the owner previously noted, wrote down or saved (\"what do my notes say about the kitchen\", \"hvad har jeg skrevet ned om k\u{f8}kkenet\"): query is only the words naming what to look for, and Cosmos reads the notes itself and shows them on the owner's own personal screen. Notes are the owner's own data, so propose privacy private for both. Use choice_list when the user asks for options to pick from (for example films for tonight): a short title and two to eight items with a title and a short detail each; Cosmos numbers them and shows them on a screen, so a later request can name one by number. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome. Use device_action only to act on something Cosmos already put in front of you. reference must be one of the candidate identifiers listed in this turn's context; you cannot invent one, and you cannot supply a URL, file path, address, coordinate, application name, command or arguments - Cosmos resolves the identifier itself and chooses the device. operation says what to do with it: open a document or page, route to a place, play a media item, run a named task the owner already approved. reason is one short sentence for the owner's record. Proposing an action is not doing it; never claim it happened. Add then \"route\" to a place_lookup when the current text asks for directions to the place you are looking up; Cosmos runs the lookup, picks the place and chooses the device.".into(),
         // Provider function schemas prohibit root unions. Optional branches
         // describe the shapes; Proposal's strict parser enforces XOR before
         // any runtime work, including against a provider that ignores the schema.
@@ -256,6 +355,8 @@ pub fn proposal_tool() -> ToolDef {
             "web_lookup":lookup_request,
             "place_lookup":place_lookup_request,
             "device_action":device_action,
+            "remember":remember,
+            "recall":recall,
             "privacy":privacy,
             "target":{"type":"string","enum":["browser","macos","linux","android","android_tv"]}
         }}),

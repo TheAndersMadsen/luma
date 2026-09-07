@@ -164,7 +164,8 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-pub const NATIVE_APPROVAL: &str = "native-voice-input-v5";
+pub const NATIVE_APPROVAL: &str = "native-audience-v6";
+pub const LEGACY_NATIVE_VOICE_APPROVAL: &str = "native-voice-input-v5";
 pub const LEGACY_NATIVE_ACTION_APPROVAL: &str = "native-device-action-v4";
 pub const LEGACY_NATIVE_SPEECH_APPROVAL: &str = "native-shared-speech-v3";
 pub const LEGACY_NATIVE_DISPLAY_APPROVAL: &str = "native-shared-display-v2";
@@ -293,7 +294,7 @@ pub fn legacy_native_action_manifest(platform: &str) -> serde_json::Value {
 /// starts only at the person's own press, and the client must show it while
 /// it holds one open. None of that is verifiable server-side, which is
 /// exactly why it is declared here and attested per capture.
-pub fn native_manifest(platform: &str) -> serde_json::Value {
+pub fn legacy_native_voice_manifest(platform: &str) -> serde_json::Value {
     let mut manifest = legacy_native_action_manifest(platform);
     let Some(input) = manifest["capabilities"]["input"].as_array_mut() else {
         return manifest;
@@ -310,6 +311,53 @@ pub fn native_manifest(platform: &str) -> serde_json::Value {
     manifest
 }
 
+/// Which audience each published profile declares. Choosing it per platform
+/// is the publisher's job and the owner's approval; the router never reads
+/// it. What the router reads is the `audience` word inside the manifest the
+/// owner approved, which is why a hypothetical new platform shipping the
+/// room profile routes exactly like the television.
+fn published_audience(platform: &str) -> &'static str {
+    match platform {
+        // A television is output the whole room receives.
+        "android_tv" => "room",
+        // A phone travels on the person who is holding it.
+        "android" => "handheld",
+        // A laptop or a desktop is a screen someone is sitting at.
+        _ => "desk",
+    }
+}
+
+/// The current profile: the voice profile plus one `audience` word on every
+/// output channel. It is the manifest dimension §4.1 says content-shape
+/// matching consumes, and until an installation is reapproved at this
+/// profile the runtime does not know what kind of screen it is and scores it
+/// at the floor of whatever shape is being routed.
+pub fn native_manifest(platform: &str) -> serde_json::Value {
+    let mut manifest = legacy_native_voice_manifest(platform);
+    let audience = serde_json::json!(published_audience(platform));
+    let Some(output) = manifest["capabilities"]["output"].as_object_mut() else {
+        return manifest;
+    };
+    for channel in output.values_mut() {
+        let Some(channel) = channel.as_object_mut() else {
+            continue;
+        };
+        channel.insert("audience".into(), audience.clone());
+    }
+    manifest
+}
+
+/// The audience this installation's approved manifest declares for one
+/// output channel, or `None` when the profile predates the declaration. The
+/// manifest is one of the enumerated published values, so reading a word out
+/// of it is the same closed check the byte equality is.
+pub fn native_audience<'a>(record: &'a Record, channel: &str) -> Option<&'a str> {
+    if !known_native_manifest(record) {
+        return None;
+    }
+    record.approved_manifest["capabilities"]["output"][channel]["audience"].as_str()
+}
+
 /// The approval profile this record's manifest byte-equals for its own
 /// platform, or `None` when the manifest is not one Cosmos published. Binding
 /// to the record's own platform is what keeps the set closed: an Android
@@ -323,6 +371,8 @@ pub fn native_approval(record: &Record) -> Option<&'static str> {
     }
     if record.approved_manifest == native_manifest(platform) {
         Some(NATIVE_APPROVAL)
+    } else if record.approved_manifest == legacy_native_voice_manifest(platform) {
+        Some(LEGACY_NATIVE_VOICE_APPROVAL)
     } else if record.approved_manifest == legacy_native_action_manifest(platform) {
         Some(LEGACY_NATIVE_ACTION_APPROVAL)
     } else if record.approved_manifest == legacy_native_speech_manifest() {
@@ -342,6 +392,7 @@ pub fn known_native_approval(approval: &str) -> bool {
     matches!(
         approval,
         NATIVE_APPROVAL
+            | LEGACY_NATIVE_VOICE_APPROVAL
             | LEGACY_NATIVE_ACTION_APPROVAL
             | LEGACY_NATIVE_SPEECH_APPROVAL
             | LEGACY_NATIVE_DISPLAY_APPROVAL
@@ -426,6 +477,8 @@ impl Surface {
             name: "Native device",
             approval: if self.manifest == native_manifest(platform) {
                 NATIVE_APPROVAL
+            } else if self.manifest == legacy_native_voice_manifest(platform) {
+                LEGACY_NATIVE_VOICE_APPROVAL
             } else if self.manifest == legacy_native_action_manifest(platform) {
                 LEGACY_NATIVE_ACTION_APPROVAL
             } else if self.manifest == legacy_native_speech_manifest() {
@@ -1062,6 +1115,20 @@ mod tests {
             channels("android_tv"),
             ["action.play", "audio.tts", "visual.card"]
         );
+        // Who each installation's output reaches, published per platform and
+        // approved by the owner. It is the one manifest word the router reads
+        // to decide where an answer belongs, and it names no product.
+        for (platform, expected) in [
+            ("macos", "desk"),
+            ("linux", "desk"),
+            ("android", "handheld"),
+            ("android_tv", "room"),
+        ] {
+            let manifest = native_manifest(platform);
+            for (channel, declared) in manifest["capabilities"]["output"].as_object().unwrap() {
+                assert_eq!(declared["audience"], expected, "{platform} {channel}");
+            }
+        }
         // Only macOS can ask a person to prove they are the device owner, so
         // only macOS declares the attestation a high-risk command requires.
         assert_eq!(
@@ -1300,7 +1367,7 @@ mod tests {
         }
         assert_eq!(
             tv["capabilities"]["output"]["action.play"],
-            serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 30000})
+            serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 30000, "audience": "room"})
         );
         // It never captures the owner's screen either. Its remote's
         // microphone is admitted, because a person pressing a button on a
@@ -1342,12 +1409,27 @@ mod tests {
             assert_eq!(native_approval(&record), Some(NATIVE_APPROVAL));
             assert!(native_declares_input(&record, NATIVE_VOICE_INPUT));
             assert!(native_declares_input(&record, "text.public"));
-            // One input channel is all this profile adds: every output channel
-            // stays byte-identical to the action profile it succeeds.
+            // The voice rung added one input channel and nothing else; this
+            // rung adds one `audience` word to each output channel and
+            // nothing else.
             assert_eq!(
-                native_manifest(platform)["capabilities"]["output"],
+                legacy_native_voice_manifest(platform)["capabilities"]["output"],
                 legacy_native_action_manifest(platform)["capabilities"]["output"]
             );
+            let mut stripped = native_manifest(platform);
+            for channel in stripped["capabilities"]["output"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                assert!(
+                    crate::ambiance::policy::Audience::parse(channel["audience"].as_str().unwrap())
+                        .is_some(),
+                    "{platform} declares a published audience on every output channel"
+                );
+                channel.as_object_mut().unwrap().remove("audience");
+            }
+            assert_eq!(stripped, legacy_native_voice_manifest(platform));
             for constraint in [
                 "push_to_talk_only",
                 "no_background_capture",
@@ -1361,6 +1443,13 @@ mod tests {
                     "{platform} {constraint}"
                 );
             }
+            // The rung below this one keeps its ear and loses only the
+            // audience declaration; the ones below that have neither.
+            record.approved_manifest = legacy_native_voice_manifest(platform);
+            assert_eq!(native_approval(&record), Some(LEGACY_NATIVE_VOICE_APPROVAL));
+            assert!(known_native_approval(LEGACY_NATIVE_VOICE_APPROVAL));
+            assert!(native_declares_input(&record, NATIVE_VOICE_INPUT));
+            assert_eq!(native_audience(&record, "visual.card"), None);
             for (legacy, profile) in [
                 (
                     legacy_native_action_manifest(platform),
@@ -1382,6 +1471,7 @@ mod tests {
                     !native_declares_input(&record, NATIVE_VOICE_INPUT),
                     "{profile}"
                 );
+                assert_eq!(native_audience(&record, "visual.card"), None);
             }
             // A v4 record still renders, speaks and acts; it just has no ear.
             record.approved_manifest = legacy_native_action_manifest(platform);

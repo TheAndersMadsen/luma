@@ -587,11 +587,15 @@ distinct `unattended` reason.
 
 Nothing in the decision reads occupancy, actor identity, trust level, which
 device was used last, or where a surface runs. The complete published weight
-vector is the eligible floor 1000, shape fit 40–200, origin affinity 30, hint
-400 and attention −20, with learned preference a permanently zero logged slot;
-the constants are chosen so a named destination always outranks a fit
-preference, being the asking device never overturns a shape band, and attention
-only breaks ties. The whole vector is logged per candidate with the decision.
+vector is the eligible floor 1000, shape fit 40–200, origin affinity 10, hint
+400 and attention −20, with learned preference a permanently zero logged slot.
+The constants are chosen so the ordering is provable rather than tuned: a named
+destination outranks the whole fit span plus every other term; neither the
+asking device nor an idle foreground can overturn a band the shape itself
+decided; and between two screens the shape cannot separate, the one someone is
+in front of outranks the one they happened to ask from. A test computes the
+table's own smallest band and asserts all four. The whole vector is logged per
+candidate with the decision.
 
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
 `android_tv`) only from explicit request text such as "show this on the TV",

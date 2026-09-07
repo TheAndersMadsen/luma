@@ -464,7 +464,7 @@ fn native_room_terminal_delivery_timeout_releases_the_turn_before_its_lease() {
     state.apply(PRINCIPAL, &records, poll(), retry_at).unwrap();
     assert_eq!(state.actions[&action.id].attempts, 2);
     let terminal_at = state.actions[&action.id].deadline_ms;
-    let (_, events) = state
+    state
         .apply(PRINCIPAL, &records, RuntimeOperation::Sweep, terminal_at)
         .unwrap();
     assert_eq!(
@@ -472,6 +472,26 @@ fn native_room_terminal_delivery_timeout_releases_the_turn_before_its_lease() {
         ActionStatus::OutcomeUnknown
     );
     assert!(state.actions[&action.id].intent.text().is_empty());
+    // The origin installation was the logged fallback all along: it is
+    // connected, it just is not in front of anyone, so the card is held for
+    // it rather than the turn ending with the answer nowhere.
+    let repaired = state
+        .actions
+        .values()
+        .find(|a| a.id != action.id)
+        .expect("the logged fallback receives its own action")
+        .clone();
+    assert_eq!(repaired.surface_id, surface_id);
+    assert_eq!(repaired.status, ActionStatus::Proposed);
+    assert_eq!(repaired.deadline_ms, terminal_at + ATTENDED_WAIT_MS);
+    assert!(!state.turn.as_ref().unwrap().finished);
+    // Nobody comes to it either, and only then is the turn released — still
+    // inside the worker lease.
+    let terminal_at = repaired.deadline_ms;
+    let (_, events) = state
+        .apply(PRINCIPAL, &records, RuntimeOperation::Sweep, terminal_at)
+        .unwrap();
+    assert_eq!(state.actions[&repaired.id].status, ActionStatus::Cancelled);
     let turn = state.turn.as_ref().unwrap();
     assert!(turn.finished && !turn.cancelled);
     assert!(terminal_at < turn.lease_until_ms);
@@ -1014,12 +1034,14 @@ async fn native_room_heartbeat_and_cancel_share_cursor_without_browser_authority
     );
 }
 
-/// A visible native installation is a shared visual candidate. The request's
-/// explicit target is weighed among eligible surfaces only: it routes a
-/// browser request to the Mac, never revives a hidden installation, and the
-/// installation acknowledges only the exact card dispatched to itself.
+/// A connected native installation is a shared visual candidate whether or
+/// not its app is in front of anyone. The request's explicit target is
+/// weighed among eligible surfaces only: it routes a browser request to the
+/// Mac, the Mac holds the card until its own foreground reports rather than
+/// receiving it in the background, and the installation acknowledges only
+/// the exact card dispatched to itself.
 #[tokio::test]
-async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_never_do() {
+async fn native_room_hinted_cards_are_held_for_the_mac_and_delivered_when_it_comes_forward() {
     let model = Arc::new(SpyModel::default());
     let fixture = fixture(model.clone()).await;
     let browser_epoch = Uuid::new_v4();
@@ -1039,7 +1061,8 @@ async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_n
         sequence,
         instance_id,
     };
-    // Hidden installation: the hint names it, but it is not an eligible candidate.
+    // The Mac is connected but its app is not in front of anyone. The owner
+    // named it, so it leads and holds the card; nothing is handed over.
     *model.target.lock().unwrap() = Some("macos");
     let RuntimeResult::Proposed(first) = fixture
         .runtime
@@ -1054,7 +1077,7 @@ async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_n
     else {
         panic!("first output required")
     };
-    assert_eq!(first.surface_id, fixture.browser.surface_id);
+    assert_eq!(first.surface_id, fixture.native.surface_id);
     let RuntimeResult::Pending(native_pending) = fixture
         .store
         .runtime(
@@ -1068,7 +1091,13 @@ async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_n
     else {
         panic!("native poll required")
     };
-    assert!(native_pending.is_empty());
+    // The card is on the Mac and is not handed over: a poll from an app
+    // nobody is in front of sees it waiting, never dispatched.
+    assert!(
+        native_pending
+            .iter()
+            .all(|action| { action.id == first.id && action.status == ActionStatus::Proposed })
+    );
     fixture
         .store
         .runtime(
@@ -1084,7 +1113,8 @@ async fn native_room_visible_installation_renders_hinted_cards_and_hidden_ones_n
         )
         .await
         .unwrap();
-    // Visible installation: the same hint now leads over the origin browser.
+    // Once it reports its foreground, the same hint leads and the card is
+    // dispatched to it rather than to the origin browser.
     assert!(matches!(
         fixture
             .store
@@ -2583,6 +2613,9 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
         (refused.state, refused.surface, refused.privacy),
         (TurnState::Nowhere, None, PrivacyClass::SharedRoom)
     );
+    // A page nobody is looking at is still a page: the same public request
+    // is held for it rather than refused, and the origin is told a card is
+    // waiting on a device kind, never which one or why.
     fixture
         .store
         .mutate_surface(
@@ -2597,25 +2630,44 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
         )
         .await
         .unwrap();
-    assert!(matches!(
-        fixture
-            .runtime
-            .sequenced_room_text(
-                PRINCIPAL,
-                RoomProof::Native(mac.clone()),
-                mac_stamp(3, Uuid::new_v4()),
-                CURRENT_TEXT.into(),
-            )
-            .await
-            .unwrap(),
-        RuntimeResult::Blocked
-    ));
-    let blocked = status(RoomProof::Native(mac.clone())).await.unwrap();
+    let RuntimeResult::Proposed(held) = fixture
+        .runtime
+        .sequenced_room_text(
+            PRINCIPAL,
+            RoomProof::Native(mac.clone()),
+            mac_stamp(3, Uuid::new_v4()),
+            CURRENT_TEXT.into(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a screen nobody is in front of is still a screen")
+    };
+    let waiting = status(RoomProof::Native(mac.clone())).await.unwrap();
     assert_eq!(
-        (blocked.state, blocked.surface, blocked.privacy),
-        (TurnState::Nowhere, None, PrivacyClass::SharedRoom)
+        (waiting.state, waiting.privacy),
+        (TurnState::Waiting, PrivacyClass::SharedRoom)
     );
-    assert_ne!(blocked.turn_id, refused.turn_id);
+    assert_eq!(waiting.surface, Some(held.surface_id));
+    assert_ne!(waiting.turn_id, refused.turn_id);
+    // A shared answer now has somewhere to go whenever the asking device can
+    // show one, so `Nowhere` is reserved for a genuine refusal, and every
+    // refusal reads the same: no state, no surface, no reason.
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::RoomControl {
+                connection: RoomProof::Native(mac.clone()),
+                stamp: mac_stamp(4, held.turn_id),
+                control: BrowserControl::Cancel {
+                    turn_id: held.turn_id,
+                    generation: held.generation,
+                },
+            },
+        )
+        .await
+        .unwrap();
     // A private reply on the phone: the Mac learns "shown on an android
     // surface" at the shared class and nothing about the card's own class.
     let (phone, phone_epoch) = open_native(&fixture.store, "android").await;
@@ -2649,7 +2701,7 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
         .sequenced_room_text(
             PRINCIPAL,
             RoomProof::Native(mac.clone()),
-            mac_stamp(4, Uuid::new_v4()),
+            mac_stamp(5, Uuid::new_v4()),
             "Read my private notes".into(),
         )
         .await

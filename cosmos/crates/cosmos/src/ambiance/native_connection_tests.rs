@@ -589,6 +589,7 @@ fn a_v3_installation_still_connects_renders_and_speaks_after_the_v4_bump() {
                 record,
                 id,
                 channel,
+                crate::ambiance::policy::Shape::Note,
                 crate::ambiance::PrivacyClass::SharedRoom,
                 None,
                 None,

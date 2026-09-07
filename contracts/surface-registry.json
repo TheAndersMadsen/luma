@@ -23,13 +23,14 @@
       "cognition": {"declaredClass": 0, "models": []},
       "authority": {"mayOriginate": ["state.change", "user.request"], "reflexive": []}
     },
+    "audience": "desk; not a manifest field. An approved page declares one output channel and the runtime routes it as the screen whoever opened it is reading. Only native installations, which span screens of genuinely different kinds, declare an audience word of their own.",
     "trustLevel": 0,
     "occupancy": "unknown",
     "renderVerified": false,
     "revoked": "boolean",
     "visible": "boolean",
     "connected": "boolean; server-derived from credential expiry, lease and leave/revoke",
-    "available": "boolean; connected && visible; does not assert render verification or lead eligibility",
+    "available": "boolean; connected && visible; does not assert render verification or lead eligibility. Since the audience change, `visible` is attention rather than eligibility: a connected page that is not reported visible is still a card candidate and carries a bounded rank penalty",
     "sequence": "nonnegative safe integer",
     "connectionExpiresAt": "integer milliseconds",
     "leaseExpiresAt": "integer milliseconds"
