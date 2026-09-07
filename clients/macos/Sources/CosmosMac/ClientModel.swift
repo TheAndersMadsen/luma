@@ -45,6 +45,17 @@ public final class ClientModel: ObservableObject {
     @Published public private(set) var accessibilityBlocked = false
     private var connectedNote: Task<Void, Never>?
 
+    // MARK: Listening for "Hey Cosmos"
+    /// Where the always-listening path is. `off` until the owner turns it on,
+    /// and off again the moment they turn it off, microphone and all.
+    @Published public private(set) var listening: Listening.State = .off
+    /// The capture the last spoken request came from, in the runtime's own
+    /// terms: what this Mac attests about it and how long it held the
+    /// microphone. Kept until the next request replaces it.
+    @Published public private(set) var lastCapture: VoiceCapture?
+    private let listener: (any WakeWordListening)?
+    private let listeningStore: UserDefaults
+
     /// Where the current task stands on this Mac, in the shared vocabulary.
     @Published public private(set) var activity: TaskActivity = .none
     /// The command's own bounded output, shown as the device's bytes and never
@@ -121,14 +132,28 @@ public final class ClientModel: ObservableObject {
     public init(client: any ClientBridge, initialServerOrigin: String,
                 contextProvider: (any ContextProvider)? = nil,
                 authenticator: (any DeviceOwnerAuthenticating)? = nil,
+                listener: (any WakeWordListening)? = nil,
+                listeningStore: UserDefaults = .standard,
                 reconnectDelays: [Duration] = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12), .seconds(30)]) {
         self.client = client
         self.contextProvider = contextProvider ?? SystemContextProvider()
         self.authenticator = authenticator ?? DeviceOwnerAuthenticator()
+        self.listener = listener
+        self.listeningStore = listeningStore
         self.reconnectDelays = reconnectDelays
         serverInput = initialServerOrigin
         snapshot = client.snapshot
         client.onChange = { [weak self] value in self?.snapshot = value }
+        self.listener?.onSignal = { [weak self] signal in self?.received(signal) }
+    }
+
+    /// The Mac's own listener, when this build of macOS has an on-device
+    /// analyser to run it in. Nil is a fact the owner is told, not a crash, and
+    /// it is what every test gets: a model built without one never opens a
+    /// microphone.
+    public static func systemListener() -> (any WakeWordListening)? {
+        if #available(macOS 26, *) { return SpeechWakeWordListener() }
+        return nil
     }
 
     static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
@@ -346,6 +371,121 @@ public final class ClientModel: ObservableObject {
             }
         }
     }
+
+    // MARK: Listening for "Hey Cosmos"
+
+    /// The owner's remembered switch. Absent means off: nothing on this Mac
+    /// opens a microphone until they say so, and it stays on across launches
+    /// once they have.
+    public static let listeningKey = "CosmosListenForHeyCosmos"
+
+    public var listeningRemembered: Bool { listeningStore.bool(forKey: Self.listeningKey) }
+    /// True while the microphone is open, whatever else is on screen.
+    public var listeningOpen: Bool { listening.isOpen }
+    /// True only while this Mac is recording the request that followed the
+    /// phrase. The panel's second indicator is exactly this.
+    public var capturingRequest: Bool { listening.isCapturing }
+
+    /// What the panel shows for the listener, or nil when it is off. The
+    /// blocked cases carry the sentence and the thing to do about it.
+    public var listeningLine: StatusLine? {
+        switch listening {
+        case .off: nil
+        case .starting: StatusLine(title: Words.listening, detail: Words.listeningStarting)
+        case .listening: StatusLine(title: Words.listening, detail: Words.listeningForPhrase)
+        case .heard, .capturing: StatusLine(title: Words.heardPhrase, detail: Words.listeningToRequest)
+        case .sending: StatusLine(title: Words.working)
+        case .blocked(let blocker):
+            StatusLine(title: Words.listeningBlocked(blocker), detail: Words.listeningBlockedNext(blocker))
+        }
+    }
+
+    /// Turning it on asks for the microphone at that instant and never before.
+    /// Turning it off stops the audio stream itself, so this is the mute too.
+    public func setListening(_ on: Bool) {
+        listeningStore.set(on, forKey: Self.listeningKey)
+        apply(on ? .turnOn : .turnOff)
+        guard let listener else {
+            if on { apply(.blocked(.systemTooOld)) }
+            return
+        }
+        if on { listener.start() } else { listener.stop() }
+    }
+
+    public func toggleListening() { setListening(!listening.isOn) }
+
+    /// Closes the microphone without changing the owner's switch: the
+    /// application is going away, it was not told to stop listening.
+    public func suspendListening() {
+        listener?.stop()
+        apply(.turnOff)
+    }
+
+    /// Puts the owner's remembered switch back at launch. Called once.
+    public func resumeListening() {
+        guard listeningRemembered, listening == .off else { return }
+        setListening(true)
+    }
+
+    private func received(_ signal: WakeWordSignal) {
+        switch signal {
+        case .started: apply(.started)
+        case .blocked(let blocker): apply(.blocked(blocker))
+        case .cleared: apply(.cleared)
+        case .heardPhrase: apply(.heardPhrase)
+        case .captureBegan: apply(.captureBegan)
+        case .captureExpired: apply(.captureExpired)
+        case .captured(let request): sendSpoken(request)
+        }
+    }
+
+    private func apply(_ event: Listening.Event) {
+        guard let next = Listening.next(listening, on: event) else { return }
+        listening = next
+    }
+
+    /// A request that began with the phrase rather than a press.
+    ///
+    /// It is admitted exactly like a typed one — the same call, the same Now
+    /// line, the same single request in flight — and the capture it came from
+    /// is kept beside it, attested as having begun with the phrase.
+    public func sendSpoken(_ request: SpokenRequest) {
+        apply(.captured)
+        guard Self.validText(request.text), canSubmit else {
+            apply(.sendFailed)
+            // Whichever it was, what was said is gone: this Mac holds no audio
+            // and no transcript once a capture closes.
+            if !canSubmit {
+                message = snapshot.phase == .connected
+                    ? Self.spokenBusyMessage
+                    : Self.spokenUnavailableMessage
+            }
+            return
+        }
+        lastCapture = request.capture
+        let value = TextRequest(text: request.text)
+        pendingDraft = value.text
+        admissionBeforeSend = snapshot.admission?.turnID
+        nowLine = value.text
+        clearFinishedTask()
+        run { [self] in
+            do {
+                _ = try await client.send(value)
+                guard !Task.isCancelled else { return }
+                pendingDraft = nil
+                apply(.sent)
+                message = Self.admittedMessage(context: nil, destination: .thisMac)
+            } catch {
+                apply(.sendFailed)
+                throw error
+            }
+        }
+    }
+
+    nonisolated static let spokenUnavailableMessage =
+        "Cosmos wasn't connected, so what you said was not sent. It was not kept either."
+    nonisolated static let spokenBusyMessage =
+        "Cosmos was still on your last request, so what you said was not sent. It was not kept either."
 
     public func send() {
         guard canSend else { return }

@@ -438,6 +438,7 @@ public struct AssistantPanel: View {
     /// and nothing to read. Return or Command-Return sends.
     private var askBar: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let line = model.listeningLine { listeningRow(line) }
             HStack(alignment: .bottom, spacing: 8) {
                 attachButton
                 TextField(Words.askPlaceholder, text: $model.draft, axis: .vertical)
@@ -477,6 +478,54 @@ public struct AssistantPanel: View {
         .padding(.bottom, 14)
         .animation(reduceMotion ? nil : .easeOut(duration: CosmosTokens.motionDuration),
                    value: showsSuggestions)
+    }
+
+    // MARK: Listening
+
+    /// Two indicators, never at the same time. A hollow ring while this Mac is
+    /// waiting for the phrase, and a filled cyan dot that breathes while it is
+    /// recording the request that followed it. Under the first one stand the
+    /// two things about listening on a laptop that no client can change.
+    private func listeningRow(_ line: StatusLine) -> some View {
+        let capturing = model.capturingRequest
+        let open = model.listeningOpen
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ListeningDot(active: capturing, open: open, reduceMotion: reduceMotion)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(line.title)
+                        .font(.system(size: 12, weight: capturing ? .semibold : .medium))
+                        .foregroundStyle(capturing ? CosmosTokens.accent : CosmosTokens.secondary)
+                    if let detail = line.detail {
+                        Text(detail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(CosmosTokens.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                if case .blocked(.microphoneDenied) = model.listening {
+                    Button(Words.openMicrophoneSettings) {
+                        NSWorkspace.shared.open(SystemSettings.microphone)
+                    }
+                    .buttonStyle(QuietButton())
+                }
+            }
+            // Said here, where the switch is, rather than found out later.
+            if !capturing {
+                Text("\(Words.listeningStaysHere) \(Words.listeningIsVisible) \(Words.listeningEndsWithTheLid)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CosmosTokens.secondary.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: CosmosTokens.readingWidth, alignment: .leading)
+            }
+        }
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Words.listening)
+        .accessibilityValue(line.detail.map { "\(line.title). \($0)" } ?? line.title)
+        .accessibilityIdentifier("listening")
+        .animation(reduceMotion ? nil : .easeOut(duration: CosmosTokens.motionDuration), value: capturing)
     }
 
     /// The suggestions: one row of small chips, each the whole request it sends.
@@ -792,6 +841,40 @@ public struct AssistantPanel: View {
 }
 
 /// One filled action in the kit's accent, with a visible focus ring.
+/// The listening indicator itself: a ring while this Mac waits for the phrase,
+/// a filled dot that breathes while it records the request. It is the only
+/// thing on the panel that moves on its own, so it stands still whenever the
+/// owner has asked for less motion.
+struct ListeningDot: View {
+    let active: Bool
+    let open: Bool
+    let reduceMotion: Bool
+    @State private var breathing = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(open ? CosmosTokens.accent.opacity(0.7) : CosmosTokens.border, lineWidth: 1.5)
+                .frame(width: 10, height: 10)
+            if active {
+                Circle().fill(CosmosTokens.accent).frame(width: 10, height: 10)
+                    .scaleEffect(breathing ? 1.0 : 0.55)
+                    .opacity(breathing ? 1 : 0.6)
+            }
+        }
+        .frame(width: 12, height: 12)
+        .onAppear { start() }
+        .onChange(of: active) { _, _ in start() }
+        .accessibilityHidden(true)
+    }
+
+    private func start() {
+        guard active, !reduceMotion else { breathing = false; return }
+        breathing = false
+        withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { breathing = true }
+    }
+}
+
 struct PrimaryButton: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 

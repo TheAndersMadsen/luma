@@ -78,6 +78,40 @@ final class PanelSnapshots: XCTestCase {
         try render(model, to: output.appendingPathComponent("ux-mac-quiet-reply.png"))
     }
 
+    /// The two listening indicators, as the owner sees them: the panel waiting
+    /// for the phrase, with the two things about listening on a laptop said
+    /// under it, and the same panel while it is recording what follows.
+    func testRendersThePanelWhileListening() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["COSMOS_UX_SHOTS"] else {
+            throw XCTSkip("Set COSMOS_UX_SHOTS to a directory to write the panel screenshots.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        let client = try MockClientBridge()
+        let listener = StubWakeWordListener()
+        let store = UserDefaults(suiteName: "cosmos.snapshot.\(UUID().uuidString)")
+        let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
+                                authenticator: StubAuthenticator(), listener: listener,
+                                listeningStore: store ?? .standard)
+        model.prepare()
+        try await until { !model.busy && model.descriptor != nil }
+        model.connect()
+        try await until { !model.busy && model.snapshot.phase == .connected }
+        model.setVisible(true)
+        // "Connected" stands for a moment; the listening panel is what is left.
+        try await Task.sleep(for: .seconds(3))
+
+        model.setListening(true)
+        listener.report(.started)
+        try await Task.sleep(for: .milliseconds(300))
+        try render(model, to: output.appendingPathComponent("ux-mac-listening.png"))
+
+        listener.report(.heardPhrase)
+        listener.report(.captureBegan)
+        try await Task.sleep(for: .milliseconds(300))
+        try render(model, to: output.appendingPathComponent("ux-mac-heard.png"))
+        model.setListening(false)
+    }
+
     /// One PNG of the panel exactly as the application draws it: the real
     /// SwiftUI view in a real window, cached to a bitmap, in the dark
     /// appearance the owner's Mac uses. `ImageRenderer` cannot rasterize the

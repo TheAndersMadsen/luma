@@ -50,6 +50,10 @@ public final class MenuBarController: NSObject {
     private let disconnectMenuItem = NSMenuItem(title: Words.disconnect, action: nil, keyEquivalent: "")
     private let autoPresentMenuItem = NSMenuItem(title: Words.showRepliesAutomatically,
                                                  action: nil, keyEquivalent: "")
+    /// The owner's own switch for always-listening: one item, off until they
+    /// turn it on, remembered from then on.
+    private let listenMenuItem = NSMenuItem(title: Words.listenForPhrase,
+                                            action: nil, keyEquivalent: "")
     /// The bridge records the origin only after a successful prepare, so its presence
     /// means this Mac was set up explicitly; later launches reopen that installation
     /// without another click. The first identity is still created only by the button.
@@ -73,12 +77,17 @@ public final class MenuBarController: NSObject {
     /// True only while the panel is on its way out. Attention during those few
     /// hundred milliseconds brings it back rather than letting it finish leaving.
     private var fading = false
+    /// Whether this Mac was recording a spoken request the last time anything
+    /// changed, so the panel comes up once at the start of one and not on every
+    /// model change during it.
+    private var wasCapturing = false
     private var eventMonitor: Any?
 
     public init(client: any ClientBridge,
                 initialServerOrigin: String = "https://center.andersmadsen.dk",
                 onQuit: @escaping @MainActor () -> Void) {
-        model = ClientModel(client: client, initialServerOrigin: initialServerOrigin)
+        model = ClientModel(client: client, initialServerOrigin: initialServerOrigin,
+                            listener: ClientModel.systemListener())
         self.onQuit = onQuit
         super.init()
     }
@@ -111,6 +120,7 @@ public final class MenuBarController: NSObject {
             Task { @MainActor [weak self] in
                 self?.scheduleFit()
                 self?.refreshPresence()
+                self?.considerListening()
                 self?.considerPresenting()
             }
         }.store(in: &subscriptions)
@@ -124,6 +134,9 @@ public final class MenuBarController: NSObject {
             showPanel()
         } else {
             model.prepare()
+            // The owner's own switch, back where they left it. On a first run
+            // nothing opens a microphone: the switch does not exist yet.
+            model.resumeListening()
         }
     }
 
@@ -146,6 +159,12 @@ public final class MenuBarController: NSObject {
         autoPresentMenuItem.target = self
         autoPresentMenuItem.state = Self.autoPresentEnabled ? .on : .off
         menu.addItem(autoPresentMenuItem)
+        listenMenuItem.action = #selector(toggleListening)
+        listenMenuItem.target = self
+        listenMenuItem.state = model.listening.isOn ? .on : .off
+        listenMenuItem.toolTip = "\(Words.listeningStaysHere) \(Words.listeningIsVisible) "
+            + Words.listeningEndsWithTheLid
+        menu.addItem(listenMenuItem)
         menu.addItem(.separator())
         disconnectMenuItem.action = #selector(disconnect)
         disconnectMenuItem.target = self
@@ -357,6 +376,24 @@ public final class MenuBarController: NSObject {
             guard opening == .automatic else { return }
             startDwell()
         }
+    }
+
+    /// The phrase fired. The panel comes up so the owner can see that this Mac
+    /// is recording them, and it stays up for as long as it is: an indicator
+    /// that can fade away mid-request is not an indicator.
+    private func considerListening() {
+        let capturing = model.capturingRequest
+        guard capturing != wasCapturing else { return }
+        wasCapturing = capturing
+        guard capturing else {
+            // The capture is over; a panel that came up only for it may leave
+            // again once whatever answers it has been read.
+            if opening == .automatic { startDwell() }
+            return
+        }
+        cancelFade()
+        stopDwell()
+        if panel?.isVisible != true { presentAutomatically() }
     }
 
     /// The panel appears under the menu-bar item without taking the keyboard:
@@ -591,6 +628,8 @@ public final class MenuBarController: NSObject {
 
     /// Call on the main actor before releasing the controller during termination.
     public func stop() {
+        // The microphone closes before anything else does.
+        model.suspendListening()
         shortcut?.stop()
         shortcut = nil
         subscriptions = []
@@ -612,6 +651,7 @@ public final class MenuBarController: NSObject {
     private func refreshMenu() {
         statusMenuItem.title = model.statusText
         disconnectMenuItem.isEnabled = model.canDisconnect
+        listenMenuItem.state = model.listening.isOn ? .on : .off
     }
 
     /// Presence is the icon and nothing else: quiet, working, waiting for you.
@@ -640,6 +680,16 @@ public final class MenuBarController: NSObject {
     }
     /// Turning it off stops the next reply from showing itself and takes down the
     /// one on screen now, which is what the owner just asked for.
+    /// Turning it on asks for the microphone then and there, and opens the
+    /// panel so the owner reads what listening on a laptop actually means
+    /// beside the indicator that says it started. Turning it off stops the
+    /// audio stream itself.
+    @objc private func toggleListening() {
+        model.toggleListening()
+        listenMenuItem.state = model.listening.isOn ? .on : .off
+        if model.listening.isOn { showPanel() }
+    }
+
     @objc private func toggleAutoPresent() {
         let enabled = !Self.autoPresentEnabled
         UserDefaults.standard.set(enabled, forKey: Self.autoPresentKey)

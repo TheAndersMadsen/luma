@@ -311,13 +311,14 @@ output, one shared-room `audio.tts` output, a `state.visibility` input and the
 `native-shared-display-v2` approvals keep rendering cards but play no speech
 until the owner reapproves at the current revision, which bumps the revision
 and drops the current connection; older text-only approvals are no longer
-recognized. A native surface is
-an eligible card target only while its signed connection is current and the
-app has reported a visible foreground on that connection; visibility lives on
-the connection, not on the owner's registry record, and it is availability
-only, never occupancy, privacy or actor evidence. Losing the foreground fails
-dispatch-time revalidation, so a shown card is cancelled and the logged
-fallback receives its own new action.
+recognized. A native surface is an eligible card target while its signed
+connection is current; visibility lives on the connection, not on the owner's
+registry record, and it is attention only, never eligibility, occupancy,
+privacy or actor evidence. An installation reporting no foreground still
+receives the card when it comes forward and meanwhile carries a bounded rank
+penalty. Losing the foreground after a card is shown fails dispatch-time
+revalidation, so a shown card is cancelled and the logged fallback receives its
+own new action.
 
 The device-action increment gives a surface a third thing it can be asked to
 do. An action travels the same pipeline as a card and a spoken reply: cognition
@@ -327,9 +328,14 @@ records the outcome; what is still missing is the other half of every effect —
 no client carries a command out yet, so a dispatched action reaches an approved
 installation and waits there for an executor that has not been written.
 
-The native approval profile is now `native-device-action-v4` and it differs per
+The native approval profile is now `native-audience-v6` and it differs per
 platform, because what a device may be asked to do depends on what its
-operating system can honestly report. macOS declares `action.open`,
+operating system can honestly report, and because who its output reaches
+differs by what kind of screen it is. Each output channel carries an
+`audience` word — `desk` for the Mac and the Omarchy PC, `handheld` for the
+phone, `room` for the Shield — and `native-voice-input-v5` joins the earlier
+rungs as a legacy profile that keeps everything it had and declares no
+audience until the owner reapproves. macOS declares `action.open`,
 `action.run` and a `confirm.tap` venue that can ask for device-owner
 authentication; the Omarchy PC declares `action.open` and a keyboard-first
 `confirm.tap`; the phone declares `action.open` and `action.route`; the Shield
@@ -538,15 +544,65 @@ only the calling owner's own, and the whole query it accepts is a whole
 hashed, which is why the page can say where a reply went and cannot say what
 was asked.
 
+#### Where a reply goes, without naming a device
+
+The runtime decides which screen or speaker an answer belongs on, and naming a
+device is never required. Two things make that possible.
+
+First, the runtime binds a **content shape** for every reply, from the intent it
+has already validated and never from the model: `utterance`, `note`, `passage`,
+`roster`, `place`, `play`, `route`, `open` or `run`. A card at or under 280
+bytes is a note and anything longer is a passage; a set of options is a roster;
+a bound command is its own kind. The same step binds the channel: an answer
+longer than a glance becomes something to read rather than twenty titles spoken
+aloud, and a short, shared-safe answer to a question asked out loud is said back
+instead of shown.
+
+Second, every output channel of the current native profile
+(`native-audience-v6`) declares an **audience** the owner approves at
+reapproval: `room`, `handheld` or `desk` — who that channel's output reaches. It
+is a closed published set and it names no product, platform or place, so a new
+platform shipping the room profile routes exactly like the television. A
+browser display is a desk and a worn Pin is handheld by their own class; an
+installation still on an earlier profile declares nothing, and is scored at the
+floor of whatever shape is being routed, so it stays eligible, still wins when
+nothing better is connected, and never outranks an installation that did
+declare. Reapproving it is what teaches Cosmos the room.
+
+`shape_fit` is then a published table over shape and audience, and it is the
+largest term in the score after an explicit destination. A list goes to the
+television, a long read to the desk screen, a route to the phone, a short answer
+to whichever personal screen the request came from.
+
+Availability splits in two. **Reachable** — a current signed connection or
+lease — is an eligibility blocker. **Attended** — the installation's own
+foreground report — is a bounded rank penalty smaller than the origin term, so
+a Mac with its lid shut is ranked below the screen that suits the answer instead
+of vanishing from the fleet. A card, a ceremony and a command are held for a
+reachable installation and delivered when its foreground reports, for twenty
+seconds at the shared class and five minutes above it; when nobody comes the
+card repairs to the next logged fallback. Speech is the one channel nothing can
+hold, so an installation reporting no foreground is blocked for it with the
+distinct `unattended` reason.
+
+Nothing in the decision reads occupancy, actor identity, trust level, which
+device was used last, or where a surface runs. The complete published weight
+vector is the eligible floor 1000, shape fit 40–200, origin affinity 30, hint
+400 and attention −20, with learned preference a permanently zero logged slot;
+the constants are chosen so a named destination always outranks a fit
+preference, being the asking device never overturns a shape band, and attention
+only breaks ties. The whole vector is logged per candidate with the decision.
+
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
-`android_tv`) only from explicit request text such as "show this on the TV".
-Policy treats it as the paper's hint: it adds a bounded rank component to
-eligible non-origin surfaces of that kind and nothing else. It cannot make a
-hidden, blocked or unapproved surface eligible, nominating the origin earns
-nothing, and every decision records the hint with the per-candidate score
-vector so a hint-free replay over the same state selects a surface that is
-also eligible. Class-zero surfaces still contribute no hints of their own;
-trust-gated device hints, hint budgets and learned preference remain open.
+`android_tv`) only from explicit request text such as "show this on the TV",
+and the request may carry its own. Policy treats it as the paper's hint: it adds
+a bounded rank component to eligible non-origin surfaces of that kind and
+nothing else. It cannot make a hidden, blocked or unapproved surface eligible,
+nominating the origin earns nothing, and every decision records the hint with
+the per-candidate score vector so a hint-free replay over the same state selects
+a surface that is also eligible. Class-zero surfaces still contribute no hints
+of their own; trust-gated device hints, hint budgets and learned preference
+remain open, and cognition never chooses among the ranked candidates.
 
 Delivery reuses the browser room wire shape. The shared native client accepts
 a render or `act` frame only for its exact surface and incarnation, recomputes
@@ -562,8 +618,8 @@ acknowledgment after its own commit. Its C boundary gained
 action its report is about and refuses one for anything but the current task,
 so a task the runtime replaced between the platform's own read and the worker
 draining its queue closes nothing. A fresh enrollment from that client now
-asks the owner to approve `native-device-action-v4`, and it still holds a
-connection under either earlier published profile, so an installation that has
+asks the owner to approve `native-audience-v6`, and it still holds a
+connection under any earlier published profile, so an installation that has
 not been updated keeps connecting, rendering and speaking. The phone and the television now carry commands
 out, and each verifies every command against its own copy of the owner's
 policy — the same object Center holds — which the runtime now delivers rather
@@ -2437,6 +2493,39 @@ makes one. In each of those cases the menu-bar glyph shows the waiting state —
 as it now does for any reply that landed while the panel was closed — and the
 reply is there when the owner opens Cosmos. "Show replies automatically" in the
 menu-bar menu turns the whole behaviour off and is remembered across launches.
+
+The Mac can also listen for "Hey Cosmos". "Listen for “Hey Cosmos”" in the
+menu-bar menu is off until the owner turns it on and remembered from then on;
+turning it off stops the audio stream itself rather than hiding an indicator,
+so it is the mute as well as the switch. While it is on, a `SpeechDetector` and
+a `SpeechTranscriber` run in one `SpeechAnalyzer` on this Mac — no model is
+downloaded by this repository and no audio leaves the device — and the app
+holds a `ProcessInfo.beginActivity` assertion (`userInitiatedAllowingIdleSystemSleep`)
+so App Nap does not throttle the listener. What the recogniser writes is a
+rolling window of about six seconds, in memory, replaced on every result and
+emptied whenever the detector reports that the room is quiet; nothing is
+written to disk and nothing is sent anywhere until the phrase matches. The
+match is generous about the two words and strict about their shape: a closed
+set of greetings — including "hej" and the "here" this Mac actually wrote for a
+Danish "hey" — immediately followed by the name, allowing one slip inside it,
+so "hey cosmic", "hey Costco", "the cosmos" and "hey Siri" all pass without
+firing. When it does fire, the panel comes up under the menu-bar item and the
+words that follow are collected until 1.2 s of silence or the runtime's own
+fifteen-second bound, then admitted as one ordinary request marked
+`[wake_phrase, capture_indicator]` — the same shape
+`cosmos/crates/cosmos/src/ambiance/native_voice.rs` states for a press, with the
+phrase in place of the press. The panel shows a hollow cyan ring and "Listening
+for “Hey Cosmos”" while it waits and a filled, breathing dot and "Heard “Hey
+Cosmos”" while it records, and under the first it says plainly that macOS shows
+the orange dot for the whole time and that closing the lid switches this Mac's
+microphone off in hardware. `NSMicrophoneUsageDescription` and
+`com.apple.security.device.audio-input` are on the built app; macOS asks for the
+microphone at the moment the owner turns listening on and never at launch, and a
+refusal is one sentence with the System Settings pane that changes it. This Mac
+recognises the words itself and sends the transcript, because the shared client
+library exposes no audio upload; the runtime's own attestation vocabulary has no
+wake-phrase member yet either, so the mark is currently the client's own record
+of the capture.
 
 Approval no longer needs pasted JSON. Each client offers "Approve in Center",
 a link to the surfaces page carrying its public descriptor as a fragment, and

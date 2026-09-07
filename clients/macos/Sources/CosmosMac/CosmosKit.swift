@@ -99,7 +99,8 @@ public enum CosmosTokens {
 }
 
 /// The kit's shared UI-state names (assistant-state.schema.json). Listening is
-/// part of the shared contract; this client has no microphone and never uses it.
+/// part of the shared contract; on this Mac it is the owner's own switch and
+/// what it means is in `Listening.swift`, not here.
 public enum CosmosPhase: String, CaseIterable, Sendable {
     case idle, listening, thinking, speaking, error
 

@@ -147,6 +147,17 @@ function clientCommand(args) {
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Cosmos listens for “Hey Cosmos” on this Mac when you turn listening on in its menu. What you say is recognised on this Mac and nothing is sent until you say the phrase.</string>
+</dict></plist>
+`);
+  // The microphone is a device entitlement, so listening needs it as well as
+  // the usage description above. macOS asks the owner the first time Cosmos
+  // opens the microphone, which is the moment they turn listening on.
+  const entitlements = path.join(staging, 'Cosmos.entitlements');
+  fs.writeFileSync(entitlements, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.device.audio-input</key><true/>
 </dict></plist>
 `);
   // The isolated test home hides the login Keychain; a named identity is
@@ -155,7 +166,8 @@ function clientCommand(args) {
     ? environment
     : { ...environment, HOME: require('node:os').homedir() };
   timedRun('native development app signing', 'codesign', [
-    '--force', '--sign', signingIdentity, '--identifier', 'dk.andersmadsen.cosmos.desktop', application,
+    '--force', '--sign', signingIdentity, '--identifier', 'dk.andersmadsen.cosmos.desktop',
+    '--entitlements', entitlements, application,
   ], { env: signingEnvironment });
   timedRun('native development app verification', 'codesign', [
     '--verify', '--strict', '--deep', application,

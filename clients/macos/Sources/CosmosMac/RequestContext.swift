@@ -142,6 +142,10 @@ public extension ContextProvider {
 public enum SystemSettings {
     public static let accessibility =
         URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+    /// The pane the owner needs after refusing the microphone once. macOS asks
+    /// only the first time, so this button is the only way back.
+    public static let microphone =
+        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
 }
 
 /// Reads the selection from the application that was in front before this panel

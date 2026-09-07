@@ -9,6 +9,7 @@ import Foundation
 public enum Words {
     // MARK: The state vocabulary
 
+    public static let listening = "Listening"
     public static let working = "Working"
     public static let waitingForYou = "Waiting for you"
     public static let waitingForDevice = "Waiting for a device"
@@ -41,12 +42,57 @@ public enum Words {
     /// The owner's own switch for a reply that shows itself. On by default.
     public static let showRepliesAutomatically = "Show replies automatically"
 
+    // MARK: Listening for the phrase
+
+    /// The owner's own switch for always-listening. Off until they turn it on,
+    /// and remembered from then on.
+    public static let listenForPhrase = "Listen for “\(WakePhrase.display)”"
+    /// The first indicator: the microphone is open and nothing has been heard.
+    public static let listeningForPhrase = "Listening for “\(WakePhrase.display)”"
+    public static let listeningStarting = "Turning the microphone on…"
+    /// The second indicator: the phrase fired and this Mac is recording the
+    /// request itself.
+    public static let heardPhrase = "Heard “\(WakePhrase.display)”"
+    public static let listeningToRequest = "Say what you want. It goes when you stop."
+    /// The two things that are true and that no client can change, said where
+    /// the owner turns listening on rather than discovered later.
+    public static let listeningIsVisible =
+        "macOS shows an orange dot beside the menu bar the whole time Cosmos listens."
+    public static let listeningEndsWithTheLid =
+        "Closing the lid switches this Mac's microphone off in hardware, so listening stops until you open it again."
+    /// Nothing crosses the network until the phrase does.
+    public static let listeningStaysHere =
+        "What you say is recognised on this Mac. Nothing is sent until you say the phrase, and nothing is saved."
+
+    public static func listeningBlocked(_ blocker: Listening.Blocker) -> String {
+        switch blocker {
+        case .microphoneDenied: "Cosmos can't use the microphone yet."
+        case .microphoneUnavailable: "This Mac has no microphone Cosmos can open."
+        case .lidClosed: "This Mac's microphone is off while the lid is closed."
+        case .systemTooOld: "This version of macOS has no on-device listener Cosmos can use."
+        case .modelUnavailable: "The on-device speech model for this language isn't installed."
+        }
+    }
+
+    public static func listeningBlockedNext(_ blocker: Listening.Blocker) -> String {
+        switch blocker {
+        case .microphoneDenied: "Turn Cosmos on in System Settings › Privacy & Security › Microphone."
+        case .microphoneUnavailable: "Connect a microphone and turn listening on again."
+        case .lidClosed: "Open the lid and Cosmos starts listening again by itself."
+        case .systemTooOld: "Update to macOS 26 or later, or ask by typing."
+        case .modelUnavailable: "Connect to the internet and turn listening on again."
+        }
+    }
+
+    public static let openMicrophoneSettings = "Open Microphone settings"
+
     // MARK: Set up this Mac
 
     public static let setupTitle = "Set up this Mac"
     public static let setupLede =
         "Cosmos will know this Mac as one of your devices. It sends what you type here and shows the "
-        + "replies. It never listens, and it never reads your screen unless you attach a selection."
+        + "replies. It listens only if you turn that on yourself, and it never reads your screen "
+        + "unless you attach a selection."
     public static let setupAction = "Set up this Mac"
     public static let setupWorking = "Setting up…"
     public static let stepOne = "Step 1 of 2"
