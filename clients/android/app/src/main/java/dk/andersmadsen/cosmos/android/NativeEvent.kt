@@ -27,9 +27,14 @@ sealed interface CreditPart {
 
 data class PlaceItem(val placeId: String, val name: String, val address: String, val sourceUrl: String?)
 
+/** One option Cosmos offers; [id] is the stable label a follow-up such as "number two" resolves against. */
+data class Choice(val id: String, val title: String, val detail: String)
+
 sealed interface DisplayContent {
     data class Text(val text: String) : DisplayContent
     data class Places(val query: String, val items: List<PlaceItem>, val credits: List<List<CreditPart>>) : DisplayContent
+    /** Two to eight options under one title; selecting one sends its title back as a request. */
+    data class Choices(val title: String, val items: List<Choice>) : DisplayContent
 }
 
 data class DisplayCard(
@@ -48,6 +53,13 @@ data class DisplayCard(
  */
 data class Invitation(val id: UUID, val origin: String, val privacy: String, val expiresAtMs: Long)
 
+/**
+ * Where the current turn stands: working, waiting for a device, shown or spoken
+ * somewhere, nowhere to show it, or unknown. [surfacePlatform] names the device
+ * class Cosmos chose when it knows one; [privacy] is the class it routed at.
+ */
+data class TurnStatus(val turnId: UUID, val generation: Long, val state: String, val surfacePlatform: String?, val privacy: String)
+
 /** One complete spoken reply. The bytes are fetched separately; this names and bounds them. */
 data class SpeechReply(
     val actionId: UUID, val turnId: UUID, val generation: Long,
@@ -59,15 +71,17 @@ data class NativeEvent(
     val pendingOpen: Boolean, val needsReconnect: Boolean,
     val descriptor: Descriptor?, val pending: PendingOperation?, val lastUnknown: PendingOperation?,
     val admission: Admission?, val visible: Boolean, val display: DisplayCard?, val speech: SpeechReply?,
-    val invitation: Invitation?, val eventsSkipped: Long,
+    val invitation: Invitation?, val status: TurnStatus?, val eventsSkipped: Long,
 ) {
     val ok: Boolean get() = error == null
 
     companion object {
         const val APPROVAL = "native-shared-speech-v3"
         private val OPERATIONS = setOf("prepare", "connect", "send_text", "retry_pending", "cancel",
-            "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "invitation", "disconnect", "heartbeat")
+            "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "invitation", "status", "disconnect", "heartbeat")
         private val DISPLAY_CLASSES = setOf("public", "shared_room", "near_user", "private")
+        private val STATUS_STATES = setOf("working", "waiting", "shown", "spoken", "nowhere", "unknown")
+        private val SURFACE_PLATFORMS = setOf("pin", "browser", "macos", "linux", "android", "android_tv")
         private val PRIVATE_CLASSES = setOf("near_user", "private")
         private val PENDING_KINDS = setOf("text", "heartbeat", "cancel", "state", "acknowledge")
         private val NIL = UUID(0, 0)
@@ -118,6 +132,14 @@ data class NativeEvent(
                     require(text.isNotBlank() && text.toByteArray().size <= NativeSurface.MAX_TEXT_BYTES && credits.length() == 0) { "invalid text card" }
                     DisplayContent.Text(text)
                 }
+                "choices" -> {
+                    val title = content.getString("title")
+                    val items = list(content.getJSONArray("items")) { item -> Choice(item.getString("id"), item.getString("title"), item.getString("detail")) }
+                    require(title.isNotBlank() && title.toByteArray().size <= NativeSurface.MAX_TEXT_BYTES && credits.length() == 0
+                        && items.size in 2..8 && items.distinctBy { it.id }.size == items.size
+                        && items.all { it.id.isNotBlank() && it.title.isNotBlank() && (it.title + it.detail).toByteArray().size <= NativeSurface.MAX_TEXT_BYTES }) { "invalid choices card" }
+                    DisplayContent.Choices(title, items)
+                }
                 "places" -> {
                     val items = list(content.getJSONArray("items")) { item ->
                         val source = if (item.isNull("sourceUrl")) null else item.getString("sourceUrl")
@@ -147,6 +169,17 @@ data class NativeEvent(
             require(origin.isNotEmpty() && origin.length <= 32 && origin.all { it in 'a'..'z' || it == '_' }
                 && privacy in PRIVATE_CLASSES && value.getLong("expiresAtMs") > 0) { "invalid invitation" }
             return Invitation(uuid(value.getString("id")), origin, privacy, value.getLong("expiresAtMs"))
+        }
+
+        private fun status(value: JSONObject?): TurnStatus? {
+            value ?: return null
+            val state = value.getString("state")
+            val platform = if (value.isNull("surfacePlatform")) null else value.getString("surfacePlatform")
+            val privacy = value.getString("privacy")
+            val generation = value.getLong("generation")
+            require(state in STATUS_STATES && (platform == null || platform in SURFACE_PLATFORMS) && privacy in DISPLAY_CLASSES
+                && generation in 1..MAX_SAFE) { "invalid status" }
+            return TurnStatus(uuid(value.getString("turnId")), generation, state, platform, privacy)
         }
 
         private fun speech(value: JSONObject?): SpeechReply? {
@@ -184,6 +217,7 @@ data class NativeEvent(
                 visible = value.getBoolean("visible"), display = if (connected) display(value.optJSONObject("display")) else null,
                 speech = if (connected) speech(value.optJSONObject("speech")) else null,
                 invitation = if (connected) invitation(value.optJSONObject("invitation")) else null,
+                status = if (connected) status(value.optJSONObject("status")) else null,
                 eventsSkipped = value.getLong("eventsSkipped"),
             )
         }

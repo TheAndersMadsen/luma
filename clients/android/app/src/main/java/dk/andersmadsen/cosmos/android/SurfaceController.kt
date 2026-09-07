@@ -40,6 +40,8 @@ data class SurfaceState(
     val speech: SpeechReply? = null,
     /** A private card is waiting for this device's unlocked foreground; it carries no content. */
     val invitation: Invitation? = null,
+    /** Where the current turn stands, as Cosmos last reported it. */
+    val status: TurnStatus? = null,
     val speaking: Boolean = false,
     val message: String = "Prepare this installation, then approve its public descriptor in Center.",
     val busy: Boolean = false,
@@ -51,6 +53,12 @@ data class SurfaceState(
     val alert: Boolean = false,
     /** The operation of the last folded snapshot, so the UI can tell fresh feedback from steady state. */
     val operation: String = "",
+    /**
+     * How many send commands this installation has finished, refused ones included.
+     * A screen records it before asking and knows its own send is over when it moves;
+     * no command can be running when a send starts, so it can only be that send.
+     */
+    val sends: Long = 0,
 ) {
     val canPrepare get() = !busy && phase in setOf(Phase.DISCONNECTED, Phase.PREPARED, Phase.BLOCKED) && !hasPending
     val canConnect get() = !busy && descriptor != null && phase in setOf(Phase.PREPARED, Phase.DISCONNECTED) || (!busy && (needsReconnect || pendingOpen))
@@ -208,16 +216,18 @@ class SurfaceController(context: Context) {
                 display = event.display,
                 speech = event.speech,
                 invitation = event.invitation,
+                status = event.status,
                 speaking = event.speech != null && playing == event.speech.actionId,
                 message = failure ?: when (event.operation) {
-                    "prepare" -> "Approve this public descriptor in Center, then connect."
-                    "connect" -> "Cosmos confirmed the connection. Cards and spoken replies may arrive here while this screen is visible."
-                    "speech" -> if (event.speech != null) "Cosmos is speaking the reply on this device." else previous.message
-                    "send_text" -> "Request admitted by Cosmos. The response appears on the approved display it selects."
-                    "cancel" -> "Cancellation admitted by Cosmos."
-                    "disconnect" -> "Session disconnected. Owner approval remains in Center."
-                    "display", "speech", "heartbeat" -> if (!event.connected && previous.phase == Phase.CONNECTED && wantsConnection) "The Cosmos connection dropped. Reconnecting…" else previous.message
-                    "retry_pending" -> "Cosmos confirmed the pending operation with its exact request."
+                    "prepare" -> "Approve this phone in Center, then connect."
+                    "connect" -> "Connected."
+                    "speech" -> if (event.speech != null) "Speaking the reply here." else previous.message
+                    // The status line already says Working; the notice stays quiet on a clean send.
+                    "send_text" -> ""
+                    "cancel" -> "The task was cancelled."
+                    "disconnect" -> "Disconnected. This phone stays approved in Center."
+                    "display", "speech", "heartbeat" -> if (!event.connected && previous.phase == Phase.CONNECTED && wantsConnection) "Reconnecting…" else previous.message
+                    "retry_pending" -> "The pending request was confirmed."
                     else -> previous.message
                 },
             )
@@ -273,31 +283,39 @@ class SurfaceController(context: Context) {
         File(application.cacheDir, "speech-$id.mp3").delete()
     }
 
+    /** One sentence on what happened, one on what to do; nothing technical and no identifiers. */
     private fun message(code: String): String = when (code) {
-        "pending_operation" -> "The request outcome is unknown. Retry the exact pending request before sending another."
-        "persistence", "invalid_journal" -> "Protected storage failed. Retry the pending request before connecting or sending."
-        "invalid_signature" -> "The installation identity could not be used from the Keystore."
-        "invalid_config" -> "Enter an HTTPS server address with no path, credentials or query."
-        "invalid_input" -> "Enter public text of at most 4,000 UTF-8 bytes."
-        "denied" -> "Approve this installation in Center before connecting."
-        "busy" -> "Wait for the current operation to finish."
-        "no_display" -> "No card is currently shown."
-        "no_speech" -> "No spoken reply is current."
-        else -> "The Cosmos connection could not be confirmed."
+        "pending_operation" -> "The last request has an unknown outcome. Retry it before asking again."
+        "persistence", "invalid_journal" -> "This phone could not save its session. Retry the last request before asking again."
+        "invalid_signature" -> "This phone could not use its own key. Set it up again."
+        "invalid_config" -> "That server address cannot be used. Enter an address that starts with https:// and nothing after it."
+        "invalid_input" -> "That question is too long. Shorten it and send it again."
+        "denied" -> "This phone is not approved yet. Approve it in Center, then connect."
+        "busy" -> "Cosmos is still on the last request. Wait a moment and try again."
+        "no_display" -> "There is no reply on screen."
+        "no_speech" -> "There is no spoken reply right now."
+        "not_in_this_build" -> "Cosmos on this phone cannot use screen text or another device yet. Nothing was sent — choose This phone, remove the screen chip and ask again."
+        else -> "Cosmos could not confirm that. Try again in a moment."
     }
 
     private suspend fun command(name: String, block: () -> Int) = commands.withLock {
         if (handle == 0L) {
-            _state.update { it.copy(alert = true, message = "Prepare this installation first.") }
+            _state.update { it.copy(alert = true, message = "Set this phone up first.", sends = it.sends + finished(name)) }
             return@withLock
         }
         _state.update { it.copy(busy = true) }
         lastOperation = null
         awaiting = name
         val code = withContext(Dispatchers.IO) { block() }
+        if (code == NativeSurface.NOT_IN_THIS_BUILD) {
+            // Refused here, before anything left the phone; the owner is told plainly that it did not go.
+            Log.w(TAG, "native $name is not in this build")
+            _state.update { it.copy(busy = false, alert = true, operation = name, message = message("not_in_this_build"), sends = it.sends + finished(name)) }
+            return@withLock
+        }
         if (code != NativeSurface.OK) {
             Log.w(TAG, "native $name refused with code $code")
-            _state.update { it.copy(busy = false, alert = true, message = if (code == NativeSurface.QUEUE_FULL) message("busy") else message("unavailable")) }
+            _state.update { it.copy(busy = false, alert = true, message = if (code == NativeSurface.QUEUE_FULL) message("busy") else message("unavailable"), sends = it.sends + finished(name)) }
             return@withLock
         }
         // Wait for the operation's own snapshot; the poll loop folds it.
@@ -308,8 +326,10 @@ class SurfaceController(context: Context) {
             if (settled) break
         }
         lastOperation = null
-        _state.update { it.copy(busy = false) }
+        _state.update { it.copy(busy = false, sends = it.sends + finished(name)) }
     }
+
+    private fun finished(name: String): Long = if (name == "send_text") 1 else 0
 
     @Volatile private var lastOperation: String? = null
     @Volatile private var awaiting: String? = null
@@ -367,7 +387,23 @@ class SurfaceController(context: Context) {
             command("set_visible") { NativeSurface.setVisible(handle, true) }
         }
     }
-    fun send(text: String) = scope.launch { command("send_text") { NativeSurface.sendText(handle, text.toByteArray()) } }
+    /**
+     * Public text, optionally continued on a named device class and optionally with
+     * the screen text the owner explicitly attached. Only the plain form exists in
+     * every library; the others are refused locally when the library predates them.
+     */
+    fun send(text: String, target: String = "", context: ScreenContext? = null) = scope.launch {
+        val bytes = text.toByteArray()
+        command("send_text") {
+            when {
+                context != null -> NativeSurface.optional {
+                    NativeSurface.sendTextWithContext(handle, bytes, context.app.toByteArray(), context.text.toByteArray(), target.toByteArray())
+                }
+                target.isNotEmpty() -> NativeSurface.optional { NativeSurface.sendTextTo(handle, bytes, target.toByteArray()) }
+                else -> NativeSurface.sendText(handle, bytes)
+            }
+        }
+    }
     fun retryPending() = scope.launch { command("retry_pending") { NativeSurface.retryPending(handle) } }
     fun cancel() = scope.launch { command("cancel") { NativeSurface.cancel(handle) } }
     fun disconnect() = scope.launch {

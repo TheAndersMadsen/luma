@@ -71,19 +71,19 @@ class ScreensTest {
         assertEquals(TvStage.Idle, connected.tvStage(null))
         // Sending: Working until Cosmos admits the request as a new turn, whatever admission the connection already carried.
         val earlier = Admission(UUID.fromString("22222222-2222-4222-8222-222222222222"), 1, false)
-        val request = TvRequest("how many goals has he scored this season?", turnBefore = earlier.turnId)
+        val request = Ask("how many goals has he scored this season?", turnBefore = earlier.turnId)
         assertEquals(TvStage.Working, connected.copy(admission = earlier).tvStage(request))
-        assertEquals(TvStage.Working, connected.copy(admission = earlier, busy = true).tvStage(request.copy(sending = true)))
+        assertEquals(TvStage.Working, connected.copy(admission = earlier, busy = true).tvStage(request))
         // Admitted: the transcript stays until the card or spoken reply for that turn arrives; an older card does not count.
         val admitted = connected.copy(admission = Admission(turn, 2, false), operation = "send_text")
-        assertEquals(TvStage.Transcript(request.text), admitted.tvStage(request.copy(sending = true)))
+        assertEquals(TvStage.Transcript(request.text), admitted.tvStage(request))
         val older = card.copy(actionId = UUID.fromString("77777777-7777-4777-8777-777777777777"), turnId = earlier.turnId)
         assertEquals(TvStage.Transcript(request.text), admitted.copy(display = older).tvStage(request))
         assertEquals(TvStage.Answer(card.actionId, "An answer.", "An answer.", card), admitted.copy(display = card).tvStage(request))
         val speech = SpeechReply(UUID.fromString("55555555-5555-4555-8555-555555555555"), turn, 3, "b".repeat(64), 1000, "Five goals.", "audio/mpeg", 10)
         assertEquals(TvStage.Answer(speech.actionId, "Five goals.", "Five goals."), admitted.copy(speech = speech).tvStage(request))
         // A send that settled without a new admission is dropped.
-        assertEquals(TvStage.Idle, connected.copy(admission = earlier, alert = true, operation = "send_text").tvStage(request.copy(sending = true)))
+        assertEquals(TvStage.Idle, connected.copy(admission = earlier, sends = 1).tvStage(request))
     }
 
     @Test
@@ -92,7 +92,7 @@ class ScreensTest {
         assertEquals(TvStage.Answer(card.actionId, "An answer.", "An answer.", card), connected.copy(display = card).tvStage(null))
         assertEquals(TvStage.Idle, connected.copy(display = card).tvStage(null, dismissed = card.actionId))
         assertEquals(TvStage.Idle, connected.copy(display = card.copy(privacy = "private")).tvStage(null))
-        assertEquals(TvStage.Transcript("q"), connected.copy(display = card.copy(privacy = "near_user")).tvStage(TvRequest("q", null)))
+        assertEquals(TvStage.Transcript("q"), connected.copy(display = card.copy(privacy = "near_user")).tvStage(Ask("q", null)))
         // Place cards caption their query; the list and credits wait in the paged view.
         val places = card.copy(content = DisplayContent.Places("Café", listOf(PlaceItem("one", "Café", "1 Main Street", null)), emptyList()))
         val stage = connected.copy(display = places).tvStage(null) as TvStage.Answer
@@ -100,6 +100,147 @@ class ScreensTest {
         assertEquals("Café\n\n1. Café\n1 Main Street", stage.full)
         // Housekeeping commands do not stage anything: a busy connection with no request stays idle.
         assertEquals(TvStage.Idle, connected.copy(busy = true).tvStage(null))
+    }
+
+    @Test
+    fun speaksTheStatusVocabularyWithoutAnErrorTone() {
+        fun status(state: String, platform: String?) = TurnStatus(turn, 1, state, platform, "shared_room")
+        assertEquals("Working", status("working", null).line())
+        assertEquals("Working", status("working", "macos").line())
+        assertEquals("Waiting for a device", status("waiting", null).line())
+        assertEquals("Waiting for your Mac", status("waiting", "macos").line())
+        assertEquals("Shown on your Mac", status("shown", "macos").line())
+        assertEquals("Spoken on your Mac", status("spoken", "macos").line())
+        assertEquals("Shown on your Linux PC", status("shown", "linux").line())
+        assertEquals("Shown on your phone", status("shown", "android").line())
+        assertEquals("Spoken on your TV", status("spoken", "android_tv").line())
+        assertEquals("Shown on your browser", status("shown", "browser").line())
+        assertEquals("Spoken on your Ai Pin", status("spoken", "pin").line())
+        assertEquals("Shown on a device", status("shown", null).line())
+        assertEquals("Nowhere to show it", status("nowhere", null).line())
+        assertEquals("Cannot confirm", status("unknown", "macos").line())
+        assertEquals("I can't confirm whether that request was handled. It was not sent again.", status("unknown", null).detail())
+        assertNull(status("shown", "macos").detail())
+        assertNull(deviceName("watch"))
+    }
+
+    @Test
+    fun namesTheScreenChipHonestlyAndSaysWhenThereIsNoScreen() {
+        val attached = AssistContext.Attached(ScreenContext("Gmail", "com.google.android.gm", "Subject: Invoice"))
+        assertEquals("Using: Gmail screen", attached.chipLabel())
+        assertEquals("The text that was on screen. The reply stays on this phone.", attached.line())
+        assertNull(AssistContext.Removed.chipLabel())
+        assertNull(AssistContext.Removed.line())
+        assertNull(AssistContext.Pending.line())
+        assertNull(AssistContext.Locked.chipLabel())
+        assertEquals("The screen was locked, so nothing from it is used.", AssistContext.Locked.line())
+        assertEquals("No screen text was available.", AssistContext.Unavailable.line())
+        assertEquals("Cosmos can use screen text once it is your assistant.", AssistContext.NoRole.line())
+        assertNull(AssistContext.NoRole.chipLabel())
+    }
+
+    @Test
+    fun offersPlainDestinationsAndSendsNoTargetForThePhone() {
+        assertEquals("", Destination.PHONE.target)
+        assertEquals(listOf("This phone", "Mac", "Linux PC", "TV", "Browser"), Destination.entries.map { it.label })
+        assertEquals(listOf("", "macos", "linux", "android_tv", "browser"), Destination.entries.map { it.target })
+        assertEquals(Destination.MAC, Destination.forTarget("macos"))
+        assertEquals(Destination.PHONE, Destination.forTarget(""))
+        assertEquals(Destination.PHONE, Destination.forTarget("pin"))
+    }
+
+    @Test
+    fun stagesChoicesOnTheTvUntilBackOrPrivacySendsThemAway() {
+        val items = listOf(Choice("1", "Arrival", "A linguist meets visitors."), Choice("2", "Heat", "A crew and a detective."))
+        val choices = card.copy(content = DisplayContent.Choices("Tonight's films", items))
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor, admission = Admission(turn, 2, false), display = choices)
+        assertEquals(TvStage.Choices(choices.actionId, "Tonight's films", items, choices), connected.tvStage(null))
+        assertEquals(TvStage.Idle, connected.tvStage(null, dismissed = choices.actionId))
+        assertEquals(TvStage.Idle, connected.copy(display = choices.copy(privacy = "near_user")).tvStage(null))
+        // Choosing one is a request like any other: Working until Cosmos admits it as a new turn.
+        assertEquals(TvStage.Working, connected.tvStage(Ask("Heat", turnBefore = turn)))
+        assertEquals("Tonight's films\n\n1. Arrival\nA linguist meets visitors.\n\n2. Heat\nA crew and a detective.", choices.content.plainText())
+        assertEquals("T\n\n1. A", DisplayContent.Choices("T", listOf(Choice("1", "A", ""))).plainText())
+    }
+
+    @Test
+    fun reportsPresenceAsOneWordWithASettledLineToFadeOn() {
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        assertEquals(Presence("Connected", null, Tone.LIVE, true), connected.presence())
+        assertEquals(Presence("Working", null, Tone.ACTIVE, false), connected.copy(busy = true).presence())
+        // A request this phone just sent says Working, not the previous turn's outcome.
+        val stale = TurnStatus(turn, 1, "shown", "macos", "shared_room")
+        val after = connected.copy(status = stale, admission = Admission(turn, 1, false))
+        assertEquals(Presence("Shown on your Mac", null, Tone.DONE, true), after.presence())
+        assertEquals(Presence("Working", null, Tone.ACTIVE, false), after.presence(Ask("next", turnBefore = turn)))
+        // Admitted as a new turn, but its own status has not arrived: still Working, never the old outcome.
+        val next = UUID.fromString("66666666-6666-4666-8666-666666666666")
+        assertEquals(Presence("Working", null, Tone.ACTIVE, false),
+            after.copy(admission = Admission(next, 2, false)).presence(Ask("next", turnBefore = turn)))
+        // A running turn never settles, so the line stays lit while it moves.
+        val working = TurnStatus(turn, 1, "working", null, "shared_room")
+        assertEquals(Presence("Working", null, Tone.ACTIVE, false), connected.copy(status = working).presence())
+        val waiting = TurnStatus(turn, 1, "waiting", "macos", "shared_room")
+        assertEquals(Presence("Waiting for your Mac", null, Tone.ACTIVE, false), connected.copy(status = waiting).presence())
+        val unknown = TurnStatus(turn, 1, "unknown", null, "shared_room")
+        assertEquals(Presence("Cannot confirm", CANNOT_CONFIRM_DETAIL, Tone.QUIET, true), connected.copy(status = unknown).presence())
+        // Off the room the line is the connection itself, and the picker is not offered as a state.
+        assertEquals(Presence("Reconnecting…", null, Tone.ACTIVE, false),
+            SurfaceState(phase = Phase.PREPARED, descriptor = descriptor, connectionWanted = true, needsReconnect = true).presence())
+        assertEquals(Presence("Disconnected", "Connect this phone to ask.", Tone.QUIET, true),
+            SurfaceState(phase = Phase.PREPARED, descriptor = descriptor).presence())
+        assertTrue(working.running())
+        assertTrue(waiting.running())
+        assertFalse(stale.running())
+        assertFalse(unknown.running())
+    }
+
+    @Test
+    fun showsTheTypedRequestAtOnceAndKeepsItUntilItsOwnReplyArrives() {
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        assertEquals(SheetBody.Empty, connected.sheetBody(null))
+        val earlier = Admission(UUID.fromString("22222222-2222-4222-8222-222222222222"), 1, false)
+        val ask = Ask("where is my package?", turnBefore = earlier.turnId)
+        // The moment Send is pressed, before Cosmos has said anything at all.
+        assertEquals(SheetBody.Now(ask.text), connected.copy(admission = earlier).sheetBody(ask))
+        val admitted = connected.copy(admission = Admission(turn, 2, false), operation = "send_text")
+        assertEquals(SheetBody.Now(ask.text), admitted.sheetBody(ask))
+        // An older card is not this turn's answer and does not replace the line.
+        val older = card.copy(actionId = UUID.fromString("77777777-7777-4777-8777-777777777777"), turnId = earlier.turnId)
+        assertEquals(SheetBody.Now(ask.text), admitted.copy(display = older).sheetBody(ask))
+        assertEquals(SheetBody.Reply(card), admitted.copy(display = card).sheetBody(ask))
+        val speech = SpeechReply(UUID.fromString("55555555-5555-4555-8555-555555555555"), turn, 3, "b".repeat(64), 1000, "Tomorrow.", "audio/mpeg", 10)
+        assertEquals(SheetBody.Spoken("Tomorrow."), admitted.copy(speech = speech).sheetBody(ask))
+        // The send is over the moment the installation's completed-send count moves, whether the
+        // command settled with no admission or the client refused it before it ever left.
+        val over = connected.copy(admission = earlier, sends = ask.sendsBefore + 1)
+        assertEquals(SheetBody.Empty, over.sheetBody(ask))
+        assertTrue(over.sendSettled(ask))
+        assertFalse(connected.copy(admission = earlier, busy = true).sendSettled(ask))
+        // The status line stops saying Working the moment the request is over.
+        assertEquals(Presence("Connected", null, Tone.LIVE, true), over.presence(ask))
+        // A private card still belongs on the personal phone, unlike the TV.
+        assertEquals(SheetBody.Reply(card.copy(privacy = "private")), connected.copy(display = card.copy(privacy = "private")).sheetBody(null))
+        assertEquals(SheetBody.Note("Connect this phone to ask Cosmos something."), SurfaceState(descriptor = descriptor).sheetBody(null))
+        assertEquals(SheetBody.Note("Cosmos is rejoining this phone."),
+            SurfaceState(descriptor = descriptor, connectionWanted = true, needsReconnect = true).sheetBody(null))
+    }
+
+    @Test
+    fun offersThreePromptsAndOnlyOffersTheScreenOneWhereThereIsAScreen() {
+        assertEquals(listOf("Find cafés near me", "Show my notes about…"), suggestions(false))
+        assertEquals(listOf("Find cafés near me", "Show my notes about…", "What\'s on my screen?"), suggestions(true))
+        // A prompt that trails off starts the field instead of being sent as it stands.
+        assertTrue(isComplete("Find cafés near me"))
+        assertTrue(isComplete("What\'s on my screen?"))
+        assertFalse(isComplete("Show my notes about…"))
+    }
+
+    @Test
+    fun keepsABlankMessageOutOfTheNotice() {
+        val sent = SurfaceState(phase = Phase.CONNECTED, operation = "send_text", message = "")
+        assertNull(sent.notice())
+        assertNull(sent.copy(alert = true).notice())
     }
 
     @Test

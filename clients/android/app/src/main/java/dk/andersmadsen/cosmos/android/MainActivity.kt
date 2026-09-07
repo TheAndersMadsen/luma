@@ -1,7 +1,6 @@
 package dk.andersmadsen.cosmos.android
 
 import android.Manifest
-import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -19,6 +18,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dk.andersmadsen.cosmos.android.assist.AssistantRole
 import dk.andersmadsen.cosmos.android.ui.CosmosTheme
 import dk.andersmadsen.cosmos.android.ui.CosmosTvTheme
 import dk.andersmadsen.cosmos.android.ui.PhoneScreen
@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val actions = SurfaceActions(
             prepare = controller::prepare, connect = { controller.connect() }, disconnect = { controller.disconnect() },
-            send = { controller.send(it) }, cancel = { controller.cancel() }, retry = { controller.retryPending() },
+            send = { text, target -> controller.send(text, target) }, cancel = { controller.cancel() }, retry = { controller.retryPending() },
             approve = ::approve, copy = ::copy, share = ::share, chooseAssistant = ::selectAssistant,
             committed = controller::displayCommitted,
         )
@@ -108,11 +108,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun selectAssistant() {
-        val manager = getSystemService(RoleManager::class.java)
-        if (manager != null && manager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) && !manager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-            try { roleRequest.launch(manager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)); return }
-            catch (_: ActivityNotFoundException) { } catch (_: SecurityException) { }
-        }
+        try { roleRequest.launch(AssistantRole.intent(this)); return }
+        catch (_: ActivityNotFoundException) { } catch (_: SecurityException) { }
         try { startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) }
         catch (_: ActivityNotFoundException) { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }
     }

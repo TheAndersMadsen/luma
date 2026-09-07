@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Assist only: the session reads the visible text of the current screen when the owner
+     invokes Cosmos, never from the keyguard, and there is no hotword or audio capture. -->
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="dk.andersmadsen.cosmos.android.assist.CosmosSessionService"
+    android:recognitionService="dk.andersmadsen.cosmos.android.assist.CosmosRecognitionService"
+    android:supportsAssist="true"/>

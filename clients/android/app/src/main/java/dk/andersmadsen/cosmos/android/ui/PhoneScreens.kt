@@ -1,7 +1,11 @@
 package dk.andersmadsen.cosmos.android.ui
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,17 +16,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -38,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,11 +52,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -61,28 +76,36 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dk.andersmadsen.cosmos.android.Ask
 import dk.andersmadsen.cosmos.android.Descriptor
+import dk.andersmadsen.cosmos.android.Destination
 import dk.andersmadsen.cosmos.android.DisplayCard
 import dk.andersmadsen.cosmos.android.Fingerprint
 import dk.andersmadsen.cosmos.android.Phase
 import dk.andersmadsen.cosmos.android.R
 import dk.andersmadsen.cosmos.android.Screen
 import dk.andersmadsen.cosmos.android.SessionStatus
+import dk.andersmadsen.cosmos.android.SheetBody
 import dk.andersmadsen.cosmos.android.SurfaceState
 import dk.andersmadsen.cosmos.android.UNKNOWN_OUTCOME_NOTICE
-import dk.andersmadsen.cosmos.android.assistantState
+import dk.andersmadsen.cosmos.android.isComplete
 import dk.andersmadsen.cosmos.android.notice
 import dk.andersmadsen.cosmos.android.offersCancel
+import dk.andersmadsen.cosmos.android.presence
 import dk.andersmadsen.cosmos.android.screen
 import dk.andersmadsen.cosmos.android.serverLabel
 import dk.andersmadsen.cosmos.android.sessionStatus
+import dk.andersmadsen.cosmos.android.sheetBody
+import dk.andersmadsen.cosmos.android.suggestions
+import kotlinx.coroutines.delay
 
 /** Everything either layout can ask the activity to do; the activity owns intents and permissions. */
 class SurfaceActions(
     val prepare: (String) -> Unit,
     val connect: () -> Unit,
     val disconnect: () -> Unit,
-    val send: (String) -> Unit,
+    /** Public text and the device class to continue on; an empty target lets Cosmos decide. */
+    val send: (text: String, target: String) -> Unit,
     val cancel: () -> Unit,
     val retry: () -> Unit,
     val approve: (String) -> Unit,
@@ -92,21 +115,17 @@ class SurfaceActions(
     val committed: (DisplayCard) -> Unit,
 )
 
-/** The phone: one calm screen per state over the kit's bottom nebula. */
+/** The phone: one calm screen per state. The nebula lives under the welcome and empty states only. */
 @Composable
 fun PhoneScreen(state: SurfaceState, approvalRequested: Boolean, actions: SurfaceActions) {
+    val screen = state.screen()
     Box(Modifier.fillMaxSize().background(CosmosPalette.background)) {
-        CosmosNebula(Modifier.align(Alignment.BottomCenter))
-        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 22.dp)) {
-            val screen = state.screen()
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (screen != Screen.SESSION) CosmosNebula(Modifier.align(Alignment.BottomCenter), dim = .8f)
+        Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 22.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 CosmosWordmark(iconSize = 36.dp, fontSize = 24.sp)
                 Spacer(Modifier.weight(1f))
-                if (screen == Screen.SESSION) {
-                    StatusPill(state.sessionStatus())
-                    Spacer(Modifier.width(4.dp))
-                    OverflowMenu(state, actions)
-                }
+                if (screen == Screen.SESSION) OverflowMenu(state, actions)
             }
             when (screen) {
                 Screen.SETUP -> SetupScreen(state, actions)
@@ -117,125 +136,233 @@ fun PhoneScreen(state: SurfaceState, approvalRequested: Boolean, actions: Surfac
     }
 }
 
+/** Step one: name the server once, then one button. No identifiers, no formats, no choices to make. */
 @Composable
 private fun SetupScreen(state: SurfaceState, actions: SurfaceActions) {
     var server by rememberSaveable(state.serverOrigin) { mutableStateOf(state.serverOrigin) }
     var editing by rememberSaveable { mutableStateOf(false) }
     val preparing = state.phase == Phase.PREPARING
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.Center) {
-        Title("Set up this phone")
+        Step(1)
+        Spacer(Modifier.height(10.dp))
+        Title(stringResource(R.string.setup_title))
         Spacer(Modifier.height(12.dp))
-        Body("Cosmos shows shared answers and speaks replies here once you approve this phone in Center.")
+        Body(stringResource(R.string.setup_body))
         Spacer(Modifier.height(24.dp))
         if (editing) {
             OutlinedTextField(
-                server, { server = it }, Modifier.fillMaxWidth(), label = { Text("HTTPS server address") }, singleLine = true,
+                server, { server = it }, Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.server_address)) }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done), colors = fieldColors(),
             )
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(serverLabel(server), color = CosmosPalette.primary, fontSize = 15.sp)
-                Text(" · ", color = CosmosPalette.secondary, fontSize = 15.sp)
-                Text("Change", color = CosmosPalette.glow, fontSize = 15.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.clickable(role = Role.Button) { editing = true }.padding(6.dp))
+                Text(serverLabel(server), color = CosmosPalette.secondary, fontSize = 15.sp)
+                Text(
+                    stringResource(R.string.change), color = CosmosPalette.glow, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.heightIn(min = 48.dp).clickable(role = Role.Button) { editing = true }.padding(horizontal = 12.dp, vertical = 14.dp),
+                )
             }
         }
-        Spacer(Modifier.height(24.dp))
-        PrimaryButton(if (preparing) "Setting up…" else "Set up this phone", enabled = state.canPrepare, busy = preparing) { actions.prepare(server) }
+        Spacer(Modifier.height(20.dp))
+        PrimaryButton(
+            if (preparing) stringResource(R.string.setup_busy) else stringResource(R.string.setup_action),
+            enabled = state.canPrepare, busy = preparing,
+        ) { actions.prepare(server) }
         Notice(state, actions)
     }
 }
 
+/**
+ * Step two: the pairing code, large enough to read across a desk, and the same
+ * link as a QR for another signed-in device. Setup material stays behind Details.
+ */
 @Composable
 private fun ApproveScreen(state: SurfaceState, approvalRequested: Boolean, actions: SurfaceActions) {
     val descriptor = state.descriptor ?: return
     val url = remember(descriptor, state.serverOrigin) { descriptor.approvalUrl(state.serverOrigin) }
-    var showQr by rememberSaveable { mutableStateOf(false) }
-    var advanced by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Title("Approve in Center")
-        Body("Center shows this fingerprint next to the phone's own. Approve only when they match.")
+    var details by rememberSaveable { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Step(2)
+        Title(stringResource(R.string.approve_title))
+        Body(stringResource(R.string.approve_body))
         CosmosPanel(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Public-key fingerprint", color = CosmosPalette.secondary, fontSize = 12.sp)
-                Spacer(Modifier.height(10.dp))
+                Text(stringResource(R.string.pairing_code), color = CosmosPalette.secondary, fontSize = 13.sp)
+                Spacer(Modifier.height(12.dp))
                 FingerprintLines(descriptor)
             }
         }
-        PrimaryButton("Approve in Center", enabled = !state.busy) { actions.approve(url) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton({ showQr = !showQr }) { Text(if (showQr) "Hide QR" else "Show QR") }
-            TextButton({ advanced = !advanced }) { Text(if (advanced) "Advanced ▴" else "Advanced ▾") }
+        PrimaryButton(stringResource(R.string.approve_action), enabled = !state.busy) { actions.approve(url) }
+        ProgressLine(state, approvalRequested, actions)
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            QrCodeImage(url, stringResource(R.string.approval_qr), Modifier.width(200.dp))
+            Text(stringResource(R.string.approve_scan), color = CosmosPalette.secondary, fontSize = 13.sp, textAlign = TextAlign.Center)
         }
-        if (showQr) {
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                QrCodeImage(url, stringResource(R.string.approval_qr), Modifier.width(220.dp))
-                Text("Scan from another signed-in device to approve this phone.", color = CosmosPalette.secondary, fontSize = 13.sp, textAlign = TextAlign.Center)
-            }
-        }
-        Row(
-            Modifier.fillMaxWidth().background(CosmosPalette.surface, RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (state.busy) {
-                CircularProgressIndicator(Modifier.size(18.dp), color = CosmosPalette.glow, strokeWidth = 2.dp)
-                Text("Checking with Center…", color = CosmosPalette.secondary, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            } else {
-                val failed = state.alert || state.phase == Phase.BLOCKED
-                Text(if (failed) state.message else "Waiting for approval in Center…", color = CosmosPalette.secondary, fontSize = 14.sp,
-                    lineHeight = 19.sp, modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
-                OutlinedButton(actions.connect, enabled = state.canConnect) { Text(if (approvalRequested || failed) "Try again" else "Connect") }
-            }
-        }
-        if (advanced) {
+        Disclosure(details, { details = it }) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton({ actions.copy(descriptor.json()) }) { Text("Copy descriptor") }
-                OutlinedButton({ actions.share(descriptor.json()) }) { Text("Share…") }
+                OutlinedButton({ actions.copy(descriptor.json()) }) { Text(stringResource(R.string.copy)) }
+                OutlinedButton({ actions.share(descriptor.json()) }) { Text(stringResource(R.string.share)) }
             }
             Text(descriptor.json(), color = CosmosPalette.secondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace, lineHeight = 16.sp)
         }
     }
 }
 
+/** The one progress line while Center decides: a spinner, a sentence, and Try again only when it can help. */
+@Composable
+private fun ProgressLine(state: SurfaceState, approvalRequested: Boolean, actions: SurfaceActions) {
+    val failed = state.alert || state.phase == Phase.BLOCKED
+    Row(
+        Modifier.fillMaxWidth().background(CosmosPalette.card, RoundedCornerShape(16.dp))
+            .border(1.dp, CosmosPalette.cardBorder, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (state.busy) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = CosmosPalette.glow, strokeWidth = 2.dp)
+            Text(stringResource(R.string.checking_with_center), color = CosmosPalette.secondary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        } else {
+            Text(
+                if (failed) state.message else stringResource(R.string.waiting_for_approval),
+                color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp,
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            OutlinedButton(actions.connect, enabled = state.canConnect) {
+                Text(if (approvalRequested || failed) stringResource(R.string.try_again) else stringResource(R.string.connect))
+            }
+        }
+    }
+}
+
+/**
+ * The connected phone. The first moment of a connection is confirmed plainly and
+ * then fades into quiet presence; after that the screen holds one reply, the
+ * request in flight, or the empty state, with the ask bar at the bottom.
+ */
 @Composable
 private fun SessionScreen(state: SurfaceState, actions: SurfaceActions) {
     var draft by rememberSaveable { mutableStateOf("") }
+    var target by rememberSaveable { mutableStateOf("") }
+    var choosing by rememberSaveable { mutableStateOf(false) }
+    var ask by remember { mutableStateOf<Ask?>(null) }
+    val body = state.sheetBody(ask)
+    LaunchedEffect(body) { if (body !is SheetBody.Now) ask = null }
     val status = state.sessionStatus()
+    // The welcome confirmation: shown once the room is joined, gone a couple of seconds later.
+    var welcome by remember { mutableStateOf(false) }
+    LaunchedEffect(status) {
+        if (status == SessionStatus.CONNECTED) { welcome = true; delay(2_200); welcome = false }
+    }
     Column(Modifier.fillMaxSize()) {
+        PresenceLine(state.presence(ask), Modifier.padding(top = 8.dp, bottom = 4.dp))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val card = state.display
-            val speech = state.speech
-            val maxCard = (maxHeight - 64.dp).coerceAtLeast(120.dp)
+            val maxCard = (maxHeight - 24.dp).coerceAtLeast(120.dp)
             when {
-                card != null -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-                    DisplayCardView(card, onCommitted = actions.committed, Modifier.fillMaxWidth().heightIn(max = maxCard))
-                    if (speech != null) SpeakingLine(state)
+                welcome && body is SheetBody.Empty -> Welcome()
+                body is SheetBody.Reply -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+                    // Choosing an option is a request like any other: Cosmos decides where its reply goes.
+                    DisplayCardView(body.card, onCommitted = actions.committed, Modifier.fillMaxWidth().heightIn(max = maxCard), onChoose = { title ->
+                        ask = Ask(title, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
+                        actions.send(title, "")
+                    })
+                    if (state.speech != null) SpeakingLine(state)
                 }
-                speech != null -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-                    CosmosPanel(Modifier.fillMaxWidth().heightIn(max = maxCard)) {
-                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) { CosmosMessage(speech.text) }
+                body is SheetBody.Spoken -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+                    CosmosCard(Modifier.fillMaxWidth().heightIn(max = maxCard)) {
+                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) { CosmosMessage(body.text) }
                     }
                     SpeakingLine(state)
                 }
-                else -> Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    CosmosWaveform(state.assistantState(), Modifier.size(width = 72.dp, height = 48.dp))
-                    Spacer(Modifier.height(20.dp))
-                    when (status) {
-                        SessionStatus.CONNECTED -> Hint("Ask Cosmos below. Shared answers and spoken replies for this phone appear here.")
-                        SessionStatus.RECONNECTING -> Hint("Rejoining the Cosmos room…")
-                        SessionStatus.DISCONNECTED -> {
-                            Hint("Disconnected. Center still lists this phone as approved.")
-                            Spacer(Modifier.height(16.dp))
-                            Button(actions.connect, enabled = state.canConnect, shape = RoundedCornerShape(16.dp)) { Text("Connect", fontWeight = FontWeight.SemiBold) }
+                body is SheetBody.Now -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) { AskedLine(body.text) }
+                body is SheetBody.Note -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Hint(body.text)
+                    if (status == SessionStatus.DISCONNECTED) {
+                        Spacer(Modifier.height(16.dp))
+                        Button(actions.connect, enabled = state.canConnect, shape = RoundedCornerShape(16.dp)) {
+                            Text(stringResource(R.string.connect), fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    Spacer(Modifier.height(10.dp))
-                    Text("Public text only · no microphone · no private memories", color = CosmosPalette.secondary.copy(alpha = .7f), fontSize = 12.sp, textAlign = TextAlign.Center)
+                }
+                // A whole prompt is sent; one that trails off becomes the start of the field.
+                else -> EmptyScreen(state.canSend) { prompt ->
+                    if (isComplete(prompt) && state.canSend) {
+                        ask = Ask(prompt, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
+                        actions.send(prompt, target)
+                    } else draft = prompt.trimEnd().removeSuffix("…")
                 }
             }
         }
         Notice(state, actions)
-        AskBar(draft, { draft = it }, enabled = state.canSend, onSend = { actions.send(draft); draft = "" }, modifier = Modifier.padding(vertical = 10.dp))
+        if (state.phase == Phase.CONNECTED) AskBar(
+            draft = draft, onDraft = { draft = it }, canSend = state.canSend,
+            onSend = {
+                val text = draft.trim()
+                ask = Ask(text, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
+                draft = ""
+                actions.send(text, target)
+            },
+            target = target, onTarget = { target = it }, choosing = choosing, onChoosing = { choosing = it },
+            modifier = Modifier.padding(vertical = 10.dp),
+        )
+    }
+}
+
+/** "Connected", once, in the middle of the screen, fading in and then away on its own. */
+@Composable
+private fun Welcome() {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val fade by animateFloatAsState(if (shown) 1f else 0f, calmly(250), label = "welcome")
+    Column(
+        Modifier.fillMaxSize().alpha(fade).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(stringResource(R.string.connected_confirmation), color = CosmosPalette.primary, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Hint(stringResource(R.string.connected_body))
+    }
+}
+
+/** The quiet screen: the kit nebula under three prompts that work today. */
+@Composable
+private fun EmptyScreen(enabled: Boolean, onPrompt: (String) -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+        CosmosNebula(Modifier.align(Alignment.BottomCenter), dim = .5f)
+        Column(
+            Modifier.fillMaxWidth().align(Alignment.Center).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            for (prompt in suggestions(false)) {
+                val label = stringResource(R.string.suggestion, prompt)
+                Text(
+                    prompt, color = if (enabled) CosmosPalette.primary else CosmosPalette.secondary, fontSize = 16.sp,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .clickable(role = Role.Button, enabled = enabled) { onPrompt(prompt) }
+                        .background(CosmosPalette.card.copy(alpha = .9f), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 18.dp, vertical = 15.dp)
+                        .semantics { contentDescription = label },
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(stringResource(R.string.privacy_footer), color = CosmosPalette.secondary.copy(alpha = .7f), fontSize = 12.sp,
+                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/** The request the owner just sent, held on screen until its reply lands. */
+@Composable
+private fun AskedLine(text: String) {
+    Row(
+        Modifier.fillMaxWidth().background(CosmosPalette.card, RoundedCornerShape(20.dp))
+            .padding(horizontal = 18.dp, vertical = 16.dp)
+            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CosmosWaveform(AssistantState.THINKING, Modifier.size(width = 34.dp, height = 24.dp).padding(top = 2.dp))
+        Text(text, color = CosmosPalette.primary, fontSize = 17.sp, lineHeight = 24.sp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -244,8 +371,10 @@ private fun SpeakingLine(state: SurfaceState) {
     Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         CosmosWaveform(if (state.speaking) AssistantState.SPEAKING else AssistantState.IDLE, Modifier.size(width = 48.dp, height = 32.dp))
         Spacer(Modifier.width(10.dp))
-        Text(if (state.speaking) "Speaking" else "Spoken reply", color = CosmosPalette.secondary, fontSize = 13.sp,
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        Text(
+            if (state.speaking) stringResource(R.string.speaking) else stringResource(R.string.spoken_reply),
+            color = CosmosPalette.secondary, fontSize = 13.sp, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
     }
 }
 
@@ -255,31 +384,97 @@ fun Notice(state: SurfaceState, actions: SurfaceActions, modifier: Modifier = Mo
     val text = state.notice()
     if (text == null && !state.hasUnknownOutcome) return
     val failed = state.alert || state.phase == Phase.BLOCKED
-    Column(modifier.fillMaxWidth().padding(top = 12.dp).background(CosmosPalette.surface, RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        modifier.fillMaxWidth().padding(top = 12.dp).background(CosmosPalette.card, RoundedCornerShape(16.dp))
+            .border(1.dp, CosmosPalette.cardBorder, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         if (text != null) Text(text, color = if (failed) CosmosPalette.error else CosmosPalette.secondary, fontSize = 13.sp, lineHeight = 18.sp,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         if (state.hasUnknownOutcome) Text(UNKNOWN_OUTCOME_NOTICE, color = CosmosPalette.secondary, fontSize = 13.sp, lineHeight = 18.sp)
         if (state.canRetry || state.offersCancel()) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (state.canRetry) TextButton(actions.retry) { Text("Retry") }
-            if (state.offersCancel()) TextButton(actions.cancel) { Text("Cancel request") }
+            if (state.canRetry) TextButton(actions.retry) { Text(stringResource(R.string.retry)) }
+            if (state.offersCancel()) TextButton(actions.cancel) { Text(stringResource(R.string.cancel_request)) }
         }
     }
 }
 
-/** The ask field with its send button; Send on the keyboard submits too. */
+/**
+ * The ask field with its send button; Send on the keyboard submits too. With
+ * [onTarget] the destination sits beside the field as one pill, and opening it
+ * replaces that pill with the row of device names rather than crowding it.
+ */
 @Composable
-fun AskBar(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onSend: () -> Unit, modifier: Modifier = Modifier) {
-    val canSend = enabled && draft.isNotBlank()
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            draft, { onDraft(it.take(4000)) }, Modifier.weight(1f), enabled = enabled, placeholder = { Text("Ask Cosmos") },
-            maxLines = 4, shape = RoundedCornerShape(24.dp), colors = fieldColors(),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-        )
-        FilledIconButton(onSend, Modifier.size(48.dp), enabled = canSend) {
-            Icon(painterResource(R.drawable.ic_send), contentDescription = stringResource(R.string.send_question))
+fun AskBar(
+    draft: String, onDraft: (String) -> Unit, canSend: Boolean, onSend: () -> Unit,
+    target: String, onTarget: (String) -> Unit, choosing: Boolean, onChoosing: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // The field never goes dead: the next question can be typed while one is in flight.
+    val ready = canSend && draft.isNotBlank()
+    Column(modifier.fillMaxWidth().animateContentSize(calmly(200)), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Open, the row takes the pill's place rather than sitting on top of its own label.
+        if (choosing) DestinationRow(Destination.forTarget(target)) { onTarget(it.target); onChoosing(false) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!choosing) DestinationButton(Destination.forTarget(target)) { onChoosing(true) }
+            OutlinedTextField(
+                // The field grows to four lines, but a newline is a send, never a blank line in the request.
+                draft, { typed -> onDraft(typed.replace("\n", " ").take(4000)) },
+                Modifier.weight(1f).onPreviewKeyEvent { event ->
+                    val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
+                    if (enter && event.type == KeyEventType.KeyDown && ready) { onSend(); true } else enter
+                },
+                placeholder = { Text(stringResource(R.string.ask_placeholder)) },
+                maxLines = 4, shape = RoundedCornerShape(24.dp), colors = fieldColors(),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { if (ready) onSend() }),
+            )
+            FilledIconButton(onSend, Modifier.size(48.dp), enabled = ready) {
+                Icon(
+                    painterResource(R.drawable.ic_send),
+                    contentDescription = stringResource(if (canSend) R.string.send_question else R.string.sending_question),
+                )
+            }
+        }
+    }
+}
+
+/** The current destination as one pill; tapping it opens the row of plain device names. */
+@Composable
+private fun DestinationButton(destination: Destination, onClick: () -> Unit) {
+    val label = stringResource(R.string.continue_on_current, destination.label)
+    val open = stringResource(R.string.continue_on_choose)
+    Text(
+        "${destination.label} ▾", color = CosmosPalette.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier.heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClickLabel = open, onClick = onClick)
+            .background(CosmosPalette.card, CircleShape).padding(horizontal = 16.dp, vertical = 14.dp)
+            .semantics { contentDescription = label },
+    )
+}
+
+/** Plain labels only: the picker says where to continue, not what is eligible; Cosmos decides that. */
+@Composable
+private fun DestinationRow(chosen: Destination, onSelect: (Destination) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(stringResource(R.string.continue_on), color = CosmosPalette.secondary, fontSize = 12.sp)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            for (destination in Destination.entries) {
+                val current = destination == chosen
+                Text(
+                    destination.label, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    color = if (current) CosmosPalette.background else CosmosPalette.primary,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                        .semantics { selected = current }
+                        .clickable(role = Role.RadioButton) { onSelect(destination) }
+                        .background(if (current) CosmosPalette.glow else CosmosPalette.card, CircleShape)
+                        .then(if (current) Modifier else Modifier.border(1.dp, CosmosPalette.cardBorder, CircleShape))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+            }
         }
     }
 }
@@ -287,50 +482,36 @@ fun AskBar(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onSend: (
 @Composable
 private fun OverflowMenu(state: SurfaceState, actions: SurfaceActions) {
     var open by remember { mutableStateOf(false) }
-    var descriptorShown by remember { mutableStateOf(false) }
     Box {
-        IconButton({ open = true }) {
+        IconButton({ open = true }, Modifier.size(48.dp)) {
             Icon(painterResource(R.drawable.ic_more_vert), contentDescription = stringResource(R.string.more_actions), tint = CosmosPalette.primary)
         }
         DropdownMenu(open, { open = false }) {
-            if (state.canDisconnect) DropdownMenuItem({ Text("Disconnect") }, { open = false; actions.disconnect() })
-            else DropdownMenuItem({ Text("Connect") }, { open = false; actions.connect() }, enabled = state.canConnect)
-            DropdownMenuItem({ Text("Choose Cosmos as default assistant") }, { open = false; actions.chooseAssistant() })
-            DropdownMenuItem({ Text("Show descriptor") }, { open = false; descriptorShown = true })
+            if (state.canDisconnect) DropdownMenuItem({ Text(stringResource(R.string.disconnect)) }, { open = false; actions.disconnect() })
+            else DropdownMenuItem({ Text(stringResource(R.string.connect)) }, { open = false; actions.connect() }, enabled = state.canConnect)
+            DropdownMenuItem({ Text(stringResource(R.string.choose_assistant)) }, { open = false; actions.chooseAssistant() })
         }
-    }
-    val descriptor = state.descriptor
-    if (descriptorShown && descriptor != null) {
-        val json = descriptor.json()
-        AlertDialog(
-            onDismissRequest = { descriptorShown = false },
-            containerColor = CosmosPalette.surface, titleContentColor = CosmosPalette.primary, textContentColor = CosmosPalette.secondary,
-            title = { Text("Public descriptor") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FingerprintLines(descriptor, fontSize = 14.sp)
-                    Text(json, fontSize = 12.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
-                    Text("Public enrollment material only; no credential is in it.", fontSize = 12.sp)
-                }
-            },
-            confirmButton = {
-                Row {
-                    TextButton({ actions.copy(json) }) { Text("Copy") }
-                    TextButton({ actions.share(json) }) { Text("Share…") }
-                    TextButton({ descriptorShown = false }) { Text("Close") }
-                }
-            },
-        )
     }
 }
 
-/** The fingerprint in 4-character groups, four to a line, in the kit's response colour. */
+/** The single Details disclosure: everything technical lives behind it and nowhere else. */
 @Composable
-fun FingerprintLines(descriptor: Descriptor, fontSize: TextUnit = 17.sp, modifier: Modifier = Modifier) {
+private fun Disclosure(open: Boolean, onOpen: (Boolean) -> Unit, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().animateContentSize(calmly(200)), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton({ onOpen(!open) }) {
+            Text(stringResource(if (open) R.string.hide_details else R.string.details))
+        }
+        if (open) content()
+    }
+}
+
+/** The pairing code in 4-character groups, four to a line, the way it is compared by eye. */
+@Composable
+fun FingerprintLines(descriptor: Descriptor, fontSize: TextUnit = 18.sp, modifier: Modifier = Modifier) {
     val hex = remember(descriptor.publicKey) { Fingerprint.of(descriptor.publicKey) }
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.widthIn(max = 420.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         if (hex == null) {
-            BasicText("This installation key could not be read.", style = TextStyle(color = CosmosPalette.error, fontSize = fontSize, fontFamily = FontFamily.SansSerif))
+            BasicText(stringResource(R.string.pairing_code_unreadable), style = TextStyle(color = CosmosPalette.error, fontSize = fontSize, fontFamily = FontFamily.SansSerif))
         } else {
             for (line in Fingerprint.lines(hex)) {
                 BasicText(line, style = TextStyle(color = CosmosPalette.text, fontSize = fontSize, lineHeight = fontSize * 1.5f,
@@ -352,13 +533,19 @@ private fun PrimaryButton(label: String, enabled: Boolean, busy: Boolean = false
 }
 
 @Composable
+private fun Step(number: Int) = Text(
+    stringResource(R.string.step_of, number), color = CosmosPalette.secondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+)
+
+@Composable
 private fun Title(text: String) = Text(text, color = CosmosPalette.primary, fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
 private fun Body(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = 16.sp, lineHeight = 22.sp)
 
 @Composable
-private fun Hint(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = 15.sp, lineHeight = 21.sp, textAlign = TextAlign.Center)
+private fun Hint(text: String) = Text(text, color = CosmosPalette.secondary, fontSize = 15.sp, lineHeight = 21.sp, textAlign = TextAlign.Center,
+    modifier = Modifier.fillMaxWidth())
 
 @Composable
 private fun fieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(

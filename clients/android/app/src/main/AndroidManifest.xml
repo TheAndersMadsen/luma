@@ -11,6 +11,10 @@
     <uses-feature android:name="android.software.leanback" android:required="false"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+    <!-- Only to name the app whose screen text the owner attaches; nothing is launched. -->
+    <queries>
+        <intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent>
+    </queries>
     <application android:name=".CosmosApplication" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
         android:banner="@drawable/cosmos_tv_banner"
@@ -21,8 +25,23 @@
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LEANBACK_LAUNCHER"/></intent-filter>
         </activity>
+        <!-- The assistant role: the session receives the visible text of the current screen
+             on request and shows the same panel as the activity below. No hotword, no audio;
+             the recognition service exists only because the role requires one and refuses. -->
+        <service android:name=".assist.CosmosInteractionService" android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" android:label="@string/app_name">
+            <intent-filter><action android:name="android.service.voice.VoiceInteractionService"/></intent-filter>
+            <meta-data android:name="android.voice_interaction" android:resource="@xml/voice_interaction"/>
+        </service>
+        <service android:name=".assist.CosmosSessionService" android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"/>
+        <service android:name=".assist.CosmosRecognitionService" android:exported="true" android:label="@string/app_name">
+            <intent-filter><action android:name="android.speech.RecognitionService"/></intent-filter>
+        </service>
+        <!-- The fallback panel for devices that grant the assistant role to an activity: it never sees the screen. -->
         <activity android:name=".AssistActivity" android:exported="true"
-            android:theme="@style/Theme.Cosmos.Overlay" android:excludeFromRecents="true" android:launchMode="singleInstance">
+            android:theme="@style/Theme.Cosmos.Overlay" android:excludeFromRecents="true" android:launchMode="singleInstance"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.ASSIST"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
         </activity>
         <!-- Runs from Connect until Disconnect so the joined room survives the screen turning off.

@@ -1,6 +1,5 @@
 package dk.andersmadsen.cosmos.android.ui
 
-import android.animation.ValueAnimator
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -37,6 +36,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -92,13 +93,14 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.tv.material3.darkColorScheme
+import dk.andersmadsen.cosmos.android.Ask
+import dk.andersmadsen.cosmos.android.Choice
 import dk.andersmadsen.cosmos.android.DisplayCard
 import dk.andersmadsen.cosmos.android.Phase
 import dk.andersmadsen.cosmos.android.R
 import dk.andersmadsen.cosmos.android.Screen
 import dk.andersmadsen.cosmos.android.SessionStatus
 import dk.andersmadsen.cosmos.android.SurfaceState
-import dk.andersmadsen.cosmos.android.TvRequest
 import dk.andersmadsen.cosmos.android.TvStage
 import dk.andersmadsen.cosmos.android.UNKNOWN_OUTCOME_NOTICE
 import dk.andersmadsen.cosmos.android.notice
@@ -113,6 +115,11 @@ import kotlin.random.Random
 /** TV Material shaped by the TV kit's tokens; never mixed with the phone's mobile Material tree. */
 @Composable
 fun CosmosTvTheme(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalReducedMotion provides rememberReducedMotion()) { CosmosTvMaterial(content) }
+}
+
+@Composable
+private fun CosmosTvMaterial(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = darkColorScheme(
         primary = CosmosPalette.glow, onPrimary = CosmosPalette.tvBackground,
         surface = CosmosPalette.surface, onSurface = CosmosPalette.primary,
@@ -168,27 +175,27 @@ fun TvScreen(state: SurfaceState, approvalRequested: Boolean, actions: SurfaceAc
 /** Owns what only this TV knows: the typed request, the open ask field, the paged view and a reply sent away with Back. */
 @Composable
 private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
-    var request by remember { mutableStateOf<TvRequest?>(null) }
+    var request by remember { mutableStateOf<Ask?>(null) }
     var dismissed by remember { mutableStateOf<UUID?>(null) }
     var asking by rememberSaveable { mutableStateOf(false) }
     var reading by rememberSaveable { mutableStateOf(false) }
     val stage = state.tvStage(request, dismissed)
-    // A send is in flight once the controller reports busy; settling without a new admission drops it.
-    LaunchedEffect(state.busy) { if (state.busy) request = request?.copy(sending = true) }
     LaunchedEffect(stage) {
-        if (stage is TvStage.Idle || stage is TvStage.Answer) request = null
+        if (stage is TvStage.Idle || stage is TvStage.Answer || stage is TvStage.Choices) request = null
         if (stage !is TvStage.Answer) reading = false
     }
     val status = state.sessionStatus()
     val askLabel = stringResource(R.string.tv_ask)
+    val retryLabel = stringResource(R.string.retry)
+    val connectLabel = stringResource(R.string.connect)
     val action = when {
-        state.canRetry -> TvStageAction("Retry", actions.retry)
-        status != SessionStatus.CONNECTED && state.canConnect -> TvStageAction("Connect", actions.connect)
+        state.canRetry -> TvStageAction(retryLabel, actions.retry)
+        status != SessionStatus.CONNECTED && state.canConnect -> TvStageAction(connectLabel, actions.connect)
         else -> TvStageAction(askLabel) { if (asking || state.canSend) asking = !asking }
     }
     val notice = when (status) {
-        SessionStatus.RECONNECTING -> "Reconnecting…"
-        SessionStatus.DISCONNECTED -> "Disconnected · OK to connect"
+        SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
+        SessionStatus.DISCONNECTED -> stringResource(R.string.tv_connect_hint)
         SessionStatus.CONNECTED -> state.notice()
     }
     // Back closes the paged view, then the ask field, then sends the current reply or transcript away.
@@ -203,14 +210,21 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
         return
     }
     CosmosTvStage(
-        stage = stage, asking = asking, action = action, notice = notice, reducedMotion = !ValueAnimator.areAnimatorsEnabled(),
+        stage = stage, asking = asking, action = action, notice = notice, reducedMotion = LocalReducedMotion.current,
         onMore = { reading = true }, onCommitted = actions.committed,
         askField = { fontSize ->
             TvAskField(fontSize, enabled = state.canSend) { text ->
-                request = TvRequest(text, turnBefore = state.admission?.turnId)
+                request = Ask(text, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
                 asking = false
-                actions.send(text)
+                actions.send(text, "")
             }
+        },
+        content = { focus, out ->
+            // Choosing sends the title with no target: Cosmos decides where that reply goes.
+            if (stage is TvStage.Choices) TvChoices(stage, focus, out, enabled = state.canSend, onCommitted = actions.committed) { title ->
+                request = Ask(title, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
+                actions.send(title, "")
+            } else TvReadyContent()
         },
     )
 }
@@ -231,13 +245,16 @@ fun CosmosTvStage(
     onMore: () -> Unit,
     onCommitted: (DisplayCard) -> Unit,
     askField: @Composable (fontSize: TextUnit) -> Unit,
-    content: @Composable () -> Unit = { TvReadyContent() },
+    content: @Composable (contentFocus: FocusRequester, actionFocus: FocusRequester) -> Unit = { _, _ -> TvReadyContent() },
 ) {
     val inset = asking || stage is TvStage.Working || stage is TvStage.Transcript
     // Reduced motion cuts between the two framings instead of animating them.
     val progress by animateFloatAsState(if (inset) 1f else 0f, if (reducedMotion) snap() else tween(300), label = "tv-inset")
     val actionFocus = remember { FocusRequester() }
-    LaunchedEffect(asking) { if (!asking) runCatching { actionFocus.requestFocus() } }
+    val contentFocus = remember { FocusRequester() }
+    // The D-pad lands on the choices while they are up, otherwise on the corner crescent.
+    val choosing = stage is TvStage.Choices
+    LaunchedEffect(asking, choosing) { if (!asking) runCatching { if (choosing) contentFocus.requestFocus() else actionFocus.requestFocus() } }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
         // Sizes follow the whole screen; only the content shrinks further when the keyboard takes room.
         val fullWidth = maxWidth
@@ -262,7 +279,7 @@ fun CosmosTvStage(
                 clip = true
                 // The shape applies before the scale, so the drawn radius is divided out here.
                 shape = RoundedCornerShape(progress * radiusPx / scale)
-            }) { content() }
+            }) { content(contentFocus, actionFocus) }
             TvBand(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bandHeight).graphicsLayer { alpha = progress }, fullWidth) {
                 Box(Modifier.padding(horizontal = safeX), contentAlignment = Alignment.Center) {
                     when {
@@ -282,7 +299,7 @@ fun CosmosTvStage(
             if (stage is TvStage.Answer && !asking) {
                 TvCaption(stage, (fullHeight.value * .04f).sp, onMore, onCommitted,
                     Modifier.align(Alignment.BottomCenter).padding(start = captionInset, end = captionInset, bottom = safeY))
-            } else if (notice != null && !inset) {
+            } else if (notice != null && !inset && stage !is TvStage.Choices) {
                 BasicText(
                     notice, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     style = TextStyle(color = CosmosPalette.secondary, fontSize = (fullHeight.value * .026f).sp, fontFamily = FontFamily.SansSerif,
@@ -291,9 +308,87 @@ fun CosmosTvStage(
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
-            // The corner crescent keeps one place in every framing: the band's right end, inside the safe inset.
-            TvCrescent(action, crescent, actionFocus, Modifier.align(Alignment.BottomEnd).padding(end = safeX, bottom = (bandHeight - crescent) / 2))
+            // The corner crescent keeps one place in every framing: the band's right end, inside the safe
+            // inset. While a row of choices is up, Up from it returns to that row, so focus is never trapped.
+            TvCrescent(
+                action, crescent, actionFocus, if (choosing) contentFocus else null,
+                Modifier.align(Alignment.BottomEnd).padding(end = safeX, bottom = (bandHeight - crescent) / 2),
+            )
         }
+    }
+}
+
+/**
+ * A reply that is a set of options, in the stage's own language: the cards fill the
+ * content, and the question and the focused option speak as the mint subtitle the
+ * other answers use. OK sends the focused title back as the next request.
+ */
+@Composable
+private fun TvChoices(
+    stage: TvStage.Choices, firstFocus: FocusRequester, exitFocus: FocusRequester, enabled: Boolean,
+    onCommitted: (DisplayCard) -> Unit, onChoose: (String) -> Unit,
+) {
+    var focused by remember(stage.id) { mutableIntStateOf(0) }
+    BoxWithConstraints(Modifier.fillMaxSize().background(GRAPHITE)) {
+        val fullHeight = maxHeight
+        val safeX = maxWidth * .05f
+        val safeY = fullHeight * .05f
+        val gap = maxWidth * .014f
+        val count = stage.items.size
+        val cardWidth = minOf((maxWidth - safeX * 2 - gap * (count - 1)) / count, maxWidth * .16f)
+        val cardHeight = cardWidth * 1.5f
+        val captionSize = (fullHeight.value * .04f).sp
+        val bodySize = (fullHeight.value * .028f).sp
+        Column(Modifier.fillMaxSize().padding(horizontal = safeX, vertical = safeY), horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(gap), verticalAlignment = Alignment.CenterVertically) {
+                stage.items.forEachIndexed { index, item ->
+                    TvChoiceCard(item, index == focused, cardWidth, cardHeight, bodySize, enabled,
+                        Modifier.then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
+                            .focusProperties { down = exitFocus }
+                            .onFocusChanged { if (it.isFocused) focused = index }) { onChoose(item.title) }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            // The same subtitle an answer gets: the question, then what the focused option is.
+            BasicText(
+                stage.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                style = TextStyle(color = CAPTION, fontSize = captionSize, lineHeight = captionSize * 1.25f, fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center, shadow = CAPTION_SHADOW),
+                modifier = Modifier.fillMaxWidth(.8f),
+            )
+            BasicText(
+                stage.items.getOrNull(focused)?.let { "${it.id}. ${it.title}${if (it.detail.isBlank()) "" else " · ${it.detail}"}" }.orEmpty(),
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                style = TextStyle(color = CosmosPalette.primary.copy(alpha = .85f), fontSize = bodySize, lineHeight = bodySize * 1.3f,
+                    fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center, shadow = CAPTION_SHADOW),
+                modifier = Modifier.fillMaxWidth(.8f).padding(top = 8.dp).heightIn(min = bodySize.value.dp * 1.3f * 2)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+    }
+    LaunchedEffect(stage.id) { onCommitted(stage.card) }
+}
+
+/** One option: number, crescent and title; focus lifts it 8% inside a glow ring and brightens the title. */
+@Composable
+private fun TvChoiceCard(item: Choice, focused: Boolean, width: Dp, height: Dp, fontSize: TextUnit, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val scale by animateFloatAsState(if (focused) 1.08f else 1f, tween(150), label = "tv-choice")
+    Box(
+        modifier.size(width, height).graphicsLayer { scaleX = scale; scaleY = scale }
+            .clickable(remember { MutableInteractionSource() }, indication = null, role = Role.Button, enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = "${item.id}. ${item.title}" }
+            .background(if (focused) Color(0xFF16262C) else CosmosPalette.surface, RoundedCornerShape(width * .08f))
+            .border(if (focused) 3.dp else 1.dp, if (focused) CosmosPalette.glow else CosmosPalette.border, RoundedCornerShape(width * .08f)),
+    ) {
+        BasicText(item.id, Modifier.align(Alignment.TopStart).padding(width * .08f),
+            style = TextStyle(color = if (focused) CosmosPalette.glow else CosmosPalette.secondary, fontSize = fontSize, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.SansSerif))
+        Image(painterResource(R.drawable.ic_cosmos), contentDescription = null, modifier = Modifier.align(Alignment.Center).size(width * .42f).alpha(if (focused) 1f else .7f))
+        BasicText(
+            item.title, Modifier.align(Alignment.BottomCenter).padding(horizontal = width * .08f, vertical = width * .1f), maxLines = 2, overflow = TextOverflow.Ellipsis,
+            style = TextStyle(color = if (focused) Color.White else CosmosPalette.primary.copy(alpha = .85f), fontSize = fontSize, lineHeight = fontSize * 1.2f,
+                fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center),
+        )
     }
 }
 
@@ -363,10 +458,12 @@ private fun TvQuietAction(label: String, onClick: () -> Unit, fontSize: TextUnit
 
 /** The corner crescent from the kit's mark: faint until focused, then bright inside a thin glow ring. */
 @Composable
-private fun TvCrescent(action: TvStageAction, size: Dp, focus: FocusRequester, modifier: Modifier) {
+private fun TvCrescent(action: TvStageAction, size: Dp, focus: FocusRequester, up: FocusRequester?, modifier: Modifier) {
     var focused by remember { mutableStateOf(false) }
     Box(
-        modifier.size(size + 12.dp).focusRequester(focus).onFocusChanged { focused = it.isFocused }
+        modifier.size(size + 12.dp).focusRequester(focus)
+            .focusProperties { if (up != null) this.up = up }
+            .onFocusChanged { focused = it.isFocused }
             .clickable(remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = action.onClick)
             .semantics { contentDescription = action.label }
             .border(2.dp, if (focused) CosmosPalette.glow.copy(alpha = .75f) else Color.Transparent, CircleShape),
@@ -419,7 +516,7 @@ private fun TvAnswerPages(text: String) {
         Column(Modifier.fillMaxSize().padding(horizontal = maxWidth * .05f, vertical = maxHeight * .05f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             TvPagedText(text, page, onPages = { pages = it }, Modifier.weight(1f).fillMaxWidth())
             Text(
-                if (pages > 1) "Page ${page + 1} of $pages · left and right to page · Back to return" else "Back to return",
+                if (pages > 1) stringResource(R.string.tv_page_of, page + 1, pages) else stringResource(R.string.tv_back_to_return),
                 fontSize = 15.sp, color = CosmosPalette.secondary, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
@@ -449,17 +546,16 @@ private fun TvPagedText(text: String, page: Int, onPages: (Int) -> Unit, modifie
 private fun TvSetupScreen(state: SurfaceState, actions: SurfaceActions) {
     val preparing = state.phase == Phase.PREPARING
     TvTextScreen(
-        status = if (preparing) "Setting up…" else "Not set up",
-        action = TvActionSpec(if (preparing) "Setting up…" else "Set up this TV", state.canPrepare) { actions.prepare(state.serverOrigin) },
+        status = stringResource(if (preparing) R.string.setup_busy else R.string.tv_not_set_up),
+        action = TvActionSpec(stringResource(if (preparing) R.string.setup_busy else R.string.tv_setup_action), state.canPrepare) { actions.prepare(state.serverOrigin) },
         notice = listOfNotNull(state.notice(), UNKNOWN_OUTCOME_NOTICE.takeIf { state.hasUnknownOutcome }).joinToString(" · ").ifEmpty { null },
         failed = state.alert || state.phase == Phase.BLOCKED,
     ) {
-        Text("Set up this TV", fontSize = 24.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, color = CosmosPalette.primary)
+        Text(stringResource(R.string.tv_setup_title), fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, color = CosmosPalette.primary)
         Spacer(Modifier.height(14.dp))
-        Text("Cosmos shows shared answers here after you approve this TV from your phone. Nothing private is ever shown on the TV.",
-            fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
+        Text(stringResource(R.string.tv_setup_body), fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
         Spacer(Modifier.height(14.dp))
-        Text("Server · ${serverLabel(state.serverOrigin)}", fontSize = 18.sp, color = CosmosPalette.text)
+        Text(serverLabel(state.serverOrigin), fontSize = 18.sp, color = CosmosPalette.secondary)
     }
 }
 
@@ -469,17 +565,20 @@ private fun TvApproveScreen(state: SurfaceState, approvalRequested: Boolean, act
     val url = remember(descriptor, state.serverOrigin) { descriptor.approvalUrl(state.serverOrigin) }
     val failed = state.alert || state.phase == Phase.BLOCKED
     TvTextScreen(
-        status = "Waiting for approval",
-        action = TvActionSpec(if (approvalRequested || state.alert) "Try again" else "Connect", state.canConnect, actions.connect),
-        notice = when { state.busy -> "Checking with Center…"; failed -> state.message; else -> "Waiting for approval in Center…" },
+        status = stringResource(R.string.tv_waiting),
+        action = TvActionSpec(stringResource(if (approvalRequested || state.alert) R.string.try_again else R.string.connect), state.canConnect, actions.connect),
+        notice = when {
+            state.busy -> stringResource(R.string.checking_with_center)
+            failed -> state.message
+            else -> stringResource(R.string.waiting_for_approval)
+        },
         failed = failed,
     ) {
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
             QrCodeImage(url, stringResource(R.string.approval_qr), Modifier.fillMaxHeight())
             Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Approve this TV", fontSize = 24.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, color = CosmosPalette.primary)
-                Text("Scan the code with your phone to open the approval in Center. Center shows this fingerprint; approve only if it matches.",
-                    fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
+                Text(stringResource(R.string.tv_approve_title), fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, color = CosmosPalette.primary)
+                Text(stringResource(R.string.tv_approve_body), fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
                 FingerprintLines(descriptor, fontSize = 20.sp, modifier = Modifier.align(Alignment.Start))
             }
         }
@@ -501,7 +600,7 @@ private fun TvTextScreen(status: String, action: TvActionSpec, notice: String?, 
             Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.Center, content = content)
             TvAction(action.label, action.onClick, Modifier.focusRequester(focus), action.enabled)
             Text(
-                notice ?: "Use the directional pad to move · OK to select · Back to leave",
+                notice ?: stringResource(R.string.tv_hint),
                 fontSize = 15.sp, lineHeight = 21.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 color = if (notice != null && failed) CosmosPalette.error else CosmosPalette.secondary,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },

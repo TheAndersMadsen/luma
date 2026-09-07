@@ -23,8 +23,12 @@ object NativeSurface {
     const val CLOSED = -3
     const val PANIC = -4
     const val UNAVAILABLE = -5
+    /** Kotlin-only: the loaded library predates an entry point, so the call was refused here and nothing was sent. */
+    const val NOT_IN_THIS_BUILD = -100
     const val MAX_TEXT_BYTES = 4000
     const val MAX_SPEECH_BYTES = 1_048_576
+    const val MAX_APP_BYTES = 64
+    const val MAX_CONTEXT_BYTES = 8000
 
     /** create() returns an opaque nonzero handle or a status in -16..-1; handles may be negative. */
     fun isStatus(value: Long): Boolean = value in -16L..0L
@@ -37,6 +41,16 @@ object NativeSurface {
     @JvmStatic external fun create(config: ByteArray, callbacks: NativeCallbacks): Long
     @JvmStatic external fun connect(handle: Long): Int
     @JvmStatic external fun sendText(handle: Long, text: ByteArray): Int
+    /** [target] is one of browser, macos, linux, android, android_tv, or empty to let Cosmos decide. */
+    @JvmStatic external fun sendTextTo(handle: Long, text: ByteArray, target: ByteArray): Int
+    /** Explicitly attached screen text: [app] at most 64 bytes, [context] at most 8000 bytes of UTF-8. */
+    @JvmStatic external fun sendTextWithContext(handle: Long, text: ByteArray, app: ByteArray, context: ByteArray, target: ByteArray): Int
+
+    /**
+     * Runs a call to an entry point the loaded library may not have yet. A missing
+     * symbol becomes [NOT_IN_THIS_BUILD] instead of an unhandled link error.
+     */
+    inline fun optional(call: () -> Int): Int = try { call() } catch (_: UnsatisfiedLinkError) { NOT_IN_THIS_BUILD }
     @JvmStatic external fun retryPending(handle: Long): Int
     @JvmStatic external fun cancel(handle: Long): Int
     @JvmStatic external fun setVisible(handle: Long, visible: Boolean): Int

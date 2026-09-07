@@ -51,6 +51,56 @@ class NativeEventTest {
         assertNull(NativeEvent.decode(disconnected.toByteArray()).display)
     }
 
+    private val choices = """{"actionId":"33333333-3333-4333-8333-333333333333","turnId":"44444444-4444-4444-8444-444444444444",
+        "generation":2,"contentDigest":"${"a".repeat(64)}","expiresAtMs":1000,
+        "content":{"kind":"choices","title":"Tonight's films","items":[{"id":"1","title":"Arrival","detail":"A linguist meets visitors."},{"id":"2","title":"Heat","detail":"A crew and a detective."}]},
+        "credits":[]}"""
+
+    private val status = """{"turnId":"44444444-4444-4444-8444-444444444444","generation":2,"state":"shown","surfacePlatform":"macos","privacy":"shared_room"}"""
+
+    private fun withStatus(status: String?): String = base.format("null").replace("\"speech\":null", "\"speech\":null,\"status\":${status ?: "null"}")
+        .replace("\"operation\":\"display\"", "\"operation\":\"status\"")
+
+    @Test
+    fun decodesTurnStatusWhenPresentToleratesItsAbsenceAndRejectsUnknownShapes() {
+        val shown = NativeEvent.decode(withStatus(status).toByteArray()).status!!
+        assertEquals("shown", shown.state)
+        assertEquals("macos", shown.surfacePlatform)
+        assertEquals("shared_room", shown.privacy)
+        assertEquals(2L, shown.generation)
+        val unnamed = NativeEvent.decode(withStatus(status.replace("\"macos\"", "null").replace("shown", "waiting")).toByteArray()).status!!
+        assertEquals("waiting", unnamed.state)
+        assertNull(unnamed.surfacePlatform)
+        // Absent, null and disconnected all read as no status; the operation name alone is accepted.
+        assertNull(NativeEvent.decode(base.format("null").toByteArray()).status)
+        assertNull(NativeEvent.decode(withStatus(null).toByteArray()).status)
+        assertNull(NativeEvent.decode(withStatus(status).replace("\"connected\":true", "\"connected\":false").toByteArray()).status)
+        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("shown", "done")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("macos", "watch")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("shared_room", "sensitive")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("\"generation\":2", "\"generation\":0")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace(",\"privacy\":\"shared_room\"", "")).toByteArray()) }
+    }
+
+    @Test
+    fun decodesChoiceCardsWithTwoToEightDistinctOptionsAndNoCredits() {
+        val card = NativeEvent.decode(base.format(choices).toByteArray()).display!!
+        val content = card.content as DisplayContent.Choices
+        assertEquals("Tonight's films", content.title)
+        assertEquals(listOf(Choice("1", "Arrival", "A linguist meets visitors."), Choice("2", "Heat", "A crew and a detective.")), content.items)
+        assertNull(NativeEvent.decode(base.format("null").toByteArray()).display)
+        val one = choices.replace(""",{"id":"2","title":"Heat","detail":"A crew and a detective."}""", "")
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(one).toByteArray()) }
+        val nine = choices.replace("""{"id":"2","title":"Heat","detail":"A crew and a detective."}""",
+            (2..9).joinToString(",") { """{"id":"$it","title":"Film $it","detail":""}""" })
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(nine).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(choices.replace("\"id\":\"2\"", "\"id\":\"1\"")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(choices.replace("\"title\":\"Heat\"", "\"title\":\" \"")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(choices.replace("\"detail\":\"A crew and a detective.\"", "")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(choices.replace("\"credits\":[]", "\"credits\":[[{\"kind\":\"text\",\"text\":\"x\"}]]")).toByteArray()) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(base.format(choices.replace("\"kind\":\"choices\"", "\"kind\":\"menu\"")).toByteArray()) }
+    }
+
     @Test
     fun approvalLinkCarriesTheDescriptorAsAnUnpaddedFragment() {
         val descriptor = Descriptor("11111111-1111-4111-8111-111111111111", "k", "android", "native-shared-speech-v3")

@@ -1,11 +1,85 @@
 <resources>
+    <!-- Every word a person reads on this client lives here, except the runtime state
+         vocabulary in Screens.kt, which the pure unit tests pin word for word. -->
     <string name="app_name">Cosmos</string>
-    <string name="close_assistant">Close assistant</string>
-    <string name="more_actions">More actions</string>
+
+    <!-- The assistant sheet over another app -->
+    <string name="close_assistant">Close</string>
+    <string name="close_assistant_hint">Closing keeps the request going</string>
+    <string name="ask_placeholder">Ask Cosmos</string>
     <string name="send_question">Send</string>
+    <string name="sending_question">Sending</string>
+    <string name="remove_context">Remove screen text</string>
+    <string name="continue_on">Continue on</string>
+    <string name="continue_on_current">Continue on: %1$s</string>
+    <string name="continue_on_choose">Choose where to continue</string>
+    <string name="suggestion">Ask: %1$s</string>
+    <string name="open_cosmos">Open Cosmos</string>
+    <string name="choose_assistant">Make Cosmos your assistant</string>
+
+    <!-- Shared actions -->
+    <string name="connect">Connect</string>
+    <string name="try_again">Try again</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="retry">Retry</string>
+    <string name="cancel_request">Cancel task</string>
+    <string name="details">Details</string>
+    <string name="hide_details">Hide details</string>
+    <string name="change">Change</string>
+    <string name="copy">Copy</string>
+    <string name="share">Share…</string>
+    <string name="more_actions">More actions</string>
+
+    <!-- First run: two steps, one at a time -->
+    <string name="step_of">Step %1$d of 2</string>
+    <string name="setup_title">Set up this phone</string>
+    <string name="setup_body">Cosmos answers here and speaks replies once this phone is approved.</string>
+    <string name="setup_action">Set up this phone</string>
+    <string name="setup_busy">Setting up…</string>
+    <string name="server_address">Server address</string>
+    <string name="approve_title">Approve this phone</string>
+    <string name="approve_body">Open the link in Center and check that the code below matches.</string>
+    <string name="pairing_code">Pairing code</string>
+    <string name="pairing_code_unreadable">This phone\'s key could not be read. Set it up again.</string>
+    <string name="approve_action">Approve in Center</string>
+    <string name="approve_scan">Or scan this with another signed-in device.</string>
     <string name="approval_qr">Approval link for Center as a QR code</string>
-    <string name="session_channel">Session</string>
+    <string name="waiting_for_approval">Waiting for approval in Center…</string>
+    <string name="checking_with_center">Checking with Center…</string>
+    <string name="connected_confirmation">Connected</string>
+    <string name="connected_body">Ask Cosmos anything below.</string>
+    <string name="privacy_footer">Text only · no microphone · no private memories</string>
+
+    <!-- The spoken reply -->
+    <string name="speaking">Speaking</string>
+    <string name="spoken_reply">Spoken reply</string>
+    <string name="private_reply">Private reply</string>
+    <string name="choose_one">Tap one to ask for it.</string>
+    <string name="no_places">No matching places found.</string>
+    <string name="view_on_maps">View on Google Maps</string>
+    <string name="maps_credit">Google Maps</string>
+
+    <!-- The connection notification -->
+    <string name="session_channel">Connection</string>
+    <string name="session_channel_body">Shows while this phone stays connected to Cosmos.</string>
     <string name="session_disconnect">Disconnect</string>
+    <string name="notification_waiting">A reply is waiting. Open Cosmos to continue.</string>
+    <string name="notification_connected">Cosmos is connected.</string>
+    <string name="notification_reconnecting">Cosmos is reconnecting.</string>
+    <string name="notification_disconnected">Cosmos is disconnected.</string>
+
+    <!-- The TV -->
     <string name="tv_ask">Ask Cosmos</string>
-    <string name="tv_more">More</string>
+    <string name="tv_more">Read the answer</string>
+    <string name="tv_setup_title">Set up this TV</string>
+    <string name="tv_setup_body">Cosmos answers here after you approve this TV. Nothing private is ever shown on a TV.</string>
+    <string name="tv_setup_action">Set up this TV</string>
+    <string name="tv_not_set_up">Not set up</string>
+    <string name="tv_approve_title">Approve this TV</string>
+    <string name="tv_approve_body">Scan the code with your phone to approve this TV in Center. Check that the code below matches.</string>
+    <string name="tv_waiting">Waiting for approval</string>
+    <string name="tv_hint">Directional pad to move · OK to select · Back to leave</string>
+    <string name="tv_connect_hint">Disconnected · OK to connect</string>
+    <string name="tv_page_of">Page %1$d of %2$d · left and right to page · Back to return</string>
+    <string name="tv_back_to_return">Back to return</string>
 </resources>

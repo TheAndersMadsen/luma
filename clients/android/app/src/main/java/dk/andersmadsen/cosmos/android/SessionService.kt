@@ -40,7 +40,7 @@ class SessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         manager.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Shows while this device stays connected to Cosmos."
+            description = getString(R.string.session_channel_body)
             setShowBadge(false)
         })
     }
@@ -71,14 +71,22 @@ class SessionService : Service() {
      * that something is ready (never what), and opening the app receives it.
      */
     private fun notification(status: SessionStatus, waiting: Boolean): Notification {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        // Reuses the running task so the tap lands on the screen already holding the reply.
+        val open = PendingIntent.getActivity(this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val disconnect = PendingIntent.getBroadcast(this, 1,
             Intent(this, DisconnectReceiver::class.java).setAction(ACTION_DISCONNECT), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(0xFF27E6DF.toInt())
-            .setContentTitle(if (waiting) "Cosmos · A reply is waiting" else "Cosmos · ${status.label}")
-            .setContentText(if (waiting) "Open Cosmos to see it." else "Shared answers can reach this device while it stays connected.")
+            .setContentTitle(getString(R.string.app_name))
+            // Never the reply itself, and never who or what it is about: one sentence and a way in.
+            .setContentText(getString(when {
+                waiting -> R.string.notification_waiting
+                status == SessionStatus.CONNECTED -> R.string.notification_connected
+                status == SessionStatus.RECONNECTING -> R.string.notification_reconnecting
+                else -> R.string.notification_disconnected
+            }))
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
