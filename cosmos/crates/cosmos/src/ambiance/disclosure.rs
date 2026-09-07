@@ -105,7 +105,7 @@ impl RuntimeState {
             || records.get(&surface_id).is_some_and(|r| {
                 !r.revoked
                     && matches!(r.binding, Binding::Native { .. })
-                    && r.approved_manifest == crate::surface_registry::native_manifest()
+                    && crate::surface_registry::native_declares(r, "audio.tts")
             })
     }
 

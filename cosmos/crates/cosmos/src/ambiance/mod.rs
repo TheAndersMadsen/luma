@@ -1,6 +1,8 @@
 //! Runtime authority. All transitions execute under the principal ledger lock.
+pub mod action;
 pub mod analysis;
 pub mod changes;
+pub mod continuation;
 pub mod disclosure;
 pub mod echo;
 pub mod ledger;

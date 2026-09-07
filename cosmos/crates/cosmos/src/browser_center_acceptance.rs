@@ -349,7 +349,7 @@ async fn lookup_server(
                     && approval.policy.as_ref().is_some_and(|policy| policy.provider == expected_provider && policy.maximum_class == PrivacyClass::SharedRoom)));
             assert!(matches!(&events[1].data, RuntimeData::LookupStarted { fence, lookup: started }
                 if fence.turn_id == turn.fence.turn_id && fence.generation == turn.fence.generation
-                    && fence.origin_surface == native_id && started == lookup));
+                    && fence.origin_surface == native_id && **started == *lookup));
             assert!(events[0].sequence < events[1].sequence);
             axum::Json(json!({"results":[{"title":LOOKUP_TITLE,"content":LOOKUP_SNIPPET,"url":LOOKUP_SOURCE_URL}]}))
         }
@@ -414,7 +414,7 @@ async fn places_server(
                     && approval.policy.as_ref().is_some_and(|policy| policy.provider == expected_provider && policy.maximum_class == PrivacyClass::SharedRoom)));
             assert!(matches!(&events[5].data, RuntimeData::LookupStarted { fence, lookup: started }
                 if fence.turn_id == turn.fence.turn_id && fence.generation == turn.fence.generation
-                    && fence.origin_surface == native_id && fence.worker == turn.fence.worker && started == lookup));
+                    && fence.origin_surface == native_id && fence.worker == turn.fence.worker && **started == *lookup));
             assert!(events[4].sequence < events[5].sequence);
             assert_places_not_persisted(&audit, &principal).await;
             axum::Json(json!({"status":"OK","results":[{
@@ -486,7 +486,10 @@ async fn committed_record(
 fn assert_native_record(record: &Record, surface_id: Uuid, binding: &Binding, fingerprint: &str) {
     assert_eq!(record.surface_id, surface_id);
     assert_eq!(&record.binding, binding);
-    assert_eq!(record.approved_manifest, native_manifest());
+    let Binding::Native { platform, .. } = binding else {
+        unreachable!("native record")
+    };
+    assert_eq!(record.approved_manifest, native_manifest(platform));
     assert_eq!(
         record
             .view(crate::surface_registry::now_ms())

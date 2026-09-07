@@ -13,7 +13,18 @@ const MAX_RESPONSE: usize = 64 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct AnalysisRequest {
     pub question: String,
+    #[serde(deserialize_with = "render_channel")]
     pub channel: Channel,
+}
+
+/// A larger-model analysis is rendered or spoken. Naming an action channel
+/// here is not a way to reach one.
+fn render_channel<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Channel, D::Error> {
+    let channel = Channel::deserialize(deserializer)?;
+    if !matches!(channel, Channel::VisualCard | Channel::AudioTts) {
+        return Err(serde::de::Error::custom("analysis names a render channel"));
+    }
+    Ok(channel)
 }
 
 /// A query suggestion carries no provider, account, URL or output authority.
@@ -22,6 +33,55 @@ pub struct AnalysisRequest {
 pub struct LookupRequest {
     #[serde(deserialize_with = "lookup_query")]
     pub query: String,
+}
+
+/// What the current text asked Cosmos to do with the place it is looking up.
+/// The model proposes this before any provider result exists, so no untrusted
+/// content can determine an argument; the runtime resolves the place and
+/// chooses the device itself.
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum LookupThen {
+    Route,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaceLookupRequest {
+    #[serde(deserialize_with = "lookup_query")]
+    pub query: String,
+    #[serde(default)]
+    pub then: Option<LookupThen>,
+}
+
+/// A proposed device action names a runtime-minted reference and never an
+/// argument. Locators, argv, coordinates, package names, place ids and file
+/// paths are minted by the runtime from state it committed under a permission
+/// of its own.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceActionRequest {
+    pub operation: super::action::OperationKind,
+    #[serde(deserialize_with = "action_reference")]
+    pub reference: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+fn action_reference<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let reference = String::deserialize(deserializer)?;
+    let shaped = (1..=64).contains(&reference.len())
+        && reference.split_once(':').is_some_and(|(prefix, id)| {
+            !prefix.is_empty()
+                && !id.is_empty()
+                && reference
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b':')
+        });
+    if !shaped {
+        return Err(serde::de::Error::custom("invalid candidate reference"));
+    }
+    Ok(reference)
 }
 
 fn lookup_query<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -132,7 +192,14 @@ pub enum Proposal {
         target: Option<RoutingTarget>,
     },
     Places {
-        place_lookup: LookupRequest,
+        place_lookup: PlaceLookupRequest,
+        #[serde(default = "conservative_privacy")]
+        privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
+    },
+    Action {
+        device_action: DeviceActionRequest,
         #[serde(default = "conservative_privacy")]
         privacy: PrivacyClass,
         #[serde(default)]
@@ -154,7 +221,8 @@ impl Proposal {
             | Self::Choices { target, .. }
             | Self::Analysis { target, .. }
             | Self::Lookup { target, .. }
-            | Self::Places { target, .. } => *target,
+            | Self::Places { target, .. }
+            | Self::Action { target, .. } => *target,
         }
     }
 }
@@ -163,9 +231,15 @@ pub fn proposal_tool() -> ToolDef {
     let privacy =
         json!({"type":"string","enum":["public","shared_room","near_user","private","sensitive"]});
     let lookup_request = json!({"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512}}});
+    let place_lookup_request = json!({"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512},"then":{"type":"string","enum":["route"]}}});
+    let device_action = json!({"type":"object","additionalProperties":false,"required":["operation","reference"],"properties":{
+        "operation":{"type":"string","enum":["open","route","play","run"]},
+        "reference":{"type":"string","minLength":1,"maxLength":64},
+        "reason":{"type":"string","minLength":1,"maxLength":200}
+    }});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, one numbered choice list, one bounded larger-model analysis, one web lookup, or one named-place address lookup of the current request. Supply exactly one of intent, choice_list, analysis, web_lookup or place_lookup; omit the others. Use choice_list when the user asks for options to pick from (for example films for tonight): a short title and two to eight items with a title and a short detail each; Cosmos numbers them and shows them on a screen, so a later request can name one by number. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome.".into(),
+        description: "Propose informational text, one numbered choice list, one bounded larger-model analysis, one web lookup, one named-place address lookup, or one device action for the current request. Supply exactly one of intent, choice_list, analysis, web_lookup, place_lookup or device_action; omit the others. Use choice_list when the user asks for options to pick from (for example films for tonight): a short title and two to eight items with a title and a short detail each; Cosmos numbers them and shows them on a screen, so a later request can name one by number. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome. Use device_action only to act on something Cosmos already put in front of you. reference must be one of the candidate identifiers listed in this turn's context; you cannot invent one, and you cannot supply a URL, file path, address, coordinate, application name, command or arguments - Cosmos resolves the identifier itself and chooses the device. operation says what to do with it: open a document or page, route to a place, play a media item, run a named task the owner already approved. reason is one short sentence for the owner's record. Proposing an action is not doing it; never claim it happened. Add then \"route\" to a place_lookup when the current text asks for directions to the place you are looking up; Cosmos runs the lookup, picks the place and chooses the device.".into(),
         // Provider function schemas prohibit root unions. Optional branches
         // describe the shapes; Proposal's strict parser enforces XOR before
         // any runtime work, including against a provider that ignores the schema.
@@ -179,8 +253,9 @@ pub fn proposal_tool() -> ToolDef {
                 "items":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["title","detail"],"properties":{"title":{"type":"string","minLength":1,"maxLength":80},"detail":{"type":"string","maxLength":200}}}}
             }},
             "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},
-            "web_lookup":lookup_request.clone(),
-            "place_lookup":lookup_request,
+            "web_lookup":lookup_request,
+            "place_lookup":place_lookup_request,
+            "device_action":device_action,
             "privacy":privacy,
             "target":{"type":"string","enum":["browser","macos","linux","android","android_tv"]}
         }}),

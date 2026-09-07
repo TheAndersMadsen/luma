@@ -6,13 +6,15 @@ import { CLASS, device, privateClass, where } from "../turnOutcome";
 export const LEDGER_LIMIT = 300;
 /** How many turns the page shows. */
 export const ACTIVITY_TURNS = 50;
-export const CHANNELS = ["visual.card", "audio.tts"] as const;
+export const CHANNELS = ["visual.card", "audio.tts", "action.open", "action.route", "action.play", "action.run", "confirm.tap"] as const;
 export type Channel = typeof CHANNELS[number];
+/** Channels that change something about the world rather than showing or saying it. */
+const ACTION_CHANNELS: readonly Channel[] = ["action.open", "action.route", "action.play", "action.run"];
 export const BLOCKERS = ["privacy", "capability", "unavailable"] as const;
 export type Blocker = typeof BLOCKERS[number];
 export const ROUTING_TARGETS = ["browser", "macos", "linux", "android", "android_tv"] as const;
 export type RoutingTarget = typeof ROUTING_TARGETS[number];
-const ACTION_STATUSES = ["proposed", "dispatched", "acknowledged", "cancelled", "outcome_unknown"] as const;
+const ACTION_STATUSES = ["proposed", "awaiting_grant", "dispatched", "acknowledged", "running", "completed", "refused", "failed", "cancelled", "outcome_unknown"] as const;
 type ActionStatus = typeof ACTION_STATUSES[number];
 
 export interface Candidate { surfaceId: string; channel: Channel; blocker: Blocker | null }
@@ -111,19 +113,36 @@ const BLOCKER: Record<Blocker, string> = {
   unavailable: "its app was not in front",
 };
 const HINT: Record<RoutingTarget, string> = { browser: "the browser", macos: "the Mac", linux: "the Linux PC", android: "the phone", android_tv: "the TV" };
+/** What each channel was asked to do, as the end of "X could …". */
+const ACT: Record<Channel, string> = {
+  "visual.card": "show a card", "audio.tts": "speak it", "action.open": "open it",
+  "action.route": "show the way there", "action.play": "play it", "action.run": "run that task",
+  "confirm.tap": "ask you to confirm",
+};
 const named = (kinds: SurfaceKinds, surfaceId: string) => kinds.has(surfaceId) ? device(kinds.get(surfaceId)) : "a removed device";
 const placed = (kinds: SurfaceKinds, surfaceId: string) => kinds.has(surfaceId) ? where(kinds.get(surfaceId)) : "on a removed device";
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function outcome(turn: LedgerTurn, kinds: SurfaceKinds): string {
   if (turn.cancelled) return "Cancelled";
-  const shown = turn.actions.find(action => action.status === "acknowledged");
+  // On an action channel a device can accept a command and then fail to carry
+  // it out, so only its own report says what happened.
+  const done = turn.actions.find(action => action.status === "completed");
+  if (done) return `Done ${placed(kinds, done.surfaceId)}`;
+  const refused = turn.actions.find(action => action.status === "refused" || action.status === "failed");
+  if (refused) return `Not done ${placed(kinds, refused.surfaceId)}`;
+  const shown = turn.actions.find(action => action.status === "acknowledged" && !ACTION_CHANNELS.includes(action.channel));
   if (shown) {
     if (shown.channel === "audio.tts") return `Spoken ${placed(kinds, shown.surfaceId)}`;
     return `${privateClass(turn.privacy) ? "Private reply" : "Shown"} ${placed(kinds, shown.surfaceId)}`;
   }
   if (turn.actions.some(action => action.status === "outcome_unknown" || action.failed)) return "Cannot confirm";
-  const open = turn.actions.some(action => action.status === "proposed" || action.status === "dispatched");
+  const confirming = turn.actions.some(action => action.status === "awaiting_grant");
+  if (confirming) return "Waiting for your confirmation…";
+  const running = turn.actions.some(action => action.status === "running");
+  if (running) return "Working on a device…";
+  const open = turn.actions.some(action => action.status === "proposed" || action.status === "dispatched"
+    || action.status === "acknowledged");
   if (!turn.finished) return open ? "Waiting for a device…" : "Working…";
   if (turn.actions.length === 0 && turn.candidates.every(candidate => candidate.blocker !== null)) return "Nowhere to show it";
   return "Cannot confirm";
@@ -138,10 +157,13 @@ export function activityRows(turns: LedgerTurn[], kinds: SurfaceKinds): Activity
     outcome: outcome(turn, kinds),
     why: {
       candidates: turn.candidates.map(candidate => {
-        const act = candidate.channel === "audio.tts" ? "speak it" : "show a card";
+        const act = ACT[candidate.channel];
         const name = capitalize(named(kinds, candidate.surfaceId));
         if (!candidate.blocker) return `${name} could ${act}.`;
-        const reason = candidate.blocker === "capability" && candidate.channel === "audio.tts" ? "it cannot speak this" : BLOCKER[candidate.blocker];
+        const reason = candidate.blocker !== "capability" ? BLOCKER[candidate.blocker]
+          : candidate.channel === "audio.tts" ? "it cannot speak this"
+          : candidate.channel === "visual.card" ? BLOCKER.capability
+          : "it is not approved for that";
         return `${name} could not ${act} — ${reason}.`;
       }),
       hint: turn.hint ? `You asked for ${HINT[turn.hint]}` : null,

@@ -174,6 +174,23 @@ pub enum RuntimeOperation {
     RecentContext {
         fence: TurnFence,
     },
+    /// Offer this turn's runtime-minted action candidates to cognition.
+    ActionCandidates {
+        fence: TurnFence,
+    },
+    /// Resolve one proposed candidate reference into a bound command. The
+    /// runtime mints every argument; cognition supplied only the identifier.
+    BindDeviceAction {
+        fence: TurnFence,
+        operation: super::action::OperationKind,
+        reference: String,
+    },
+    /// Bind a route the runtime minted from this turn's own completed places
+    /// receipt, under the `then` the same cognition call already proposed.
+    BindPlaceRoute {
+        fence: TurnFence,
+        operation: super::action::Operation,
+    },
     PrivatePolicy {
         surface_id: Uuid,
     },
@@ -205,6 +222,26 @@ pub enum RuntimeOperation {
     ScreenContextPolicy {
         surface_id: Uuid,
     },
+    /// The owner's statement of what one native installation may be asked to
+    /// do, and the commands the owner authored for it.
+    DeviceActionPolicy {
+        surface_id: Uuid,
+    },
+    SetDeviceActionPolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::action::Policy>,
+    },
+    DeviceCommandPolicy {
+        surface_id: Uuid,
+    },
+    SetDeviceCommandPolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::action::CommandPolicy>,
+    },
     SetScreenContextPolicy {
         surface_id: Uuid,
         approval_revision: u64,
@@ -217,6 +254,7 @@ pub enum RuntimeOperation {
         fence: TurnFence,
         app_digest: String,
         bytes: u32,
+        document: Option<super::continuation::DocumentHandle>,
     },
     /// The current turn's outcome as its origin member may express it.
     TurnStatus {
@@ -376,8 +414,12 @@ pub enum RuntimeResult {
     LookupStarted(super::lookup::Lookup),
     LookupCurrent,
     LookupCompleted(super::lookup::Receipt),
-    RecentContext(Option<RecentContext>),
+    RecentContext(Vec<RecentContext>),
+    ActionCandidates(super::action::ActionOffer),
+    DeviceActionBound(super::action::Operation),
     PrivatePolicy(Option<super::personal::Approval>),
+    DeviceActionPolicy(Option<super::action::Approval>),
+    DeviceCommandPolicy(Option<super::action::CommandApproval>),
     NativePresence {
         connected: bool,
         visible: bool,
@@ -502,8 +544,18 @@ pub struct AnalysisState {
 #[serde(rename_all = "snake_case")]
 pub enum ActionStatus {
     Proposed,
+    /// An action channel waiting for the owner's confirmation ceremony.
+    AwaitingGrant,
     Dispatched,
+    /// Bound and legal at the executing installation. On an action channel
+    /// this is not an outcome: a device can accept a command and then fail to
+    /// carry it out.
     Acknowledged,
+    /// A long command the executing installation is still working on.
+    Running,
+    Completed,
+    Refused,
+    Failed,
     Cancelled,
     OutcomeUnknown,
 }
@@ -572,35 +624,59 @@ struct OutputProposal {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecentContext {
     pub kind: RecentContextKind,
+    /// The owner's own place query, or an acknowledged list's title.
     pub text: String,
+    /// The acknowledged list's item titles, in list order, so "number two"
+    /// names exactly one of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
     pub source_surface: Uuid,
     pub privacy: PrivacyClass,
     pub created_at_ms: i64,
     pub expires_at_ms: i64,
+    /// The acknowledged list's own content digest. A different list means a
+    /// different digest, so "number two" resolves against exactly the list
+    /// the owner was shown or against nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_digest: Option<String>,
+    /// A document and its explanation, for a later turn that asks to carry on
+    /// somewhere else. Never in a prompt; only its identifier and kind are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<super::continuation::Continuation>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecentContextKind {
     PlaceQuery,
     /// An acknowledged choice list: its title and numbered item titles.
     Choices,
+    /// A document handle the owner's own screen supplied, with the private
+    /// explanation the same turn produced.
+    Continuation,
 }
 
-/// The remembered form of an acknowledged choice list, bounded by the
-/// list's own limits: `title: 1. first; 2. second`.
-fn choice_context_text(title: &str, items: &[policy::Choice]) -> String {
-    let mut text = format!("{title}:");
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            text.push(';');
-        }
-        text.push(' ');
-        text.push_str(&item.id);
-        text.push_str(". ");
-        text.push_str(&item.title);
+/// At most one memory per kind, newest wins, so a remembered choice list and
+/// a remembered place query can both stand inside the same ten minutes.
+pub const MAX_RECENT_CONTEXT: usize = 4;
+
+/// Reads the durable field whether it holds nothing, the single memory of an
+/// earlier release, or the current list. One field, one meaning.
+fn recent_contexts<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<RecentContext>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Many(Vec<RecentContext>),
+        One(Box<RecentContext>),
+        None,
     }
-    text
+    Ok(match Stored::deserialize(deserializer)? {
+        Stored::Many(contexts) => contexts,
+        Stored::One(context) => vec![*context],
+        Stored::None => Vec::new(),
+    })
 }
 
 pub const RECENT_CONTEXT_MS: i64 = 600_000;
@@ -627,12 +703,16 @@ pub struct RuntimeState {
     pub lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
     #[serde(default)]
     pub place_lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
-    #[serde(default)]
-    pub recent_context: Option<RecentContext>,
+    #[serde(default, deserialize_with = "recent_contexts")]
+    pub recent_context: Vec<RecentContext>,
     #[serde(default)]
     pub private_policies: BTreeMap<Uuid, super::personal::Approval>,
     #[serde(default)]
     pub screen_context_policies: BTreeMap<Uuid, super::screen::Approval>,
+    #[serde(default)]
+    pub device_action_policies: BTreeMap<Uuid, super::action::Approval>,
+    #[serde(default)]
+    pub device_command_policies: BTreeMap<Uuid, super::action::CommandApproval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -793,9 +873,11 @@ pub enum RuntimeData {
         surface_id: Uuid,
         approval: super::lookup::Approval,
     },
+    /// The largest body the runtime ledger carries; held behind an
+    /// indirection so one event kind does not widen every other.
     LookupStarted {
         fence: TurnFence,
-        lookup: super::lookup::Lookup,
+        lookup: Box<super::lookup::Lookup>,
     },
     LookupDenied {
         fence: TurnFence,
@@ -831,6 +913,37 @@ pub enum RuntimeData {
     ScreenContextPolicyChanged {
         surface_id: Uuid,
         approval: super::screen::Approval,
+    },
+    /// The owner's permissions are the largest bodies the ledger carries, so
+    /// they are held behind an indirection rather than widening every event.
+    DeviceActionPolicyChanged {
+        surface_id: Uuid,
+        approval: Box<super::action::Approval>,
+    },
+    DeviceCommandPolicyChanged {
+        surface_id: Uuid,
+        approval: Box<super::action::CommandApproval>,
+    },
+    /// Which kinds of runtime-minted candidate this turn's cognition was
+    /// offered, and how many. Never an identifier's content.
+    ActionCandidatesOffered {
+        fence: TurnFence,
+        kinds: Vec<super::action::CandidateKind>,
+        count: u32,
+    },
+    /// The runtime resolved a proposed reference into one bound command. It
+    /// carries digests, kinds and identifiers only: no locator, argv, place
+    /// name, media title, command output, device id or model text. The
+    /// `Decision` that follows names the action this bound command became.
+    ActionBound {
+        fence: TurnFence,
+        channel: Channel,
+        operation: super::action::OperationKind,
+        candidate: super::action::CandidateKind,
+        reference_digest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry_digest: Option<String>,
+        content_digest: String,
     },
     /// The origin's own screen text reached cognition: which app it came
     /// from (digest) and how many bytes; never the text.
@@ -989,6 +1102,14 @@ fn action_event(action: &Action) -> RuntimeData {
         attempt: action.attempts,
     }
 }
+/// The bound command a proposal carries, when it is an action at all.
+fn bound_operation(intent: &SemanticIntent) -> Option<&super::action::Operation> {
+    match intent {
+        SemanticIntent::DeviceAction { operation } => Some(operation),
+        _ => None,
+    }
+}
+
 pub(super) fn digest_valid(value: &str) -> bool {
     value.len() == 64
         && value
@@ -1085,6 +1206,7 @@ impl RuntimeState {
         channel: Channel,
         privacy: PrivacyClass,
         hint: Option<policy::RoutingTarget>,
+        operation: Option<&super::action::Operation>,
         now: i64,
     ) -> Candidate {
         let mut presence = self.presence(record, now);
@@ -1100,11 +1222,27 @@ impl RuntimeState {
                     .and_then(|approval| approval.policy)
                     .is_some_and(|policy| policy.synthesis && privacy <= policy.maximum_class);
         }
-        // Above the shared-room ceiling only a personal surface may render,
-        // within the ceiling its owner declared. It holds the card while its
-        // signed connection is current; rendering waits for its foreground.
+        // An action channel exists for an installation only where the owner's
+        // own permission for it stands at the installation's current approval
+        // revision, and where that permission admits this exact command.
+        if channel.is_action() {
+            presence.available = presence.available
+                && match operation {
+                    Some(operation) => {
+                        operation.channel() == channel
+                            && self.action_permits(records, record.surface_id, operation)
+                    }
+                    None => self
+                        .action_channels(records, record.surface_id)
+                        .contains(&channel),
+                };
+        }
+        // Above the shared-room ceiling only a personal surface may render or
+        // act, within the ceiling its owner declared. It holds the card while
+        // its signed connection is current; rendering waits for its
+        // foreground. Speech is never lifted by a personal declaration.
         let personal = privacy > PrivacyClass::SharedRoom
-            && channel == Channel::VisualCard
+            && channel != Channel::AudioTts
             && self
                 .personal_ceiling(records, record.surface_id)
                 .is_some_and(|ceiling| privacy <= ceiling);
@@ -1250,6 +1388,17 @@ impl RuntimeState {
         }
         events
     }
+    /// Bounded owner memory: at most one entry per kind, newest wins, so a
+    /// remembered list and a remembered place query coexist for ten minutes.
+    pub(super) fn remember(&mut self, context: RecentContext) {
+        self.recent_context.retain(|c| c.kind != context.kind);
+        self.recent_context.push(context);
+        self.recent_context.sort_by_key(|c| c.kind);
+        while self.recent_context.len() > MAX_RECENT_CONTEXT {
+            self.recent_context.remove(0);
+        }
+    }
+
     pub(super) fn fence(
         &self,
         turn_id: Uuid,
@@ -1314,13 +1463,7 @@ impl RuntimeState {
     /// heartbeats do not alter the origin incarnation or eligibility.
     pub fn reconcile(&mut self, records: &BTreeMap<Uuid, Record>, now: i64) -> Vec<RuntimeData> {
         let mut events = self.reconcile_native(records, now);
-        if self
-            .recent_context
-            .as_ref()
-            .is_some_and(|c| now >= c.expires_at_ms)
-        {
-            self.recent_context = None;
-        }
+        self.recent_context.retain(|c| now < c.expires_at_ms);
         for (id, connection) in &mut self.pin_connections {
             if !connection.closed && !records.get(id).is_some_and(|r| connection.current(r, now)) {
                 connection.closed = true;
@@ -1353,6 +1496,16 @@ impl RuntimeState {
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
         self.screen_context_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
+        self.device_action_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
+        self.device_command_policies.retain(|id, approval| {
             records
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
@@ -1449,6 +1602,7 @@ impl RuntimeState {
                                     action.channel,
                                     class,
                                     None,
+                                    bound_operation(&action.intent),
                                     now,
                                 )
                                 .blocker
@@ -1526,6 +1680,7 @@ impl RuntimeState {
                         previous.channel,
                         previous.privacy,
                         None,
+                        bound_operation(&previous.intent),
                         now,
                     )
                 })
@@ -1615,6 +1770,7 @@ impl RuntimeState {
                     action.channel,
                     action.privacy,
                     None,
+                    bound_operation(&action.intent),
                     now,
                 )
                 .blocker
@@ -1699,6 +1855,7 @@ impl RuntimeState {
                                 action.channel,
                                 action.privacy,
                                 None,
+                                bound_operation(&action.intent),
                                 now,
                             )
                             .blocker
@@ -1760,6 +1917,14 @@ impl RuntimeState {
             {
                 return Err(RuntimeError::PolicyBlocked);
             }
+            // A completed place lookup produces its own card, or the route
+            // the same call already asked for. Nothing else.
+            SemanticIntent::DeviceAction { operation }
+                if turn.completed_places_lookup()
+                    && operation.kind() != super::action::OperationKind::Route =>
+            {
+                return Err(RuntimeError::PolicyBlocked);
+            }
             _ => {}
         }
         // A shared-safe expression is the runtime's own fixed text; the turn
@@ -1789,6 +1954,7 @@ impl RuntimeState {
                     intent.channel(),
                     privacy,
                     hint,
+                    bound_operation(&intent),
                     now,
                 )
             })
@@ -1828,6 +1994,14 @@ impl RuntimeState {
             }
             let record = &records[&surface_id];
             let incarnation = self.presence(record, now).incarnation;
+            // A content reference is authority for exactly the surface this
+            // decision named; it is checked again when the content is fetched.
+            let intent = match intent {
+                SemanticIntent::PlaceAddressCard { content } => SemanticIntent::PlaceAddressCard {
+                    content: content.for_audience(surface_id),
+                },
+                other => other,
+            };
             let content_digest = intent.content_digest();
             // A private card waits for its personal surface's unlocked
             // foreground; a shared card is renewed or repaired within a minute.
@@ -2132,15 +2306,29 @@ impl RuntimeState {
                 if turn.finished || turn.fence.origin_surface != fence.origin_surface {
                     return Err(RuntimeError::Stale);
                 }
-                // Memory is offered only at or below the shared-room ceiling
-                // every origin already starts from; nothing above it is stored.
-                let offered = self
+                // Memory at or below the shared-room ceiling is offered to any
+                // origin. A private memory is offered only to a turn already
+                // at that class whose origin holds the screen-context
+                // permission that already carries the owner's own private text
+                // to cognition: a private label in a shared-class prompt would
+                // be a class downgrade in fact if not in name.
+                let personal = turn.privacy >= PrivacyClass::Private
+                    && turn.screen_context.is_some()
+                    && self.screen_context_permitted(records, turn.fence.origin_surface);
+                let turn_privacy = turn.privacy;
+                let offered: Vec<_> = self
                     .recent_context
-                    .clone()
-                    .filter(|c| now < c.expires_at_ms && c.privacy <= PrivacyClass::SharedRoom);
-                if let Some(context) = &offered {
+                    .iter()
+                    .filter(|c| {
+                        now < c.expires_at_ms
+                            && (c.privacy <= PrivacyClass::SharedRoom
+                                || (personal && c.privacy <= turn_privacy))
+                    })
+                    .cloned()
+                    .collect();
+                for context in &offered {
                     events.push(RuntimeData::RecentContextOffered {
-                        fence,
+                        fence: fence.clone(),
                         context: context.kind,
                         source_surface: context.source_surface,
                         privacy: context.privacy,
@@ -2148,8 +2336,111 @@ impl RuntimeState {
                 }
                 RuntimeResult::RecentContext(offered)
             }
+            RuntimeOperation::ActionCandidates { fence } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished || turn.fence.origin_surface != fence.origin_surface {
+                    return Err(RuntimeError::Stale);
+                }
+                let offer = self.action_offer(records, turn, now);
+                if !offer.is_empty() {
+                    events.push(RuntimeData::ActionCandidatesOffered {
+                        fence,
+                        kinds: offer.kinds(),
+                        count: u32::try_from(offer.candidates.len()).unwrap_or(u32::MAX),
+                    });
+                }
+                RuntimeResult::ActionCandidates(offer)
+            }
+            RuntimeOperation::BindDeviceAction {
+                fence,
+                operation,
+                reference,
+            } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished || turn.fence.origin_surface != fence.origin_surface {
+                    return Err(RuntimeError::Stale);
+                }
+                let (bound, candidate) =
+                    self.bind_device_action(records, turn, operation, &reference, now)?;
+                events.push(RuntimeData::ActionBound {
+                    fence,
+                    channel: bound.channel(),
+                    operation: bound.kind(),
+                    candidate,
+                    reference_digest: super::action::reference_digest(&reference),
+                    entry_digest: match &bound {
+                        super::action::Operation::Run { entry_digest, .. } => {
+                            Some(entry_digest.clone())
+                        }
+                        _ => None,
+                    },
+                    content_digest: bound.content_digest(),
+                });
+                RuntimeResult::DeviceActionBound(bound)
+            }
+            RuntimeOperation::BindPlaceRoute { fence, operation } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished
+                    || turn.fence.origin_surface != fence.origin_surface
+                    || !turn.completed_places_lookup()
+                    || !operation.valid()
+                    || operation.kind() != super::action::OperationKind::Route
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                events.push(RuntimeData::ActionBound {
+                    fence,
+                    channel: operation.channel(),
+                    operation: operation.kind(),
+                    candidate: super::action::CandidateKind::Place,
+                    reference_digest: super::action::reference_digest("place:1"),
+                    entry_digest: None,
+                    content_digest: operation.content_digest(),
+                });
+                RuntimeResult::DeviceActionBound(operation)
+            }
             RuntimeOperation::PrivatePolicy { surface_id } => {
                 RuntimeResult::PrivatePolicy(self.private_policy(records, surface_id)?)
+            }
+            RuntimeOperation::DeviceActionPolicy { surface_id } => {
+                RuntimeResult::DeviceActionPolicy(self.device_action_policy(records, surface_id)?)
+            }
+            RuntimeOperation::SetDeviceActionPolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, appended) = self.set_device_action_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(appended);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::DeviceActionPolicy(Some(approval))
+            }
+            RuntimeOperation::DeviceCommandPolicy { surface_id } => {
+                RuntimeResult::DeviceCommandPolicy(self.device_command_policy(records, surface_id)?)
+            }
+            RuntimeOperation::SetDeviceCommandPolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, appended) = self.set_device_command_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(appended);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::DeviceCommandPolicy(Some(approval))
             }
             RuntimeOperation::NativePresence { surface_id } => {
                 let record = records
@@ -2233,8 +2524,11 @@ impl RuntimeState {
                 fence,
                 app_digest,
                 bytes,
+                document,
             } => {
-                events.extend(self.offer_screen_context(records, fence, app_digest, bytes, now)?);
+                events.extend(
+                    self.offer_screen_context(records, fence, app_digest, bytes, document, now)?,
+                );
                 RuntimeResult::ScreenContextOffered
             }
             RuntimeOperation::TurnStatus { connection } => {
@@ -3097,36 +3391,65 @@ impl RuntimeState {
                 });
                 // An acknowledged choice list becomes bounded recent context
                 // at the shared-room ceiling, so "number two" can be resolved
-                // by the next turn; a private list is not remembered.
-                let remembered = match &action.intent {
-                    SemanticIntent::ChoiceList { title, items }
-                        if first && action.privacy <= PrivacyClass::SharedRoom =>
-                    {
-                        Some((
-                            choice_context_text(title, items),
-                            action.surface_id,
-                            action.privacy,
-                        ))
-                    }
-                    _ => None,
-                };
-                let result = RuntimeResult::Acknowledged(action.clone());
-                if let Some((text, source_surface, privacy)) = remembered {
-                    let expires_at_ms = now.saturating_add(RECENT_CONTEXT_MS);
-                    self.recent_context = Some(RecentContext {
+                // by the next turn; a private list is not remembered. The
+                // list's own content digest is remembered with it, so a
+                // number resolves against exactly the list that was shown.
+                let mut remembered = Vec::new();
+                if first
+                    && action.privacy <= PrivacyClass::SharedRoom
+                    && let SemanticIntent::ChoiceList { title, items } = &action.intent
+                {
+                    remembered.push(RecentContext {
                         kind: RecentContextKind::Choices,
-                        text,
-                        source_surface,
-                        privacy,
+                        text: title.clone(),
+                        items: items.iter().map(|item| item.title.clone()).collect(),
+                        source_surface: action.surface_id,
+                        privacy: action.privacy,
                         created_at_ms: now,
-                        expires_at_ms,
+                        expires_at_ms: now.saturating_add(RECENT_CONTEXT_MS),
+                        list_digest: Some(action.content_digest.clone()),
+                        continuation: None,
                     });
+                }
+                // A continuation is a memory write, so it happens only once
+                // the private card the origin's own document produced has
+                // actually been shown on a personal surface.
+                let continuation = self
+                    .turn
+                    .as_ref()
+                    .and_then(|turn| turn.screen_context.as_ref())
+                    .and_then(|offered| offered.document.clone())
+                    .filter(|document| {
+                        first
+                            && action.channel == Channel::VisualCard
+                            && action.privacy >= PrivacyClass::Private
+                            && document.valid()
+                    });
+                if let Some(document) = continuation {
+                    remembered.push(RecentContext {
+                        kind: RecentContextKind::Continuation,
+                        text: String::new(),
+                        items: Vec::new(),
+                        source_surface: action.surface_id,
+                        privacy: action.privacy,
+                        created_at_ms: now,
+                        expires_at_ms: now.saturating_add(RECENT_CONTEXT_MS),
+                        list_digest: None,
+                        continuation: Some(super::continuation::Continuation {
+                            id: Uuid::new_v4(),
+                            document,
+                        }),
+                    });
+                }
+                let result = RuntimeResult::Acknowledged(action.clone());
+                for context in remembered {
                     events.push(RuntimeData::RecentContextRemembered {
-                        context: RecentContextKind::Choices,
-                        source_surface,
-                        privacy,
-                        expires_at_ms,
+                        context: context.kind,
+                        source_surface: context.source_surface,
+                        privacy: context.privacy,
+                        expires_at_ms: context.expires_at_ms,
                     });
+                    self.remember(context);
                 }
                 let turn = self.turn.as_mut().unwrap();
                 if turn.outcome.is_none() {
@@ -3951,6 +4274,7 @@ mod tests {
                 Channel::VisualCard,
                 class,
                 None,
+                None,
                 103,
             );
             assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
@@ -4197,9 +4521,18 @@ mod tests {
         let (_, events) = state
             .apply("U:owner", &records, ack(&dispatched, &records[&id]), 104)
             .unwrap();
-        let remembered = state.recent_context.clone().expect("choice context");
+        let remembered = state
+            .recent_context
+            .first()
+            .cloned()
+            .expect("choice context");
         assert_eq!(remembered.kind, RecentContextKind::Choices);
-        assert_eq!(remembered.text, "Films for tonight: 1. Arrival; 2. Heat");
+        assert_eq!(remembered.text, "Films for tonight");
+        assert_eq!(remembered.items, vec!["Arrival", "Heat"]);
+        assert_eq!(
+            remembered.list_digest.as_deref(),
+            Some(action.content_digest.as_str())
+        );
         assert_eq!(remembered.source_surface, id);
         assert_eq!(remembered.privacy, PrivacyClass::SharedRoom);
         assert_eq!(remembered.expires_at_ms, 104 + RECENT_CONTEXT_MS);
@@ -4221,7 +4554,7 @@ mod tests {
         state
             .apply("U:owner", &records, ack(&dispatched, &records[&id]), 105)
             .unwrap();
-        assert_eq!(state.recent_context.as_ref().unwrap().created_at_ms, 104);
+        assert_eq!(state.recent_context[0].created_at_ms, 104);
         state.reconcile(&records, action.display_expires_at_ms);
         assert!(!state.actions[&action.id].intent.has_payload());
         assert!(!state.actions[&action.id].intent.valid());
@@ -4245,6 +4578,6 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(result, RuntimeResult::Blocked));
-        assert!(state.recent_context.is_none());
+        assert!(state.recent_context.is_empty());
     }
 }

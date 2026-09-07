@@ -190,7 +190,7 @@ fn record(records: &BTreeMap<Uuid, Record>, surface: Uuid) -> Result<&Record, Ru
                         record.approved_manifest == crate::surface_registry::pin_manifest()
                     }
                     Binding::Native { .. } => {
-                        record.approved_manifest == crate::surface_registry::native_manifest()
+                        crate::surface_registry::native_declares(record, "audio.tts")
                     }
                 }
         })
@@ -420,7 +420,10 @@ impl RuntimeState {
         turn.lookup = Some(lookup.clone());
         Ok((
             lookup.clone(),
-            vec![RuntimeData::LookupStarted { fence, lookup }],
+            vec![RuntimeData::LookupStarted {
+                fence,
+                lookup: Box::new(lookup),
+            }],
         ))
     }
 
@@ -488,13 +491,16 @@ impl RuntimeState {
                 .filter(|text| !text.trim().is_empty() && text.len() <= 512)
         {
             let expires_at_ms = now.saturating_add(super::state::RECENT_CONTEXT_MS);
-            self.recent_context = Some(super::state::RecentContext {
+            self.remember(super::state::RecentContext {
                 kind: super::state::RecentContextKind::PlaceQuery,
                 text,
+                items: Vec::new(),
                 source_surface,
                 privacy: receipt.privacy,
                 created_at_ms: now,
                 expires_at_ms,
+                list_digest: None,
+                continuation: None,
             });
             events.push(RuntimeData::RecentContextRemembered {
                 context: super::state::RecentContextKind::PlaceQuery,
@@ -598,6 +604,7 @@ mod tests {
             id: Uuid::new_v4(),
             digest: hash(b"transient named-place address card"),
             expires_at_ms,
+            audience: None,
         }
     }
 
@@ -2550,10 +2557,12 @@ mod tests {
             else {
                 panic!("reference-only place card")
             };
+            // The proposal binds the same content to the surface the
+            // decision named; the reference is authority for that surface.
             assert_eq!(
                 action.intent,
                 SemanticIntent::PlaceAddressCard {
-                    content: visual.clone()
+                    content: visual.for_audience(action.surface_id)
                 }
             );
             assert!(action.intent.text().is_empty());
@@ -3317,7 +3326,8 @@ mod tests {
         let remembered = fixture
             .state
             .recent_context
-            .clone()
+            .first()
+            .cloned()
             .expect("recent place query");
         assert_eq!(
             remembered.kind,
@@ -3332,7 +3342,7 @@ mod tests {
         );
         // The current turn is offered the memory once per request; a stale
         // fence gets nothing, and expiry clears it for everyone.
-        let RuntimeResult::RecentContext(Some(offered)) = fixture
+        let RuntimeResult::RecentContext(offered) = fixture
             .apply(
                 RuntimeOperation::RecentContext {
                     fence: fixture.fence.clone(),
@@ -3343,7 +3353,7 @@ mod tests {
         else {
             panic!("offered recent context")
         };
-        assert_eq!(offered, remembered);
+        assert_eq!(offered, vec![remembered]);
         let mut stale = fixture.fence.clone();
         stale.generation += 1;
         assert!(matches!(
@@ -3352,6 +3362,6 @@ mod tests {
         ));
         let expiry = 130 + super::super::state::RECENT_CONTEXT_MS;
         fixture.state.reconcile(&fixture.records, expiry);
-        assert!(fixture.state.recent_context.is_none());
+        assert!(fixture.state.recent_context.is_empty());
     }
 }

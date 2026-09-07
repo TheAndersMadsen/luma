@@ -71,6 +71,7 @@ fn browser_runtime_command_preserves_text_wire_and_requires_matching_transient_p
         id: Uuid::new_v4(),
         digest: card.digest(),
         expires_at_ms: 20_000,
+        audience: None,
     };
     let action = render_action(SemanticIntent::PlaceAddressCard { content: reference });
     assert!(command(&action, None).is_none());

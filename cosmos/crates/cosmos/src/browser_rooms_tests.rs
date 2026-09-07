@@ -187,6 +187,7 @@ fn browser_room_missing_transient_places_never_replays_or_substitutes_text() {
         id: Uuid::new_v4(),
         digest: hash(b"synthetic transient places content"),
         expires_at_ms,
+        audience: None,
     };
     let mut action =
         delivery_action(crate::ambiance::SemanticIntent::PlaceAddressCard { content: reference });

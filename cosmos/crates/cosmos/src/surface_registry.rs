@@ -164,13 +164,15 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-pub const NATIVE_APPROVAL: &str = "native-shared-speech-v3";
-pub const LEGACY_NATIVE_APPROVAL: &str = "native-shared-display-v2";
+pub const NATIVE_APPROVAL: &str = "native-device-action-v4";
+pub const LEGACY_NATIVE_SPEECH_APPROVAL: &str = "native-shared-speech-v3";
+pub const LEGACY_NATIVE_DISPLAY_APPROVAL: &str = "native-shared-display-v2";
 pub const MAX_NATIVE_REVISION: u64 = MAX_SEQUENCE;
+pub const NATIVE_PLATFORMS: [&str; 4] = ["macos", "linux", "android", "android_tv"];
 
 /// Persisted display-only approvals keep rendering shared cards until the
-/// owner reapproves them for speech. Older text-only records are unknown.
-pub fn legacy_native_manifest() -> serde_json::Value {
+/// owner reapproves them. Older text-only records are unknown.
+pub fn legacy_native_display_manifest() -> serde_json::Value {
     serde_json::json!({
         "class": "native",
         "capabilities": {"input": ["text.public", "state.visibility"], "output": {"visual.card": {"maxClass": "shared_room", "shared": true}}},
@@ -181,25 +183,142 @@ pub fn legacy_native_manifest() -> serde_json::Value {
     })
 }
 
-/// A native installation may render one shared-room visual card and play one
-/// shared-room spoken reply while its signed connection is current and it
-/// reports a visible foreground. Speech bytes come only from the runtime's
-/// own disclosed synthesis; the manifest declares no private channel and
-/// occupancy and actor identity stay unknown.
-pub fn native_manifest() -> serde_json::Value {
-    let mut manifest = legacy_native_manifest();
+/// Persisted speech approvals keep rendering cards and speaking, on every
+/// platform, and declare no action channel until the owner reapproves.
+pub fn legacy_native_speech_manifest() -> serde_json::Value {
+    let mut manifest = legacy_native_display_manifest();
     manifest["capabilities"]["output"]["audio.tts"] =
         serde_json::json!({"maxClass": "shared_room", "shared": true});
     manifest["expression"]["audio.tts"] = serde_json::json!(["acknowledged", "degraded"]);
     manifest
 }
 
-pub fn known_native_manifest(manifest: &serde_json::Value) -> bool {
-    *manifest == native_manifest() || *manifest == legacy_native_manifest()
+/// The action profile is per platform, because what a device may be asked to
+/// do differs by what its operating system can honestly report. The set of
+/// legal manifests stays closed and enumerated, and the owner reads the exact
+/// capability list in Center before approving.
+///
+/// `maxClass: "shared_room"` on every channel is the undeclared default. The
+/// asserted privacy posture that lifts it is the owner's own
+/// `approve-private-display-v1` for the installation, bound to the record's
+/// revision and dropped on reapproval; it never applies to `audio.tts`.
+/// `effect_unverified` and `no_effect_isolation` are honesty fields: a client
+/// cannot prove an effect it did not observe, and neither desktop client can
+/// sandbox what it launches.
+pub fn native_manifest(platform: &str) -> serde_json::Value {
+    let card = serde_json::json!({"maxClass": "shared_room", "shared": true});
+    let acknowledged = serde_json::json!(["acknowledged", "degraded"]);
+    let mut output = serde_json::json!({"visual.card": card, "audio.tts": card});
+    let mut expression =
+        serde_json::json!({"visual.card": acknowledged, "audio.tts": acknowledged});
+    let mut input = serde_json::json!(["text.public", "state.visibility", "action.report"]);
+    let mut constraints = vec![
+        "actor_unknown",
+        "occupancy_unknown",
+        "render_unverified",
+        "playback_unverified",
+        "visible_foreground_only",
+        "no_background_output",
+        "effect_unverified",
+    ];
+    let open = serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 10000});
+    match platform {
+        "macos" | "linux" => {
+            input = serde_json::json!([
+                "text.public",
+                "state.visibility",
+                "context.screen",
+                "action.report"
+            ]);
+            constraints.push("no_effect_isolation");
+            output["action.open"] = open;
+            expression["action.open"] = acknowledged.clone();
+            let attestation = if platform == "macos" {
+                output["action.run"] = serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "high", "idempotent": false, "reportBudgetMs": 900000});
+                expression["action.run"] =
+                    serde_json::json!(["thinking", "acknowledged", "degraded"]);
+                serde_json::json!(["foreground_tap", "device_owner_auth"])
+            } else {
+                serde_json::json!(["foreground_tap"])
+            };
+            output["confirm.tap"] = serde_json::json!({"maxClass": "shared_room", "shared": true, "attestation": attestation});
+            expression["confirm.tap"] = serde_json::json!(["confirming", "awaiting_permission"]);
+        }
+        "android" => {
+            input = serde_json::json!([
+                "text.public",
+                "state.visibility",
+                "context.screen",
+                "action.report"
+            ]);
+            constraints.push("foreground_or_assistant_session_only");
+            output["action.open"] = open;
+            output["action.route"] = serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 20000});
+            output["confirm.tap"] = serde_json::json!({"maxClass": "shared_room", "shared": true, "attestation": ["foreground_tap"]});
+            expression["action.open"] = acknowledged.clone();
+            expression["action.route"] = acknowledged.clone();
+            expression["confirm.tap"] = serde_json::json!(["confirming", "awaiting_permission"]);
+        }
+        // A television is bystander-perceivable by construction, so it is
+        // never a ceremony venue and never holds a personal declaration.
+        _ => {
+            output["action.play"] = serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 30000});
+            expression["action.play"] = acknowledged.clone();
+        }
+    }
+    serde_json::json!({
+        "class": "native",
+        "capabilities": {"input": input, "output": output},
+        "constraints": constraints,
+        "expression": expression,
+        "cognition": {"declaredClass": 0, "models": []},
+        "authority": {"mayOriginate": ["state.change", "user.request", "action.report"], "reflexive": []}
+    })
+}
+
+/// The approval profile this record's manifest byte-equals for its own
+/// platform, or `None` when the manifest is not one Cosmos published. Binding
+/// to the record's own platform is what keeps the set closed: an Android
+/// manifest on a Mac record is unknown, not "some known manifest".
+pub fn native_approval(record: &Record) -> Option<&'static str> {
+    let Binding::Native { platform, .. } = &record.binding else {
+        return None;
+    };
+    if !native_platform(platform) {
+        return None;
+    }
+    if record.approved_manifest == native_manifest(platform) {
+        Some(NATIVE_APPROVAL)
+    } else if record.approved_manifest == legacy_native_speech_manifest() {
+        Some(LEGACY_NATIVE_SPEECH_APPROVAL)
+    } else if record.approved_manifest == legacy_native_display_manifest() {
+        Some(LEGACY_NATIVE_DISPLAY_APPROVAL)
+    } else {
+        None
+    }
+}
+
+pub fn known_native_manifest(record: &Record) -> bool {
+    native_approval(record).is_some()
+}
+
+pub fn known_native_approval(approval: &str) -> bool {
+    matches!(
+        approval,
+        NATIVE_APPROVAL | LEGACY_NATIVE_SPEECH_APPROVAL | LEGACY_NATIVE_DISPLAY_APPROVAL
+    )
+}
+
+/// Whether this installation's approved manifest declares one output channel.
+/// The manifest is one of the enumerated published values, so reading the
+/// declaration out of it is the same closed check the byte equality is.
+pub fn native_declares(record: &Record, channel: &str) -> bool {
+    known_native_manifest(record)
+        && record.approved_manifest["capabilities"]["output"][channel].is_object()
 }
 
 pub fn native_platform(platform: &str) -> bool {
-    matches!(platform, "macos" | "linux" | "android" | "android_tv")
+    NATIVE_PLATFORMS.contains(&platform)
 }
 
 /// The descriptor locator selects a surface; it is never authentication.
@@ -256,10 +375,12 @@ impl Surface {
             enrollment_id: *enrollment_id,
             platform: platform.clone(),
             name: "Native device",
-            approval: if self.manifest == native_manifest() {
+            approval: if self.manifest == native_manifest(platform) {
                 NATIVE_APPROVAL
+            } else if self.manifest == legacy_native_speech_manifest() {
+                LEGACY_NATIVE_SPEECH_APPROVAL
             } else {
-                LEGACY_NATIVE_APPROVAL
+                LEGACY_NATIVE_DISPLAY_APPROVAL
             },
             revision: self.revision,
             public_key_fingerprint,
@@ -481,9 +602,9 @@ pub fn transition(
             {
                 return Err(RegistryError::InvalidConnection);
             }
-            // Reapproving a persisted input-only profile is a real transition
-            // to the current display profile; a current profile is idempotent.
-            if !record.revoked && record.approved_manifest == native_manifest() {
+            // Reapproving a persisted earlier profile is a real transition to
+            // the current action profile; a current profile is idempotent.
+            if !record.revoked && record.approved_manifest == native_manifest(platform) {
                 return if *expected_revision == record.revision
                     || record.revision.checked_sub(1) == Some(*expected_revision)
                 {
@@ -506,7 +627,7 @@ pub fn transition(
                     public_key: public_key.clone(),
                     platform: platform.clone(),
                 },
-                approved_manifest: native_manifest(),
+                approved_manifest: native_manifest(platform),
                 surface_id,
                 revision: expected_revision
                     .checked_add(1)
@@ -743,7 +864,7 @@ mod tests {
     const OTHER_NATIVE_KEY: &str =
         "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWsBy9HAHlgGVxGBS1g_Bh6dQxzKmUzqExNEm_l8hArgo";
 
-    fn native_approval(enrollment_id: Uuid, expected_revision: u64) -> Mutation {
+    fn native_mutation(enrollment_id: Uuid, expected_revision: u64) -> Mutation {
         Mutation::ApproveNative {
             enrollment_id,
             public_key: NATIVE_KEY.into(),
@@ -758,16 +879,16 @@ mod tests {
         let id = native_surface_id("U:owner", enrollment);
         assert_ne!(id, native_surface_id("U:other", enrollment));
         let (approved, kind) =
-            transition(None, 0, id, &native_approval(enrollment, 0), 100).unwrap();
+            transition(None, 0, id, &native_mutation(enrollment, 0), 100).unwrap();
         assert_eq!(kind, Some("surface.approved"));
         assert_eq!(approved.revision, 1);
-        assert_eq!(approved.approved_manifest, native_manifest());
+        assert_eq!(approved.approved_manifest, native_manifest("macos"));
         for revision in [0, 1] {
             let (retry, kind) = transition(
                 Some(&approved),
                 16,
                 id,
-                &native_approval(enrollment, revision),
+                &native_mutation(enrollment, revision),
                 200,
             )
             .unwrap();
@@ -808,14 +929,14 @@ mod tests {
                     Some(&revoked),
                     0,
                     id,
-                    &native_approval(enrollment, revision),
+                    &native_mutation(enrollment, revision),
                     400
                 ),
                 Err(RegistryError::SequenceConflict)
             ));
         }
         let (reapproved, _) =
-            transition(Some(&revoked), 0, id, &native_approval(enrollment, 2), 500).unwrap();
+            transition(Some(&revoked), 0, id, &native_mutation(enrollment, 2), 500).unwrap();
         assert_eq!(reapproved.revision, 3);
         assert!(!reapproved.revoked);
         assert!(matches!(
@@ -827,7 +948,7 @@ mod tests {
                 Some(&reapproved),
                 1,
                 id,
-                &native_approval(enrollment, 0),
+                &native_mutation(enrollment, 0),
                 600
             ),
             Err(RegistryError::SequenceConflict)
@@ -838,22 +959,216 @@ mod tests {
         assert_eq!(projection["actorIdentity"], "unknown");
         assert_eq!(projection["renderVerified"], false);
         assert_eq!(projection["playbackVerified"], false);
+        assert_eq!(projection["approval"], NATIVE_APPROVAL);
         assert_eq!(
             projection["manifest"]["capabilities"]["output"],
-            serde_json::json!({
-                "visual.card": {"maxClass": "shared_room", "shared": true},
-                "audio.tts": {"maxClass": "shared_room", "shared": true}
-            })
+            native_manifest("macos")["capabilities"]["output"]
         );
         assert!(projection.get("publicKey").is_none());
         assert!(!reapproved.view(600).available);
+    }
+
+    /// The set of legal native manifests is closed and enumerated, and the
+    /// owner reads the exact capability list in Center before approving.
+    #[test]
+    fn native_action_manifest_is_the_exact_value_per_platform() {
+        let channels = |platform: &str| {
+            let manifest = native_manifest(platform);
+            let mut names: Vec<String> = manifest["capabilities"]["output"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            channels("macos"),
+            [
+                "action.open",
+                "action.run",
+                "audio.tts",
+                "confirm.tap",
+                "visual.card"
+            ]
+        );
+        assert_eq!(
+            channels("linux"),
+            ["action.open", "audio.tts", "confirm.tap", "visual.card"]
+        );
+        assert_eq!(
+            channels("android"),
+            [
+                "action.open",
+                "action.route",
+                "audio.tts",
+                "confirm.tap",
+                "visual.card"
+            ]
+        );
+        assert_eq!(
+            channels("android_tv"),
+            ["action.play", "audio.tts", "visual.card"]
+        );
+        // Only macOS can ask a person to prove they are the device owner, so
+        // only macOS declares the attestation a high-risk command requires.
+        assert_eq!(
+            native_manifest("macos")["capabilities"]["output"]["confirm.tap"]["attestation"],
+            serde_json::json!(["foreground_tap", "device_owner_auth"])
+        );
+        assert_eq!(
+            native_manifest("linux")["capabilities"]["output"]["confirm.tap"]["attestation"],
+            serde_json::json!(["foreground_tap"])
+        );
+        for platform in NATIVE_PLATFORMS {
+            let manifest = native_manifest(platform);
+            assert_eq!(
+                manifest["cognition"],
+                serde_json::json!({"declaredClass": 0, "models": []})
+            );
+            assert_eq!(manifest["authority"]["reflexive"], serde_json::json!([]));
+            let constraints = manifest["constraints"].as_array().unwrap().clone();
+            for required in ["actor_unknown", "occupancy_unknown", "effect_unverified"] {
+                assert!(
+                    constraints.contains(&serde_json::json!(required)),
+                    "{platform}"
+                );
+            }
+            // Every channel defaults to the shared-room ceiling; only the
+            // owner's own personal declaration lifts it, at routing time.
+            for channel in manifest["capabilities"]["output"]
+                .as_object()
+                .unwrap()
+                .values()
+            {
+                assert_eq!(channel["maxClass"], "shared_room");
+            }
+            // The manifest names exactly one approval, for its own platform.
+            let mut record = transition(
+                None,
+                0,
+                Uuid::new_v4(),
+                &Mutation::ApproveNative {
+                    enrollment_id: Uuid::new_v4(),
+                    public_key: NATIVE_KEY.into(),
+                    platform: platform.into(),
+                    expected_revision: 0,
+                },
+                100,
+            )
+            .unwrap()
+            .0;
+            assert_eq!(native_approval(&record), Some(NATIVE_APPROVAL));
+            record.approved_manifest = legacy_native_speech_manifest();
+            assert_eq!(
+                native_approval(&record),
+                Some(LEGACY_NATIVE_SPEECH_APPROVAL)
+            );
+            assert!(native_declares(&record, "audio.tts"));
+            assert!(!native_declares(&record, "action.open"));
+            record.approved_manifest = legacy_native_display_manifest();
+            assert_eq!(
+                native_approval(&record),
+                Some(LEGACY_NATIVE_DISPLAY_APPROVAL)
+            );
+            assert!(!native_declares(&record, "audio.tts"));
+            // A manifest from another platform is unknown, not "some known one".
+            let other = NATIVE_PLATFORMS.iter().find(|p| **p != platform).unwrap();
+            record.approved_manifest = native_manifest(other);
+            assert_eq!(native_approval(&record), None);
+            assert!(!native_declares(&record, "visual.card"));
+        }
+    }
+
+    /// The published contract and the code are one statement, not two. Every
+    /// manifest, profile name and enumerated value the owner reads in Center
+    /// is the exact value this registry mints.
+    #[test]
+    fn native_contract_matches_the_published_manifests_and_profiles() {
+        let contract: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../contracts/ambiance-native.json"))
+                .unwrap();
+        assert_eq!(contract["profile"], NATIVE_APPROVAL);
+        assert_eq!(
+            contract["descriptor"]["fields"]["approval"],
+            NATIVE_APPROVAL
+        );
+        for platform in NATIVE_PLATFORMS {
+            assert_eq!(
+                contract["deviceActions"]["manifests"][platform],
+                native_manifest(platform),
+                "{platform}"
+            );
+        }
+        let statuses = contract["deviceActions"]["statuses"].as_array().unwrap();
+        let expected = [
+            crate::ambiance::ActionStatus::Proposed,
+            crate::ambiance::ActionStatus::AwaitingGrant,
+            crate::ambiance::ActionStatus::Dispatched,
+            crate::ambiance::ActionStatus::Acknowledged,
+            crate::ambiance::ActionStatus::Running,
+            crate::ambiance::ActionStatus::Completed,
+            crate::ambiance::ActionStatus::Refused,
+            crate::ambiance::ActionStatus::Failed,
+            crate::ambiance::ActionStatus::Cancelled,
+            crate::ambiance::ActionStatus::OutcomeUnknown,
+        ];
+        assert_eq!(statuses.len(), expected.len());
+        for (published, status) in statuses.iter().zip(expected) {
+            assert_eq!(*published, serde_json::to_value(status).unwrap());
+        }
+        let channels = contract["deviceActions"]["channels"].as_object().unwrap();
+        let declared = [
+            crate::ambiance::Channel::ActionOpen,
+            crate::ambiance::Channel::ActionRoute,
+            crate::ambiance::Channel::ActionPlay,
+            crate::ambiance::Channel::ActionRun,
+            crate::ambiance::Channel::ConfirmTap,
+        ];
+        assert_eq!(channels.len(), declared.len());
+        for channel in declared {
+            assert!(channels.contains_key(channel.as_str()), "{channel:?}");
+        }
+        assert_eq!(
+            contract["deviceActions"]["digests"]["vectors"],
+            "contracts/fixtures/ambiance-device-action-digests-v1.json"
+        );
+        assert_eq!(
+            contract["deviceActions"]["owner"]["approve-device-actions-v1"]["routes"]["GET|POST"],
+            "/surface-api/v1/surfaces/:surfaceId/device-actions"
+        );
+        assert_eq!(
+            contract["deviceActions"]["owner"]["approve-device-command-v1"]["platforms"],
+            serde_json::json!(["macos"])
+        );
+    }
+
+    /// A television is bystander-perceivable by construction: it is never a
+    /// ceremony venue and never runs an owner command.
+    #[test]
+    fn android_tv_never_declares_confirm_tap_or_action_run() {
+        let tv = native_manifest("android_tv");
+        for absent in ["confirm.tap", "action.run", "action.open", "action.route"] {
+            assert!(tv["capabilities"]["output"][absent].is_null(), "{absent}");
+            assert!(tv["expression"][absent].is_null(), "{absent}");
+        }
+        assert_eq!(
+            tv["capabilities"]["output"]["action.play"],
+            serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 30000})
+        );
+        // It never captures the owner's screen either.
+        assert_eq!(
+            tv["capabilities"]["input"],
+            serde_json::json!(["text.public", "state.visibility", "action.report"])
+        );
     }
 
     #[test]
     fn native_registry_immutable_descriptor_profile_boundaries_and_cap() {
         let enrollment = Uuid::new_v4();
         let id = native_surface_id("U:owner", enrollment);
-        let approve = native_approval(enrollment, 0);
+        let approve = native_mutation(enrollment, 0);
         let (native, _) = transition(None, 0, id, &approve, 100).unwrap();
         let (revoked, _) = transition(
             Some(&native),
@@ -920,11 +1235,11 @@ mod tests {
             Err(RegistryError::SurfaceLimit)
         ));
         assert!(matches!(
-            transition(Some(&revoked), 16, id, &native_approval(enrollment, 2), 300),
+            transition(Some(&revoked), 16, id, &native_mutation(enrollment, 2), 300),
             Err(RegistryError::SurfaceLimit)
         ));
         assert!(matches!(
-            transition(None, 0, id, &native_approval(Uuid::nil(), 0), 100),
+            transition(None, 0, id, &native_mutation(Uuid::nil(), 0), 100),
             Err(RegistryError::InvalidConnection)
         ));
         assert!(matches!(
@@ -932,7 +1247,7 @@ mod tests {
                 Some(&native),
                 1,
                 id,
-                &native_approval(enrollment, MAX_NATIVE_REVISION),
+                &native_mutation(enrollment, MAX_NATIVE_REVISION),
                 300
             ),
             Err(RegistryError::InvalidConnection)
@@ -994,7 +1309,7 @@ mod tests {
     fn native_registry_locator_claim_survives_revocation() {
         let enrollment = Uuid::new_v4();
         let id = native_surface_id("U:owner", enrollment);
-        let (native, _) = transition(None, 0, id, &native_approval(enrollment, 0), 100).unwrap();
+        let (native, _) = transition(None, 0, id, &native_mutation(enrollment, 0), 100).unwrap();
         let (revoked, _) = transition(
             Some(&native),
             1,

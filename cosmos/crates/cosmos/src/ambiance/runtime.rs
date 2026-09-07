@@ -507,7 +507,7 @@ impl AmbianceRuntime {
                 .ok()
                 .flatten()
                 .is_some_and(|surface| {
-                    surface.manifest == crate::surface_registry::native_manifest()
+                    surface.manifest["capabilities"]["output"]["audio.tts"].is_object()
                 }),
         };
         let RoomInput {
@@ -620,6 +620,7 @@ impl AmbianceRuntime {
                                 fence: fence.clone(),
                                 app_digest: context.app_digest(),
                                 bytes: context.bytes(),
+                                document: context.document.clone(),
                             },
                         )
                         .await;
@@ -717,6 +718,57 @@ impl AmbianceRuntime {
         // of the model's hint and outranks it when both exist.
         let hint = explicit.or(proposal.target());
         let (intent, privacy) = match proposal {
+            // A proposed action names a candidate this turn's own context
+            // offered. The runtime resolves the identifier into a bound
+            // command from state it committed itself; nothing the model wrote
+            // becomes an argument.
+            super::analysis::Proposal::Action {
+                device_action,
+                privacy,
+                ..
+            } => {
+                let bound = self
+                    .store
+                    .runtime(
+                        principal,
+                        RuntimeOperation::BindDeviceAction {
+                            fence: fence.clone(),
+                            operation: device_action.operation,
+                            reference: device_action.reference,
+                        },
+                    )
+                    .await;
+                match bound {
+                    Ok(RuntimeResult::DeviceActionBound(operation)) => {
+                        (SemanticIntent::DeviceAction { operation }, privacy)
+                    }
+                    // An unknown, expired, class-ineligible or context-forbidden
+                    // reference is a parse failure, handled exactly like a
+                    // malformed proposal. Nothing is repaired by guessing.
+                    Ok(_) | Err(super::RuntimeError::InvalidRequest) => {
+                        tracing::warn!(turn = %fence.turn_id, "ambiance cognition named no resolvable candidate");
+                        self.cancel(principal, &fence).await?;
+                        return Err(Status::failed_precondition(
+                            "cognition did not provide a supported intent",
+                        ));
+                    }
+                    // The list the reference belonged to is gone. Say so on the
+                    // owner's own screen instead of ending in a silent cancel.
+                    Err(super::RuntimeError::Stale) => {
+                        let result = self
+                            .propose_private_card(
+                                principal,
+                                &fence,
+                                "I've lost that list. Ask again and I'll show it.".into(),
+                                privacy_floor,
+                            )
+                            .await?;
+                        cancellation.fence = None;
+                        return Ok(result);
+                    }
+                    Err(error) => return Err(runtime_error(error)),
+                }
+            }
             super::analysis::Proposal::Information {
                 intent, privacy, ..
             }
@@ -762,8 +814,25 @@ impl AmbianceRuntime {
                         authenticated,
                     )
                     .await?;
+                // The same call already said what to do with the place, before
+                // any provider result existed. One place resolves to a route
+                // the runtime binds from its own receipt; more than one is
+                // ambiguous, so the address card stands and picking one is a
+                // fresh request.
+                let route = match (place_lookup.then, output.places.as_slice()) {
+                    (Some(super::analysis::LookupThen::Route), [place]) => {
+                        self.bind_place_route(principal, &fence, place).await?
+                    }
+                    _ => None,
+                };
                 pending_visual = output.pending;
-                (output.intent, output.privacy)
+                match route {
+                    Some(operation) => {
+                        pending_visual = None;
+                        (SemanticIntent::DeviceAction { operation }, output.privacy)
+                    }
+                    None => (output.intent, output.privacy),
+                }
             }
             super::analysis::Proposal::Analysis {
                 analysis, privacy, ..
@@ -813,13 +882,12 @@ impl AmbianceRuntime {
                     )
                     .await
                     .map_err(runtime_error)?;
-                let intent = match analysis.channel {
-                    super::Channel::AudioTts => {
-                        SemanticIntent::InformationalSpeech { text: result.text }
-                    }
-                    super::Channel::VisualCard => {
-                        SemanticIntent::VisualTextCard { text: result.text }
-                    }
+                // An analysis request names a render channel; its parser
+                // admits no other value.
+                let intent = if analysis.channel == super::Channel::AudioTts {
+                    SemanticIntent::InformationalSpeech { text: result.text }
+                } else {
+                    SemanticIntent::VisualTextCard { text: result.text }
                 };
                 (intent, privacy)
             }
@@ -990,11 +1058,13 @@ impl AmbianceRuntime {
         Ok(card)
     }
 
-    /// The owner's bounded recent context, offered as one sentence of system
-    /// prompt. The offer is logged under the turn; an unavailable Store or an
-    /// expired memory simply offers nothing.
+    /// The owner's bounded recent context and this turn's runtime-minted
+    /// action candidates, offered as sentences of system prompt. Every offer
+    /// is logged under the turn; an unavailable Store or an expired memory
+    /// simply offers nothing. Stripping the whole note must leave a safe
+    /// decision: it perturbs what the model proposes, never what is eligible.
     async fn recent_context_note(&self, principal: &str, fence: &TurnFence) -> String {
-        let Ok(RuntimeResult::RecentContext(Some(context))) = self
+        let contexts = match self
             .store
             .runtime(
                 principal,
@@ -1003,12 +1073,150 @@ impl AmbianceRuntime {
                 },
             )
             .await
+        {
+            Ok(RuntimeResult::RecentContext(contexts)) => contexts,
+            _ => Vec::new(),
+        };
+        let mut note = String::new();
+        for context in &contexts {
+            let source = self.context_source(principal, context.source_surface).await;
+            let text = context.text.replace(['\n', '\r', '"'], " ");
+            match context.kind {
+                super::RecentContextKind::PlaceQuery => note.push_str(&format!(
+                    " Recent context: a place lookup for \"{text}\" was completed from {source} a few minutes ago at the shared_room class. If the current request refers to that place (for example the restaurant just found on the computer), propose place_lookup with exactly that query at that same class, adding target only when the current text names the screen to use; referring back to a public place is not private."
+                )),
+                super::RecentContextKind::Choices => {
+                    let items = context
+                        .items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, title)| {
+                            format!("{}. {}", index + 1, title.replace(['\n', '\r', '"'], " "))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    note.push_str(&format!(
+                        " Recent context: a numbered choice list \"{text}: {items}\" was shown on {source} a few minutes ago at the shared_room class. If the current request names one of its items by number or title (for example \"number two\" or \"the second one\"), resolve it to that item's title: for a trailer request propose web_lookup with the query \"<item title> trailer\"; otherwise answer informationally about that item. It can be played only by proposing device_action with that item's candidate identifier, and only when this turn lists one below; otherwise nothing can be played and you must never claim playback."
+                    ));
+                }
+                // A continuation names its identifier and its kind and
+                // nothing else: no title, application, path or line number.
+                super::RecentContextKind::Continuation => note.push_str(
+                    " Recent context: a document from an earlier turn on one of the owner's own screens is still available as the candidate cont:1.",
+                ),
+            }
+        }
+        note.push_str(&self.action_note(principal, fence).await);
+        note
+    }
+
+    /// Bind a route from this turn's own completed places receipt. Every
+    /// argument is provider evidence the runtime committed under the origin's
+    /// own lookup permission; coordinates become canonical decimal strings
+    /// here, once, so four languages hash the same bytes.
+    async fn bind_place_route(
+        &self,
+        principal: &str,
+        fence: &TurnFence,
+        place: &crate::backends::places::LookupPlace,
+    ) -> Result<Option<super::action::Operation>, Status> {
+        let (Some(lat), Some(lng)) = (
+            super::action::coordinate(place.latitude),
+            super::action::coordinate(place.longitude),
+        ) else {
+            return Ok(None);
+        };
+        let operation = super::action::Operation::Route {
+            place_id: place.place_id.clone(),
+            name: place.name.clone(),
+            address: place.address.clone(),
+            lat,
+            lng,
+        };
+        if !operation.valid() {
+            return Ok(None);
+        }
+        match self
+            .store
+            .runtime(
+                principal,
+                RuntimeOperation::BindPlaceRoute {
+                    fence: fence.clone(),
+                    operation,
+                },
+            )
+            .await
+        {
+            Ok(RuntimeResult::DeviceActionBound(operation)) => Ok(Some(operation)),
+            Ok(_) | Err(super::RuntimeError::InvalidRequest | super::RuntimeError::Stale) => {
+                Ok(None)
+            }
+            Err(error) => Err(runtime_error(error)),
+        }
+    }
+
+    /// Which kinds of operation are possible this turn, and the candidate
+    /// identifiers. Never a surface identity, a count of devices or a
+    /// platform name.
+    async fn action_note(&self, principal: &str, fence: &TurnFence) -> String {
+        let Ok(RuntimeResult::ActionCandidates(offer)) = self
+            .store
+            .runtime(
+                principal,
+                RuntimeOperation::ActionCandidates {
+                    fence: fence.clone(),
+                },
+            )
+            .await
         else {
             return String::new();
         };
-        let source = match self
+        if offer.is_empty() {
+            return String::new();
+        }
+        let operations = offer
+            .operations
+            .iter()
+            .map(|kind| match kind {
+                super::action::OperationKind::Open => "open",
+                super::action::OperationKind::Route => "route",
+                super::action::OperationKind::Play => "play",
+                super::action::OperationKind::Run => "run",
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let candidates = offer
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let reference = &candidate.reference;
+                match candidate.kind {
+                    super::action::CandidateKind::Document => {
+                        format!("{reference} (a document on the owner's own screen)")
+                    }
+                    super::action::CandidateKind::Continuation => {
+                        format!("{reference} (a document from an earlier turn)")
+                    }
+                    super::action::CandidateKind::Command if candidate.mutates => {
+                        let label = candidate.label.replace(['\n', '\r', '"'], " ");
+                        format!("{reference} \"{label}\" (changes files)")
+                    }
+                    _ => {
+                        let label = candidate.label.replace(['\n', '\r', '"'], " ");
+                        format!("{reference} \"{label}\"")
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(" Actions available this turn: {operations}. Candidates: {candidates}.")
+    }
+
+    /// The kind of screen a memory came from, as a person would name it.
+    async fn context_source(&self, principal: &str, surface: uuid::Uuid) -> &'static str {
+        match self
             .store
-            .surface(principal, context.source_surface)
+            .surface(principal, surface)
             .await
             .ok()
             .flatten()
@@ -1026,15 +1234,6 @@ impl AmbianceRuntime {
             Some(crate::surface_registry::Binding::Browser) => "the browser",
             Some(crate::surface_registry::Binding::Pin { .. }) => "the Ai Pin",
             None => "another approved screen",
-        };
-        let text = context.text.replace(['\n', '\r', '"'], " ");
-        match context.kind {
-            super::RecentContextKind::PlaceQuery => format!(
-                " Recent context: a place lookup for \"{text}\" was completed from {source} a few minutes ago at the shared_room class. If the current request refers to that place (for example the restaurant just found on the computer), propose place_lookup with exactly that query at that same class, adding target only when the current text names the screen to use; referring back to a public place is not private."
-            ),
-            super::RecentContextKind::Choices => format!(
-                " Recent context: a numbered choice list \"{text}\" was shown on {source} a few minutes ago at the shared_room class. If the current request names one of its items by number or title (for example \"number two\" or \"the second one\"), resolve it to that item's title: for a trailer request propose web_lookup with the query \"<item title> trailer\"; otherwise answer informationally about that item. Nothing can be played; never claim playback."
-            ),
         }
     }
 
@@ -1080,6 +1279,7 @@ impl AmbianceRuntime {
                 },
                 privacy,
                 pending: None,
+                places: Vec::new(),
             });
         };
         let Some(policy) = approval.policy else {
@@ -1091,6 +1291,7 @@ impl AmbianceRuntime {
                 },
                 privacy,
                 pending: None,
+                places: Vec::new(),
             });
         };
         // A query the runtime classed above the permission's ceiling is never
@@ -1106,6 +1307,7 @@ impl AmbianceRuntime {
                 },
                 privacy,
                 pending: None,
+                places: Vec::new(),
             });
         }
         let prepared = self.prepare_lookup(&policy.provider, query).map_err(|_| {
@@ -1208,6 +1410,7 @@ impl AmbianceRuntime {
                         intent: SemanticIntent::VisualTextCard { text },
                         privacy,
                         pending: None,
+                        places: Vec::new(),
                     },
                 )
             }
@@ -1231,6 +1434,7 @@ impl AmbianceRuntime {
                         },
                         privacy,
                         pending: Some(pending),
+                        places: evidence.places.clone(),
                     },
                 )
             }
@@ -1502,6 +1706,10 @@ struct LookupOutput {
     intent: SemanticIntent,
     privacy: PrivacyClass,
     pending: Option<super::visual::Pending>,
+    /// The completed places receipt, kept in this scope only so the runtime
+    /// can bind a route from its own provider result. It never reaches the
+    /// model and never enters a durable action.
+    places: Vec<crate::backends::places::LookupPlace>,
 }
 
 enum PreparedLookup {

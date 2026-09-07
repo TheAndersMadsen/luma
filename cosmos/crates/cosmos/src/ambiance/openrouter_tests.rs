@@ -162,6 +162,60 @@ fn openrouter_proposal_normalizes_nested_and_combined_lookups() {
     );
 }
 
+/// Dropping a branch is only safe when nothing was going to happen. A device
+/// action combined with any other branch is refused before any runtime work:
+/// silently discarding the answer and keeping the effect fails in the wrong
+/// direction. A nested one is still lifted to its own branch.
+#[test]
+fn ambiance_proposal_rejects_device_action_combined_with_any_branch() {
+    let with = |arguments: &str| {
+        let mut changed = response();
+        changed["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
+            arguments.into();
+        parse(&serde_json::to_vec(&changed).unwrap()).map(|r| r.tool_call.unwrap().arguments)
+    };
+    let action = r#""device_action":{"operation":"play","reference":"choice:2"}"#;
+    let alone = with(&format!(r#"{{{action},"privacy":"shared_room"}}"#)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&alone).unwrap(),
+        json!({"device_action":{"operation":"play","reference":"choice:2"},"privacy":"shared_room"})
+    );
+    for other in [
+        r#""intent":{"kind":"informational_speech","text":"Playing it now."}"#,
+        r#""web_lookup":{"query":"Heat trailer"}"#,
+        r#""place_lookup":{"query":"Barr"}"#,
+        r#""analysis":{"question":"which one","channel":"audio.tts"}"#,
+        r#""choice_list":{"title":"Films","items":[{"title":"Arrival","detail":"2016"},{"title":"Heat","detail":"1995"}]}"#,
+    ] {
+        assert!(
+            with(&format!(r#"{{{action},{other},"privacy":"shared_room"}}"#)).is_err(),
+            "{other}"
+        );
+    }
+    // A device action nested inside intent is lifted, not dropped.
+    let lifted = with(
+        r#"{"intent":{"kind":"device_action","operation":"open","reference":"cont:1"},"privacy":"private","target":"linux"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&lifted).unwrap(),
+        json!({"device_action":{"operation":"open","reference":"cont:1"},"privacy":"private","target":"linux"})
+    );
+    // The strict parser still refuses an invented argument or reference.
+    for invalid in [
+        r#"{"device_action":{"operation":"open","reference":"cont:1","url":"https://x.test"},"privacy":"public"}"#,
+        r#"{"device_action":{"operation":"exec","reference":"cmd:x"},"privacy":"public"}"#,
+        r#"{"device_action":{"operation":"open","reference":"/etc/passwd"},"privacy":"public"}"#,
+        r#"{"device_action":{"operation":"open"},"privacy":"public"}"#,
+    ] {
+        let arguments = with(invalid).unwrap_or_else(|_| invalid.to_owned());
+        assert!(
+            serde_json::from_str::<crate::ambiance::analysis::Proposal>(&arguments).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn openrouter_http_uses_only_selected_upstream_bounds_and_no_redirects() {
     use axum::{

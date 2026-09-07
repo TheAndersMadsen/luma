@@ -111,6 +111,36 @@ it("shows every device as removed when no list could be read and bounds the wind
   expect(parseLedgerTurns({ events: [] })).toEqual([]);
 });
 
+it("parses device action rows and says what the device reported, never what it accepted", () => {
+  const began = event({ kind: "turn_began", turn_id: turn(20), generation: 1, origin: pin, request_digest: "c".repeat(64), privacy: "shared_room" });
+  const changed = (status: string, channel: string, surface_id: string) =>
+    event({ kind: "action_changed", action_id: action(20), turn_id: turn(20), generation: 1, status, channel,
+      surface_id, incarnation: gone, content_digest: "d".repeat(64), deadline_ms: 5, attempt: 1 });
+  const row = (events: unknown[]) => activityRows(parseLedgerTurns({ events }), kinds)[0];
+  const decision = event({ kind: "decision", turn_id: turn(20), generation: 1, action_id: action(20), privacy: "shared_room",
+    candidates: [candidate(tv, "action.play", null), candidate(mac, "action.run", "capability"), candidate(pin, "action.play", "capability")] });
+  // Bound and legal at the device is not an outcome; only its report is.
+  expect(row([began, decision, changed("dispatched", "action.play", tv)]).outcome).toBe("Waiting for a device…");
+  expect(row([began, decision, changed("acknowledged", "action.play", tv)]).outcome).toBe("Waiting for a device…");
+  expect(row([began, decision, changed("running", "action.run", mac)]).outcome).toBe("Working on a device…");
+  expect(row([began, decision, changed("awaiting_grant", "action.run", mac)]).outcome).toBe("Waiting for your confirmation…");
+  expect(row([began, decision, changed("completed", "action.play", tv)]).outcome).toBe("Done on your TV");
+  expect(row([began, decision, changed("refused", "action.run", mac)]).outcome).toBe("Not done on your Mac");
+  expect(row([began, decision, changed("failed", "action.run", mac)]).outcome).toBe("Not done on your Mac");
+  expect(row([began, decision, changed("outcome_unknown", "action.play", tv)]).outcome).toBe("Cannot confirm");
+  expect(row([began, decision, changed("completed", "action.play", tv)]).why.candidates).toEqual([
+    "Your TV could play it.",
+    "Your Mac could not run that task — it is not approved for that.",
+    "Your Ai Pin could not play it — it is not approved for that.",
+  ]);
+  // The ceremony channel is named in the owner's own words too.
+  expect(row([began, event({ kind: "decision", turn_id: turn(20), generation: 1, action_id: action(20), privacy: "shared_room",
+    candidates: [candidate(mac, "confirm.tap", null)] })]).why.candidates).toEqual(["Your Mac could ask you to confirm."]);
+  // Nothing about an action names an operation, a locator or a digest.
+  const text = JSON.stringify(row([began, decision, changed("completed", "action.play", tv)]));
+  for (const secret of ["d".repeat(64), gone, tv, "action.play"]) expect(text).not.toContain(secret);
+});
+
 it("rejects malformed routing events instead of guessing", () => {
   const began = event({ kind: "turn_began", turn_id: turn(1), generation: 1, origin: phone, request_digest: "c".repeat(64), privacy: "shared_room" });
   for (const bad of [

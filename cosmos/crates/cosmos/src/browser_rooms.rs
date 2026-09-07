@@ -643,6 +643,13 @@ async fn deliver(
                         ) || (a.status == ActionStatus::Proposed
                             && speaking.contains_key(&(identity.clone(), a.id)))
                     }
+                    // Action and ceremony channels carry their own frames.
+                    // The card and speech room path never dispatches them.
+                    Channel::ActionOpen
+                    | Channel::ActionRoute
+                    | Channel::ActionPlay
+                    | Channel::ActionRun
+                    | Channel::ConfirmTap => false,
                 })
                 .map(|a| (a.id, a))
                 .collect();

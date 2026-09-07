@@ -837,7 +837,11 @@ async fn ambiance_places_conversation_leaves_recent_context_for_the_next_request
         panic!("structured Places proposal")
     };
     let state = f.store.ambiance_runtime_state(f.principal()).await;
-    let context = state.recent_context.clone().expect("recent place query");
+    let context = state
+        .recent_context
+        .first()
+        .cloned()
+        .expect("recent place query");
     assert_eq!(context.text.trim(), QUERY);
     assert_eq!(context.source_surface, f.browser.surface_id);
     assert_eq!(context.privacy, PrivacyClass::SharedRoom);

@@ -205,7 +205,9 @@ pub(crate) fn command(action: &Action, card: Option<&Card>) -> Option<Value> {
             }
             card.value()
         }
-        SemanticIntent::InformationalSpeech { .. } => return None,
+        SemanticIntent::InformationalSpeech { .. }
+        | SemanticIntent::DeviceAction { .. }
+        | SemanticIntent::Confirmation { .. } => return None,
     };
     Some(
         json!({"version":1,"actionId":action.id,"turnId":action.turn_id,"generation":action.generation,"surfaceId":action.surface_id,"incarnation":action.incarnation,"channel":"visual.card","contentDigest":action.content_digest,"content":content,"expiresAt":action.display_expires_at_ms,"privacy":action.privacy}),

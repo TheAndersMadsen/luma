@@ -17,25 +17,41 @@
     {
       "id": "isolated-media-transport-rooms",
       "status": "conservative-interpretation",
-      "sourceSections": ["4.3", "5.1", "5.2"],
+      "sourceSections": [
+        "4.3",
+        "5.1",
+        "5.2"
+      ],
       "decision": "Keep one logical session and one policy authority, but use a separate two-party media room per client incarnation alongside media-disabled shared coordination. The pinned SFU has no durable receiver track allowlist and client-owned publisher permissions are cooperative. Room isolation preserves the intended privacy boundary; it is a transport adaptation rather than the paper's literal single-room topology."
     },
     {
       "id": "occupied-room-private-channel",
       "status": "unresolved",
-      "sourceSections": ["4.8", "6", "7"],
+      "sourceSections": [
+        "4.8",
+        "6",
+        "7"
+      ],
       "decision": "The formal occupancy rule excludes higher-class content from every channel in occupied or unknown rooms, while headset scenarios suggest an exception. Pending an explicit policy decision, new routing must fail closed; a private headset is not an implicit exemption."
     },
     {
       "id": "shared-origin-private-memory",
       "status": "conservative-interpretation",
-      "sourceSections": ["4.6", "6", "9.2"],
+      "sourceSections": [
+        "4.6",
+        "6",
+        "9.2"
+      ],
       "decision": "A private output does not authorize sensitive memory retrieval for a shared-origin request. Require a new authorized private-origin continuation rather than importing private memory to satisfy the shared-microphone example."
     },
     {
       "id": "unrestricted-outcome-prose",
       "status": "unresolved",
-      "sourceSections": ["4.4", "5.1", "9.2"],
+      "sourceSections": [
+        "4.4",
+        "5.1",
+        "9.2"
+      ],
       "decision": "Exact runtime outcomes can gate controlled expressions and action templates. Arbitrary model prose is not proven universally outcome-truthful, in either native audio or generated-text TTS; invariant 10 remains unverified."
     }
   ],
@@ -116,8 +132,8 @@
       "id": "native-installation-manifest-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/surface_registry.rs",
-      "anchor": "pub fn native_manifest()",
-      "scope": "Defines one owner-approved installation-key binding and a fixed class-zero ceiling of public text input, one shared-room visual card and one shared-room spoken reply for macOS, Linux, Android and Android TV hints; registry-owned approval revision is independent of connection liveness, and display-only approvals stay a known legacy profile without speech.",
+      "anchor": "pub fn legacy_native_speech_manifest()",
+      "scope": "Defines one owner-approved installation-key binding and a fixed class-zero ceiling of public text input, one shared-room visual card and one shared-room spoken reply, kept as the persisted speech profile for every platform; registry-owned approval revision is independent of connection liveness, and display-only approvals stay a known legacy profile without speech.",
       "limitation": "Manifest definition only. Platform is a display hint, actor and occupancy remain unknown, and there is no native capture, media, private-memory or autonomy authority. Active output requires separately verified current connection/room admission, reported visibility and the origin's speech-provider permission; physical device acceptance remains unfinished."
     },
     {
@@ -807,31 +823,139 @@
       "anchor": "fn snapshots_project_choice_cards_and_turn_status_without_surface_identity()",
       "scope": "Defines the C/JNI snapshot projection of choice cards and turn status, and the bounded text, target and screen-context arguments of the new send functions.",
       "limitation": "Binding projection only; macOS, Android and Linux applications consume it separately."
+    },
+    {
+      "id": "device-action-manifest-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/surface_registry.rs",
+      "anchor": "pub fn native_manifest(platform: &str)",
+      "scope": "The native approval profile is per platform: macOS declares action.open, action.run and confirm.tap with a device-owner attestation, Linux the same minus action.run with a foreground tap, the phone action.open and action.route, and the TV action.play with no ceremony venue at all. Every channel declares the shared-room default ceiling, and effect_unverified and no_effect_isolation are stated as honesty fields.",
+      "limitation": "Manifest definition and its byte equality only. Nothing dispatches to these channels, no client implements them, and no physical device has carried out an action."
+    },
+    {
+      "id": "device-action-contract-definition",
+      "kind": "implementation",
+      "path": "contracts/ambiance-native.json",
+      "anchor": "native-device-action-v4",
+      "scope": "The published per-platform manifests, action channels, statuses, candidate grammar, digest tuples, bounds and the two owner permission routes, asserted against the Rust enums and manifests by a conformance test.",
+      "limitation": "Machine-readable definition only. It records what is defined, and its own notShipped list names the dispatch, ceremony, outcome and client work that does not exist."
+    },
+    {
+      "id": "device-action-profile-compatibility-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/native_connection_tests.rs",
+      "anchor": "fn a_v3_installation_still_connects_renders_and_speaks_after_the_v4_bump",
+      "scope": "An installation on the earlier speech profile receives a challenge carrying its own approval, opens its signed connection, stays an eligible card target, keeps declaring speech, and is refused every action channel with a capability blocker until the owner reapproves.",
+      "limitation": "Server-side only. The shared client still compiles in a single profile string, so it must be widened before any installation can be reapproved to the action profile."
+    },
+    {
+      "id": "device-action-digest-vector-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_device_action_digest_matches_the_canonical_tuple",
+      "scope": "Nine canonical content-digest tuples asserted from the production types against literal vectors in contracts/fixtures/ambiance-device-action-digests-v1.json, including the coordinate string form that float formatting would otherwise drift across five languages.",
+      "limitation": "One implementation against the fixture. The shared client and Center do not yet recompute these vectors, so cross-language parity is defined but not demonstrated."
+    },
+    {
+      "id": "device-action-owner-permission-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "pub const OWNER_APPROVAL: &str = \"approve-device-actions-v1\";",
+      "scope": "Two owner permissions bound to the installation's approval revision and dropped with it: what it may be asked to do, and the commands the owner authored for it. An operation its manifest does not declare cannot be written, the class is capped by that installation's private-display ceiling, argv is a fixed array with no shell string or parameter, and a label the runtime would classify above private is refused when it is written.",
+      "limitation": "Permission storage and validation only. Nothing consumes these permissions to dispatch, and the confirmation every command entry requires does not exist yet."
+    },
+    {
+      "id": "device-action-candidate-binding-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_action_candidate_unknown_expired_or_ineligible_reference_is_a_parse_failure",
+      "scope": "Cognition names a runtime-minted identifier and never an argument. An unknown, expired, class-ineligible reference, or an operation that disagrees with its reference's kind, resolves to nothing, and a resolved one is logged content-free with its candidate kind and digests.",
+      "limitation": "Resolution and logging only. A bound command is proposed and routed; it is never dispatched, so no argument the runtime minted has reached a device."
+    },
+    {
+      "id": "device-action-untrusted-content-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_action_candidate_cmd_is_never_offered_on_a_screen_context_turn",
+      "scope": "Untrusted content and command execution never meet: a turn carrying a delimited block from the owner's screen is offered no command candidate and cannot resolve one, and a private document is named to cognition only on a turn already at that class whose origin holds the screen-context permission, by identifier and kind alone.",
+      "limitation": "Offer and resolution only, over the runtime's own state. It does not cover command output, which no code path produces yet."
+    },
+    {
+      "id": "device-action-proposal-exclusivity-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/openrouter_tests.rs",
+      "anchor": "fn ambiance_proposal_rejects_device_action_combined_with_any_branch",
+      "scope": "A proposed device action combined with any other branch is refused before any runtime work rather than reduced to the action, a nested one is lifted to its own branch, and the strict parser still refuses an invented argument, operation or reference shape.",
+      "limitation": "Provider-response normalization and parsing only, against recorded shapes; it establishes nothing about a live model's behavior."
+    },
+    {
+      "id": "device-action-hint-ablation-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_hint_stripped_floor_holds_for_actions",
+      "scope": "Paired hinted and hint-free decisions over the same state produce identical per-candidate blockers for a bound action, and a surface without the owner's permission for that exact command stays blocked.",
+      "limitation": "A unit ablation over one bound command, not routing over live devices and not a full note ablation through a real model."
+    },
+    {
+      "id": "content-reference-audience-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/visual.rs",
+      "anchor": "fn ambiance_content_reference_dereference_requires_the_decided_audience",
+      "scope": "A transient content reference carries the surface the decision named, and the content store refuses to hand it to any other surface or to an unbound reference; the audience never enters the content digest.",
+      "limitation": "Covers the transient place-card store only. Command output and continuation explanations are not stored anywhere yet, and the check is in-process."
+    },
+    {
+      "id": "device-action-continuation-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/continuation.rs",
+      "anchor": "pub struct Continuation",
+      "scope": "What moves between a document turn and a later one: a locator, a version digest and a position, written only when the private card the origin's own document produced was acknowledged, held per kind in the bounded runtime memory and never in a prompt.",
+      "limitation": "Storage and redaction only. Nothing opens the document at a destination, and the explanation card is not stored or carried."
     }
   ],
   "requirements": [
     {
       "id": "invariant-01",
       "basis": "paper",
-      "sourceSections": ["4.3", "9.2"],
+      "sourceSections": [
+        "4.3",
+        "9.2"
+      ],
       "requirement": "Dispatch-time channel eligibility forbids above-shared_room content on bystander-perceivable outputs and cancels in-flight delivery after privacy degradation.",
       "acceptance": "Exercise every render path with state changes before and during dispatch; include local playback stop and already-rendered-content limitations.",
       "status": "partial",
-      "evidence": ["runtime-policy-revalidation-test-definition", "native-speech-revocation-test-definition", "native-visual-routing-test-definition"]
+      "evidence": [
+        "runtime-policy-revalidation-test-definition",
+        "native-speech-revocation-test-definition",
+        "native-visual-routing-test-definition"
+      ]
     },
     {
       "id": "invariant-02",
       "basis": "paper",
-      "sourceSections": ["4.2", "4.8", "9.2"],
+      "sourceSections": [
+        "4.2",
+        "4.8",
+        "9.2"
+      ],
       "requirement": "Removing every hint leaves routing safe; hints affect eligible-candidate ranking only.",
       "acceptance": "Run paired hint/no-hint cases, including untrusted hints, self-nomination, hint budgets and claimed privacy downgrades.",
       "status": "partial",
-      "evidence": ["routing-hint-policy-test-definition", "native-visual-routing-test-definition", "explicit-target-room-test-definition"]
+      "evidence": [
+        "routing-hint-policy-test-definition",
+        "native-visual-routing-test-definition",
+        "explicit-target-room-test-definition"
+      ]
     },
     {
       "id": "invariant-03",
       "basis": "paper",
-      "sourceSections": ["4.4", "5.3", "5.4", "9.2"],
+      "sourceSections": [
+        "4.4",
+        "5.3",
+        "5.4",
+        "9.2"
+      ],
       "requirement": "Always-confirm effects require a logged, unexpired, single-use grant for the exact action instance.",
       "acceptance": "Bind deterministic ceremony content, arguments, target and epoch; reject changed actions, replay, expiry and restart. Existing conversational confirmation alone is not this grant protocol.",
       "status": "pending",
@@ -840,43 +964,84 @@
     {
       "id": "invariant-04",
       "basis": "paper",
-      "sourceSections": ["4.6", "9.2"],
+      "sourceSections": [
+        "4.6",
+        "9.2"
+      ],
       "requirement": "A shared-origin request cannot receive sensitive-scoped memory in model context.",
       "acceptance": "Check retrieval before every inference and delegation; selecting a private rendering channel must not broaden origin authority.",
       "status": "partial",
-      "evidence": ["runtime-private-context-test-definition", "stock-transport-provenance-test-definition", "bounded-analysis-origin-test-definition", "screen-context-definition", "screen-context-room-test-definition"]
+      "evidence": [
+        "runtime-private-context-test-definition",
+        "stock-transport-provenance-test-definition",
+        "bounded-analysis-origin-test-definition",
+        "screen-context-definition",
+        "screen-context-room-test-definition",
+        "device-action-untrusted-content-test-definition"
+      ]
     },
     {
       "id": "invariant-05",
       "basis": "paper",
-      "sourceSections": ["4.4", "5.4", "9.2"],
+      "sourceSections": [
+        "4.4",
+        "5.4",
+        "9.2"
+      ],
       "requirement": "Routing and policy decisions retain rationale in a verifiable, tamper-evident durable history.",
       "acceptance": "Verify append-before-dispatch, ordering, reopen, tamper/removal detection, signed checkpoints and independently countersigned or protected checkpoint anchors.",
       "status": "partial",
-      "evidence": ["registry-atomic-append-test-definition", "pin-registry-durability-test-definition", "runtime-postgres-atomicity-test-definition", "bounded-analysis-durability-test-definition"]
+      "evidence": [
+        "registry-atomic-append-test-definition",
+        "pin-registry-durability-test-definition",
+        "runtime-postgres-atomicity-test-definition",
+        "bounded-analysis-durability-test-definition"
+      ]
     },
     {
       "id": "invariant-06",
       "basis": "paper",
-      "sourceSections": ["4.3", "4.8", "9.2"],
+      "sourceSections": [
+        "4.3",
+        "4.8",
+        "9.2"
+      ],
       "requirement": "Runtime classification retains the strongest provenance restriction; cognition may tighten it but cannot lower it.",
       "acceptance": "Join origin, memory and service-data classes across async work, hints, retries and output; log any authorized deterministic reclassification.",
       "status": "partial",
-      "evidence": ["runtime-policy-revalidation-test-definition", "bounded-analysis-origin-test-definition", "local-voice-intake-test-definition", "screen-context-room-test-definition"]
+      "evidence": [
+        "runtime-policy-revalidation-test-definition",
+        "bounded-analysis-origin-test-definition",
+        "local-voice-intake-test-definition",
+        "screen-context-room-test-definition"
+      ]
     },
     {
       "id": "invariant-07",
       "basis": "paper",
-      "sourceSections": ["4.3", "8", "9.2"],
+      "sourceSections": [
+        "4.3",
+        "8",
+        "9.2"
+      ],
       "requirement": "Shared expression does not reveal whether routing elsewhere was caused by privacy or ordinary eligibility/preference.",
       "acceptance": "Compare observable expression traces, including direct expression requests; private-only status never leaks to a shared LED or loudspeaker.",
       "status": "partial",
-      "evidence": ["origin-status-definition", "origin-status-state-test-definition", "origin-status-room-test-definition", "native-client-status-test-definition"]
+      "evidence": [
+        "origin-status-definition",
+        "origin-status-state-test-definition",
+        "origin-status-room-test-definition",
+        "native-client-status-test-definition"
+      ]
     },
     {
       "id": "invariant-08",
       "basis": "paper",
-      "sourceSections": ["4.3", "9.1", "9.2"],
+      "sourceSections": [
+        "4.3",
+        "9.1",
+        "9.2"
+      ],
       "requirement": "Unenrolled actors' biometric features remain turn-local and never enter durable storage or memory.",
       "acceptance": "Test ingestion, logs, memory, providers and real sensor-buffer lifecycle. The paper's durable-path tests do not establish physical buffer ephemerality.",
       "status": "pending",
@@ -885,25 +1050,46 @@
     {
       "id": "invariant-09",
       "basis": "paper",
-      "sourceSections": ["5.1", "9.1", "9.2"],
+      "sourceSections": [
+        "5.1",
+        "9.1",
+        "9.2"
+      ],
       "requirement": "Co-hosting a surface with Cosmos supplies no routing privilege over an equivalent remote surface.",
       "acceptance": "Compare equivalent manifests, provenance and state through actual in-process and remote ingress, not only renamed fixture identities.",
       "status": "partial",
-      "evidence": ["routing-hint-policy-test-definition", "native-visual-routing-test-definition"]
+      "evidence": [
+        "routing-hint-policy-test-definition",
+        "native-visual-routing-test-definition"
+      ]
     },
     {
       "id": "invariant-10",
       "basis": "paper",
-      "sourceSections": ["4.4", "5.3", "9.2"],
+      "sourceSections": [
+        "4.4",
+        "5.3",
+        "9.2"
+      ],
       "requirement": "Spoken and expressive outcome claims require the matching committed runtime outcome.",
       "acceptance": "Require the exact action's acknowledgment, reject stale/unrelated acknowledgments, represent unknown outcomes honestly, and resolve unrestricted-outcome-prose before claiming universal coverage.",
       "status": "partial",
-      "evidence": ["runtime-display-outcome-test-definition", "browser-dom-ack-test-definition", "application-room-delivery-test-definition", "origin-status-definition", "origin-status-delivery-definition", "origin-status-room-test-definition"]
+      "evidence": [
+        "runtime-display-outcome-test-definition",
+        "browser-dom-ack-test-definition",
+        "application-room-delivery-test-definition",
+        "origin-status-definition",
+        "origin-status-delivery-definition",
+        "origin-status-room-test-definition"
+      ]
     },
     {
       "id": "invariant-11",
       "basis": "paper",
-      "sourceSections": ["4.4", "9.2"],
+      "sourceSections": [
+        "4.4",
+        "9.2"
+      ],
       "requirement": "Other principals cannot read request content or intent transcripts without a recorded disclosure.",
       "acceptance": "Verify principal-scoped observer projections, allowlisted operator telemetry, logged disclosure and authenticated redaction tombstones across storage and mirrors.",
       "status": "pending",
@@ -912,43 +1098,108 @@
     {
       "id": "invariant-12",
       "basis": "paper",
-      "sourceSections": ["4.1", "9.2"],
+      "sourceSections": [
+        "4.1",
+        "9.2"
+      ],
       "requirement": "A newly present, unenrolled device gains neither private content nor hint admission from favorable self-declarations.",
       "acceptance": "Exercise admission, re-enrollment, manifest updates and revocation; default to shared-perceivable, class zero, no hints and no lead eligibility.",
       "status": "partial",
-      "evidence": ["pin-runtime-admission-definition", "stock-transport-provenance-test-definition", "native-installation-owner-test-definition", "native-installation-http-test-definition", "routing-hint-policy-test-definition"]
+      "evidence": [
+        "pin-runtime-admission-definition",
+        "stock-transport-provenance-test-definition",
+        "native-installation-owner-test-definition",
+        "native-installation-http-test-definition",
+        "routing-hint-policy-test-definition"
+      ]
     },
     {
       "id": "surface-manifest",
       "basis": "paper",
-      "sourceSections": ["4.1", "4.8", "6.1"],
+      "sourceSections": [
+        "4.1",
+        "4.8",
+        "6.1"
+      ],
       "requirement": "Declare capabilities, constraints, per-channel posture, expression, cognition and bounded authority; enrollment attests asserted posture and registry-owned trust is separate.",
       "acceptance": "Validate dynamic state and capabilities without product-name privileges; expression eligibility respects the user's perceptual profile and has one expression lead.",
       "status": "partial",
-      "evidence": ["browser-manifest-definition", "browser-enrollment-auth-test-definition", "pin-manifest-definition", "native-installation-manifest-definition", "center-native-approval-test-definition", "native-visual-routing-test-definition"]
+      "evidence": [
+        "browser-manifest-definition",
+        "browser-enrollment-auth-test-definition",
+        "pin-manifest-definition",
+        "native-installation-manifest-definition",
+        "center-native-approval-test-definition",
+        "native-visual-routing-test-definition",
+        "device-action-manifest-definition",
+        "device-action-contract-definition",
+        "device-action-profile-compatibility-test-definition"
+      ]
     },
     {
       "id": "origin-provenance",
       "basis": "paper",
-      "sourceSections": ["4.2", "4.8", "5.2"],
+      "sourceSections": [
+        "4.2",
+        "4.8",
+        "5.2"
+      ],
       "requirement": "Bind each request to authenticated principal, origin, modality, state, environment, device/channel/actor trust, server receipt time, epoch and sequence.",
       "acceptance": "Preserve Pin device identity before account normalization; do not trust device clocks or body-supplied identity, and test replay/freshness plus scoped self-echo rejection.",
       "status": "partial",
-      "evidence": ["authenticated-device-provenance-definition", "stock-transport-provenance-test-definition", "pin-runtime-admission-definition", "rtc-attribution-test-definition", "sequenced-input-test-definition", "sequenced-input-postgres-test-definition", "sequenced-control-postgres-test-definition", "runtime-echo-test-definition", "runtime-echo-postgres-test-definition", "native-pcm-adapter-test-definition", "native-pcm-isolation-test-definition", "native-pin-epoch-test-definition", "native-pin-epoch-postgres-test-definition", "native-pin-media-admission-test-definition", "native-pin-media-store-failure-test-definition", "native-installation-signing-test-definition", "native-installation-postgres-test-definition", "native-room-http-test-definition", "native-room-sequence-test-definition", "explicit-target-room-test-definition", "native-client-input-test-definition"]
+      "evidence": [
+        "authenticated-device-provenance-definition",
+        "stock-transport-provenance-test-definition",
+        "pin-runtime-admission-definition",
+        "rtc-attribution-test-definition",
+        "sequenced-input-test-definition",
+        "sequenced-input-postgres-test-definition",
+        "sequenced-control-postgres-test-definition",
+        "runtime-echo-test-definition",
+        "runtime-echo-postgres-test-definition",
+        "native-pcm-adapter-test-definition",
+        "native-pcm-isolation-test-definition",
+        "native-pin-epoch-test-definition",
+        "native-pin-epoch-postgres-test-definition",
+        "native-pin-media-admission-test-definition",
+        "native-pin-media-store-failure-test-definition",
+        "native-installation-signing-test-definition",
+        "native-installation-postgres-test-definition",
+        "native-room-http-test-definition",
+        "native-room-sequence-test-definition",
+        "explicit-target-room-test-definition",
+        "native-client-input-test-definition",
+        "device-action-owner-permission-definition"
+      ]
     },
     {
       "id": "cognition-authority",
       "basis": "paper",
-      "sourceSections": ["4.4", "5.1", "5.3"],
+      "sourceSections": [
+        "4.4",
+        "5.1",
+        "5.3"
+      ],
       "requirement": "Cognition proposes runtime intents; only deterministic runtime policy binds targets, grants, memory scope and dispatch, including policy/registry changes.",
       "acceptance": "Keep asynchronous analysis responsive to cancellation without granting analytical models direct device or service execution authority.",
       "status": "partial",
-      "evidence": ["runtime-private-context-test-definition", "bounded-analysis-cancellation-test-definition", "openrouter-proposal-test-definition", "choice-list-proposal-test-definition", "screen-context-room-test-definition"]
+      "evidence": [
+        "runtime-private-context-test-definition",
+        "bounded-analysis-cancellation-test-definition",
+        "openrouter-proposal-test-definition",
+        "choice-list-proposal-test-definition",
+        "screen-context-room-test-definition",
+        "device-action-candidate-binding-test-definition",
+        "device-action-proposal-exclusivity-test-definition",
+        "device-action-hint-ablation-test-definition"
+      ]
     },
     {
       "id": "inference-ability",
       "basis": "paper",
-      "sourceSections": ["4.7"],
+      "sourceSections": [
+        "4.7"
+      ],
       "requirement": "Inference offers declare supported tasks and representations, provider location and privacy eligibility independently of device permission.",
       "acceptance": "Select eligible local or remote analysis routes under availability/resource budgets; a better model declaration must not grant additional authority.",
       "status": "pending",
@@ -957,7 +1208,11 @@
     {
       "id": "earned-authority",
       "basis": "paper",
-      "sourceSections": ["4.7", "9.3", "10"],
+      "sourceSections": [
+        "4.7",
+        "9.3",
+        "10"
+      ],
       "requirement": "Per-surface autonomy depends on calibration, counterfactual lift, coverage and tenure/volume, with per-intent promotion, demotion and a platform-trust ceiling.",
       "acceptance": "Keep privacy and always-confirm policy nondelegable; restrict delegation to none/low risk, audit local outcomes and measure local-resolution rate. Software/prompt candidate promotion is a separate evaluation.",
       "status": "pending",
@@ -966,43 +1221,74 @@
     {
       "id": "concurrency",
       "basis": "paper",
-      "sourceSections": ["5.3", "9.1"],
+      "sourceSections": [
+        "5.3",
+        "9.1"
+      ],
       "requirement": "Serialize authority per authenticated principal, corroborate duplicate capture within that principal and allow only authorized corrections to supersede remaining work.",
       "acceptance": "Race distinct surfaces, guests, corrections and slow model results; stale work cannot dispatch or produce a terminal expression for a superseded turn.",
       "status": "partial",
-      "evidence": ["runtime-postgres-atomicity-test-definition", "runtime-disconnect-test-definition"]
+      "evidence": [
+        "runtime-postgres-atomicity-test-definition",
+        "runtime-disconnect-test-definition"
+      ]
     },
     {
       "id": "recovery",
       "basis": "paper",
-      "sourceSections": ["5.2", "5.3", "5.4"],
+      "sourceSections": [
+        "5.2",
+        "5.3",
+        "5.4"
+      ],
       "requirement": "Durable recovery and receiver dedup preserve action identity; render repair uses revalidated logged fallbacks, while uncertain effects never retry automatically.",
       "acceptance": "Exercise crashes around commit/dispatch/ack, partitions, reconnect and bounded offline queues; invalidate grants on restart and require fresh ceremony after outcome unknown.",
       "status": "partial",
-      "evidence": ["runtime-repair-test-definition", "runtime-postgres-atomicity-test-definition", "native-room-postgres-test-definition"]
+      "evidence": [
+        "runtime-repair-test-definition",
+        "runtime-postgres-atomicity-test-definition",
+        "native-room-postgres-test-definition"
+      ]
     },
     {
       "id": "memory-lifecycle",
       "basis": "paper",
-      "sourceSections": ["4.4", "4.6", "10"],
+      "sourceSections": [
+        "4.4",
+        "4.6",
+        "10"
+      ],
       "requirement": "Durable memory and learned preferences are scoped, policy-gated, attributable, visible and deletable; one correction cannot silently become standing policy.",
       "acceptance": "Test sensitive-write confirmation, principal/device/class/room/workflow/session scope, retention/redaction and explicit or repeated preference learning.",
       "status": "partial",
-      "evidence": ["choice-list-memory-test-definition", "choice-list-room-test-definition"]
+      "evidence": [
+        "choice-list-memory-test-definition",
+        "choice-list-room-test-definition",
+        "device-action-continuation-definition"
+      ]
     },
     {
       "id": "content-references",
       "basis": "paper",
-      "sourceSections": ["5.2"],
+      "sourceSections": [
+        "5.2"
+      ],
       "requirement": "Large-content references authorize only the channels selected by the runtime, with authorization checked when dereferenced.",
       "acceptance": "Suppressed, revoked or stale recipients cannot fetch content via shared transport, cache, observer or reference; possession alone is insufficient.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "content-reference-audience-test-definition"
+      ]
     },
     {
       "id": "performance-and-evaluation",
       "basis": "paper",
-      "sourceSections": ["9.1", "9.3", "9.4", "9.5"],
+      "sourceSections": [
+        "9.1",
+        "9.3",
+        "9.4",
+        "9.5"
+      ],
       "requirement": "Measure expression under 200 ms, durable routing p50 under 50 ms and voice-to-first-action p50 under 2.5 s; dispatch timeouts, not heartbeat expiry, drive repair.",
       "acceptance": "Publish stage/model/hardware context, 50-surface scale, baseline and hint/scorer ablations; evaluate longitudinal quality, accessibility and user/bystander hypotheses without treating them as established facts.",
       "status": "pending",
@@ -1011,16 +1297,40 @@
     {
       "id": "pin-realtime-media",
       "basis": "cosmos-product",
-      "sourceSections": ["5.1", "5.2", "7"],
+      "sourceSections": [
+        "5.1",
+        "5.2",
+        "7"
+      ],
       "requirement": "The Ai Pin participates in the live capture, cognition, playback and interruption loop through its stock-compatible runtime.",
       "acceptance": "Prove actual capture/playback ownership, audio focus, barge-in, immediate stop, privacy change and reconnect on hardware; completed-text TTS is not proof of live dialogue.",
       "status": "partial",
-      "evidence": ["local-voice-capture-test-definition", "center-local-voice-permission-test-definition", "local-voice-owner-api-test-definition", "local-stt-model-acquisition-test-definition", "local-stt-adapter-test-definition", "local-voice-intake-test-definition", "native-pcm-adapter-test-definition", "native-pcm-framing-test-definition", "native-pcm-completion-test-definition", "speech-cancellation-test-definition", "speech-recognition-bounds-test-definition", "native-speech-disclosure-test-definition", "native-speech-revocation-test-definition", "native-speech-postgres-test-definition", "speech-disclosure-owner-api-test-definition", "center-speech-disclosure-test-definition"]
+      "evidence": [
+        "local-voice-capture-test-definition",
+        "center-local-voice-permission-test-definition",
+        "local-voice-owner-api-test-definition",
+        "local-stt-model-acquisition-test-definition",
+        "local-stt-adapter-test-definition",
+        "local-voice-intake-test-definition",
+        "native-pcm-adapter-test-definition",
+        "native-pcm-framing-test-definition",
+        "native-pcm-completion-test-definition",
+        "speech-cancellation-test-definition",
+        "speech-recognition-bounds-test-definition",
+        "native-speech-disclosure-test-definition",
+        "native-speech-revocation-test-definition",
+        "native-speech-postgres-test-definition",
+        "speech-disclosure-owner-api-test-definition",
+        "center-speech-disclosure-test-definition"
+      ]
     },
     {
       "id": "pin-physical-acceptance",
       "basis": "cosmos-product",
-      "sourceSections": ["7", "9.1"],
+      "sourceSections": [
+        "7",
+        "9.1"
+      ],
       "requirement": "A physical Pin demonstrates the canonical interaction and counterfactuals against the exact installed runtime and server release.",
       "acceptance": "With exact serial and explicit device confirmation, observe microphone, speaker, gestures, privacy suppression, render acknowledgment and interruption; synthetic traces cannot replace human/device evidence.",
       "status": "pending",
@@ -1029,52 +1339,112 @@
     {
       "id": "center-surface",
       "basis": "cosmos-product",
-      "sourceSections": ["5.1", "6.1", "7"],
+      "sourceSections": [
+        "5.1",
+        "6.1",
+        "7"
+      ],
       "requirement": "Center is a registered rendering surface separately from its read-only observer role, providing the first two-surface Pin-to-browser interaction.",
       "acceptance": "Render a routed card and correlate its acknowledgment; hidden, locked, disconnected and stale pages cannot report a successful current render.",
       "status": "partial",
-      "evidence": ["center-enrollment-lifecycle-definition", "retired-browser-assistant-boundary-definition", "browser-dom-ack-test-definition", "runtime-display-outcome-test-definition", "center-application-acceptance-test-definition", "native-room-sfu-test-definition"]
+      "evidence": [
+        "center-enrollment-lifecycle-definition",
+        "retired-browser-assistant-boundary-definition",
+        "browser-dom-ack-test-definition",
+        "runtime-display-outcome-test-definition",
+        "center-application-acceptance-test-definition",
+        "native-room-sfu-test-definition"
+      ]
     },
     {
       "id": "macos-surface",
       "basis": "cosmos-product",
-      "sourceSections": ["4.1", "6.1"],
+      "sourceSections": [
+        "4.1",
+        "6.1"
+      ],
       "requirement": "A native macOS client implements the common surface contract with truthful audio, rendering, permissions, lock/sleep and availability constraints.",
       "acceptance": "Required product deliverable: verify native lifecycle, playback stop, local confirmation, protected credential storage and installable packaging; no competing assistant authority. Completion is separate from the first verified Cosmos/Center server rollout.",
       "status": "partial",
-      "evidence": ["native-client-core-definition", "macos-client-model-test-definition", "native-client-display-test-definition", "native-visual-routing-test-definition", "native-client-status-test-definition", "native-client-input-test-definition"]
+      "evidence": [
+        "native-client-core-definition",
+        "macos-client-model-test-definition",
+        "native-client-display-test-definition",
+        "native-visual-routing-test-definition",
+        "native-client-status-test-definition",
+        "native-client-input-test-definition"
+      ]
     },
     {
       "id": "android-surface",
       "basis": "cosmos-product",
-      "sourceSections": ["4.1", "6", "6.1"],
+      "sourceSections": [
+        "4.1",
+        "6",
+        "6.1"
+      ],
       "requirement": "A native Android companion declares real foreground/background, audio, notification, permission and reconnect behavior through the common surface contract.",
       "acceptance": "Required product deliverable: verify foreground/background permissions, reconnect, protected credential storage and installable packaging on a physical phone; notification delivery is not render acknowledgment or microphone permission. Completion is separate from the first verified Cosmos/Center server rollout.",
       "status": "partial",
-      "evidence": ["android-client-jni-definition", "android-client-snapshot-test-definition", "native-client-display-test-definition", "native-ffi-status-snapshot-test-definition", "native-client-status-test-definition", "native-client-input-test-definition"]
+      "evidence": [
+        "android-client-jni-definition",
+        "android-client-snapshot-test-definition",
+        "native-client-display-test-definition",
+        "native-ffi-status-snapshot-test-definition",
+        "native-client-status-test-definition",
+        "native-client-input-test-definition"
+      ]
     },
     {
       "id": "thin-client-azure-tts",
       "basis": "cosmos-product",
-      "sourceSections": ["4.3", "4.4", "5.1", "5.2"],
+      "sourceSections": [
+        "4.3",
+        "4.4",
+        "5.1",
+        "5.2"
+      ],
       "requirement": "All thin clients use Cosmos-mediated Azure TTS whenever synthesized speech is used, including macOS, Omarchy, Pixel, Shield and the Ai Pin. Provider credentials remain in Cosmos.",
       "acceptance": "Verify authorized Azure audio through each actual client, selected output and local playback evidence. Denied disclosure, unavailable Azure, privacy changes, revocation, interruption and lock must suppress or stop speech without falling back to OS voices or another TTS provider. Listening, processing and speaking indicators reflect their distinct observed states. A current input-only client does not establish speech acceptance.",
       "status": "partial",
-      "evidence": ["native-speech-target-definition", "native-speech-delivery-definition", "native-speech-candidate-policy-test-definition", "native-client-speech-test-definition", "center-speech-disclosure-test-definition", "native-speech-disclosure-test-definition"]
+      "evidence": [
+        "native-speech-target-definition",
+        "native-speech-delivery-definition",
+        "native-speech-candidate-policy-test-definition",
+        "native-client-speech-test-definition",
+        "center-speech-disclosure-test-definition",
+        "native-speech-disclosure-test-definition"
+      ]
     },
     {
       "id": "integration-continuity",
       "basis": "cosmos-product",
-      "sourceSections": ["3.4", "4.3", "4.4", "4.6", "5.3"],
+      "sourceSections": [
+        "3.4",
+        "4.3",
+        "4.4",
+        "4.6",
+        "5.3"
+      ],
       "requirement": "Preserve the existing Cosmos integrations as conversational product capabilities by reusing their provider adapters through Ambiance-scoped services and typed actions, rather than retaining the old orchestration authority or silently removing useful integrations.",
       "acceptance": "Inventory every existing integration and distinguish configured, conversationally usable and hardware-dependent states in Center. Prove each migrated path through real request admission, scoped context/provider disclosure, permitted output and exact effect evidence where applicable. Public lookups, personal-data retrieval and consequential actions receive their appropriate independent permissions; a configured provider alone is not evidence that an integration works.",
       "status": "partial",
-      "evidence": ["web-lookup-runtime-definition", "places-transient-output-definition"]
+      "evidence": [
+        "web-lookup-runtime-definition",
+        "places-transient-output-definition",
+        "device-action-digest-vector-test-definition"
+      ]
     },
     {
       "id": "pixel-default-digital-assistant",
       "basis": "cosmos-product",
-      "sourceSections": ["4.1", "4.2", "4.3", "4.4", "5.1"],
+      "sourceSections": [
+        "4.1",
+        "4.2",
+        "4.3",
+        "4.4",
+        "5.1"
+      ],
       "requirement": "The Pixel client is selectable as Android's default digital assistant and presents a compact on-demand assistant panel over the current app, using the same Cosmos runtime as the other surfaces. Follow the supplied dark/cyan visual reference with native dynamic text, accessible type and distinct listening, processing and observed-speaking states.",
       "acceptance": "Verify supported Android assistant-role selection, actual system invocation, native session UI, microphone permission, cancellation, background/lock cleanup and protected credentials on the owner's Pixel. Current-screen context is user-invoked, source-attributed and permission-scoped; apps that withhold context remain unavailable. No always-on hotword, unrestricted screen/app access or private-memory authority is inferred from the default-assistant role. Responses and device actions pass through Cosmos with exact render/effect evidence; no direct provider-key path in the client.",
       "status": "pending",
@@ -1083,7 +1453,10 @@
     {
       "id": "linux-surface",
       "basis": "cosmos-product",
-      "sourceSections": ["4.1", "6.1"],
+      "sourceSections": [
+        "4.1",
+        "6.1"
+      ],
       "requirement": "A thin Linux client supports the owner's Omarchy PC through the same approved surface and room contract.",
       "acceptance": "Verify the installed desktop/compositor, local microphone and screen-sharing permission flow, lock/sleep, playback stop, protected credential storage, reconnect and installable packaging. Browser access does not establish native Linux support.",
       "status": "pending",
@@ -1092,7 +1465,13 @@
     {
       "id": "shield-playback-context",
       "basis": "cosmos-product",
-      "sourceSections": ["4.1", "4.2", "4.4", "5.2", "7"],
+      "sourceSections": [
+        "4.1",
+        "4.2",
+        "4.4",
+        "5.2",
+        "7"
+      ],
       "requirement": "A thin Android TV client on the owner's NVIDIA Shield 4K TV Pro provides permitted, origin-bound playback context for questions through the Ai Pin.",
       "acceptance": "Verify owner-enabled media access and actual YouTube, Stremio, TV2 Play, Netflix and Spotify behavior. Preserve absent, stale and ambiguous metadata; a title and position are not scene evidence. Respect secure capture and provider restrictions, including Spotify AI-ingestion and voice-assistant limits. Test session changes, ads/live streams, competing players, permissions, sleep and reconnect on hardware.",
       "status": "pending",
@@ -1101,47 +1480,94 @@
     {
       "id": "movie-list-and-trailer-handoff",
       "basis": "cosmos-product",
-      "sourceSections": ["4.2", "4.4", "4.6", "5.3", "7"],
+      "sourceSections": [
+        "4.2",
+        "4.4",
+        "4.6",
+        "5.3",
+        "7"
+      ],
       "requirement": "A Pin request for film recommendations renders a list on Shield, and a follow-up such as play number two's trailer targets that exact displayed item.",
       "acceptance": "Keep stable content IDs and the exact recommendation-list revision; verify current permissions, target incarnation and supported player integration before dispatch. Observe the matching TV render and selected trailer playback. Changed lists, ambiguous references, unsupported apps, ads and missing playback evidence cannot become a successful-playback claim. Verify on the owner's Shield and finally the physical Pin.",
       "status": "partial",
-      "evidence": ["choice-list-proposal-test-definition", "choice-list-memory-test-definition", "choice-list-room-test-definition", "native-client-choices-test-definition"]
+      "evidence": [
+        "choice-list-proposal-test-definition",
+        "choice-list-memory-test-definition",
+        "choice-list-room-test-definition",
+        "native-client-choices-test-definition"
+      ]
     },
     {
       "id": "document-explanation-desktop-continuation",
       "basis": "cosmos-product",
-      "sourceSections": ["4.2", "4.3", "4.6", "5.2", "5.3"],
+      "sourceSections": [
+        "4.2",
+        "4.3",
+        "4.6",
+        "5.2",
+        "5.3"
+      ],
       "requirement": "An explicitly authorized document on MacBook can be explained and continued on the owner's Omarchy desktop without losing task context or sending a separate manual copy.",
       "acceptance": "Bind the source device, exact document version and selection, explanation and task revision. Transfer only a purpose/recipient-scoped content reference and verify matching destination open/render evidence. Test source changes, concurrent edits, revoked access, private documents in shared rooms, unavailable desktop and reconnect. Current-window access requires a supported local permission or application integration.",
       "status": "partial",
-      "evidence": ["screen-context-definition", "screen-context-room-test-definition", "screen-context-owner-api-test-definition"]
+      "evidence": [
+        "screen-context-definition",
+        "screen-context-room-test-definition",
+        "screen-context-owner-api-test-definition"
+      ]
     },
     {
       "id": "restaurant-pixel-navigation",
       "basis": "cosmos-product",
-      "sourceSections": ["4.2", "4.4", "4.6", "5.3", "7"],
+      "sourceSections": [
+        "4.2",
+        "4.4",
+        "4.6",
+        "5.3",
+        "7"
+      ],
       "requirement": "A Pin request opens maps on Pixel for the restaurant the owner just selected on a computer, using the existing scoped task context.",
       "acceptance": "Resolve the exact selected place ID, address and coordinates from authorized current context, clarify ambiguity, then bind the maps action to the selected Pixel and its current permission/connection. Verify the intended destination opens; distinguish app launch from actual navigation start and keep unknown effects explicit. Test stale selections, two places with the same name, locked/unavailable phone and replay.",
       "status": "partial",
-      "evidence": ["recent-context-definition", "recent-context-state-test-definition", "recent-context-conversation-test-definition", "routing-hint-policy-test-definition"]
+      "evidence": [
+        "recent-context-definition",
+        "recent-context-state-test-definition",
+        "recent-context-conversation-test-definition",
+        "routing-hint-policy-test-definition"
+      ]
     },
     {
       "id": "private-message-personal-continuation",
       "basis": "cosmos-product",
-      "sourceSections": ["4.3", "4.4", "4.6", "9.2"],
+      "sourceSections": [
+        "4.3",
+        "4.4",
+        "4.6",
+        "9.2"
+      ],
       "requirement": "With guests present, a request to view a private message continues on an authenticated eligible private Pixel surface without exposing the message on TV or through audible Pin output.",
       "acceptance": "Keep the shared-origin request free of private retrieval. After fresh local user authentication, admit a new linked personal-origin request with independent source/purpose authorization; selecting or unlocking Pixel cannot elevate the original turn. Recheck output eligibility at dereference and dispatch, hide notification previews and suppress on lock/background/revocation. Verify on the actual phone and Pin that no private payload or privacy-specific shared expression leaks.",
       "status": "partial",
-      "evidence": ["private-routing-definition", "private-routing-room-test-definition", "private-display-policy-test-definition", "center-private-display-test-definition", "origin-status-room-test-definition"]
+      "evidence": [
+        "private-routing-definition",
+        "private-routing-room-test-definition",
+        "private-display-policy-test-definition",
+        "center-private-display-test-definition",
+        "origin-status-room-test-definition"
+      ]
     },
     {
       "id": "release-and-live-verification",
       "basis": "cosmos-product",
-      "sourceSections": ["9.2"],
+      "sourceSections": [
+        "9.2"
+      ],
       "requirement": "Deploy only the authenticated tagged operator release and matching verified five-APK set; retain stock wire/package identities and require physical acceptance for changed Pin behavior.",
       "acceptance": "Run focused and broad checks, production doctor/dry-run/deploy/verify, then confirm the intended release and production environment at the existing https://center.andersmadsen.dk/ origin. No new domain or identity migration is requested. Metadata tests or endpoint health alone cannot establish Ambiance conformance.",
       "status": "partial",
-      "evidence": ["external-network-probe-definition"]
+      "evidence": [
+        "external-network-probe-definition"
+      ]
     }
   ]
 }

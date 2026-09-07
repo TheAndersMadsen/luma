@@ -23,9 +23,30 @@ pub struct Reference {
     pub id: Uuid,
     pub digest: String,
     pub expires_at_ms: i64,
+    /// The surface the decision named. A reference is authority to fetch
+    /// content for exactly that audience: membership in the store is
+    /// availability, and this is the check made at dereference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<Uuid>,
 }
 
 impl Reference {
+    /// The same content, bound to the surface the decision selected.
+    pub fn for_audience(&self, surface: Uuid) -> Self {
+        Self {
+            audience: Some(surface),
+            ..self.clone()
+        }
+    }
+
+    /// Whether this is the same stored content, whatever audience it was
+    /// later bound to.
+    fn same_content(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.digest == other.digest
+            && self.expires_at_ms == other.expires_at_ms
+    }
+
     pub fn valid(&self) -> bool {
         !self.id.is_nil()
             && self.digest.len() == 64
@@ -221,6 +242,7 @@ impl Cache {
             id,
             digest: card.digest(),
             expires_at_ms,
+            audience: None,
         };
         entries.insert(
             id,
@@ -259,8 +281,11 @@ impl Cache {
         let mut entries = self.entries.lock().ok()?;
         entries.retain(|_, entry| entry.reference.expires_at_ms > now);
         let entry = entries.get(&content.id)?;
-        if entry.principal != principal
-            || entry.reference != *content
+        // Authorized at dereference: the content reaches the surface the
+        // decision named, and no other.
+        if content.audience != Some(action.surface_id)
+            || entry.principal != principal
+            || !entry.reference.same_content(content)
             || entry.fence.turn_id != action.turn_id
             || entry.fence.generation != action.generation
             || entry.fence.worker != action.worker
@@ -389,18 +414,21 @@ mod tests {
 
     fn action(fence: &TurnFence, reference: &Reference) -> Action {
         let id = Uuid::new_v4();
+        // A decision names the surface, and the reference it stores is
+        // authority for exactly that surface.
+        let surface_id = Uuid::new_v4();
         Action {
             id,
             root_id: id,
             turn_id: fence.turn_id,
             generation: fence.generation,
             worker: fence.worker,
-            surface_id: Uuid::new_v4(),
+            surface_id,
             channel: Channel::VisualCard,
             incarnation: Uuid::new_v4(),
             content_digest: reference.digest.clone(),
             intent: SemanticIntent::PlaceAddressCard {
-                content: reference.clone(),
+                content: reference.for_audience(surface_id),
             },
             privacy: PrivacyClass::SharedRoom,
             status: ActionStatus::Dispatched,
@@ -451,12 +479,43 @@ mod tests {
         }
     }
 
+    /// Membership in the content store is availability, not authorization.
+    /// A reference is authority to fetch content for exactly the surface the
+    /// decision named.
+    #[test]
+    fn ambiance_content_reference_dereference_requires_the_decided_audience() {
+        let cache = std::sync::Arc::new(Cache::default());
+        let fence = fence();
+        let pending = cache.stage("owner", &fence, card(), 100).unwrap();
+        let reference = pending.reference().clone();
+        pending.commit();
+        let action = action(&fence, &reference);
+        assert!(cache.get("owner", &action, 101).is_some());
+        // The same content, asked for by a surface the decision never named.
+        let mut elsewhere = action.clone();
+        elsewhere.surface_id = Uuid::new_v4();
+        assert!(cache.get("owner", &elsewhere, 101).is_none());
+        // An unbound reference is not authority for anyone.
+        let mut unbound = action.clone();
+        unbound.intent = SemanticIntent::PlaceAddressCard {
+            content: reference.clone(),
+        };
+        assert!(cache.get("owner", &unbound, 101).is_none());
+        // The audience never travels in the digest, so it cannot be used to
+        // smuggle a different card past the content check.
+        assert_eq!(
+            reference.for_audience(Uuid::new_v4()).digest,
+            reference.digest
+        );
+    }
+
     #[test]
     fn ambiance_places_visual_reference_is_strict_and_javascript_safe() {
         let valid = Reference {
             id: Uuid::new_v4(),
             digest: "ab".repeat(32),
             expires_at_ms: MAX_SAFE_INTEGER,
+            audience: None,
         };
         assert!(valid.valid());
         let mut changed = valid.clone();

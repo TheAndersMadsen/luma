@@ -50,6 +50,11 @@ pub struct ScreenContext {
     kind: Kind,
     pub app: String,
     pub text: String,
+    /// Where the captured text came from, when the origin can say. It is a
+    /// locator, a version digest and a position — never the document itself,
+    /// and never part of the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<super::continuation::DocumentHandle>,
 }
 
 impl std::fmt::Debug for ScreenContext {
@@ -64,11 +69,15 @@ impl ScreenContext {
             kind: Kind::Screen,
             app,
             text,
+            document: None,
         }
     }
 
     pub fn valid(&self) -> bool {
-        !self.app.trim().is_empty()
+        self.document
+            .as_ref()
+            .is_none_or(super::continuation::DocumentHandle::valid)
+            && !self.app.trim().is_empty()
             && self.app.len() <= MAX_APP_BYTES
             && !self.app.chars().any(char::is_control)
             && !self.text.trim().is_empty()
@@ -94,6 +103,11 @@ impl ScreenContext {
 pub struct Offered {
     pub app_digest: String,
     pub bytes: u32,
+    /// The origin's own document handle, held runtime-side for this turn. It
+    /// becomes a continuation only when the turn's private card is
+    /// acknowledged: a memory write is itself policy-gated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<super::continuation::DocumentHandle>,
 }
 
 impl RuntimeState {
@@ -113,7 +127,11 @@ impl RuntimeState {
             .cloned())
     }
 
-    fn screen_context_permitted(&self, records: &BTreeMap<Uuid, Record>, surface: Uuid) -> bool {
+    pub(super) fn screen_context_permitted(
+        &self,
+        records: &BTreeMap<Uuid, Record>,
+        surface: Uuid,
+    ) -> bool {
         self.screen_context_policy(records, surface)
             .ok()
             .flatten()
@@ -168,9 +186,15 @@ impl RuntimeState {
         fence: TurnFence,
         app_digest: String,
         bytes: u32,
+        document: Option<super::continuation::DocumentHandle>,
         now: i64,
     ) -> Result<Vec<RuntimeData>, RuntimeError> {
-        if !super::state::digest_valid(&app_digest) || bytes == 0 || bytes as usize > MAX_TEXT_BYTES
+        if !super::state::digest_valid(&app_digest)
+            || bytes == 0
+            || bytes as usize > MAX_TEXT_BYTES
+            || !document
+                .as_ref()
+                .is_none_or(super::continuation::DocumentHandle::valid)
         {
             return Err(RuntimeError::InvalidRequest);
         }
@@ -191,6 +215,7 @@ impl RuntimeState {
         turn.screen_context = Some(Offered {
             app_digest: app_digest.clone(),
             bytes,
+            document,
         });
         Ok(vec![RuntimeData::ScreenContextOffered {
             fence,
@@ -221,6 +246,21 @@ mod tests {
             serde_json::to_value(&context).unwrap(),
             serde_json::json!({"kind":"screen","app":"Settings","text":"Wi-Fi\nConnected to Home"})
         );
+        // The optional document handle is bound into the same wire type and
+        // rejected when it does not resolve inside a declared root.
+        let located: ScreenContext = serde_json::from_value(serde_json::json!({
+            "kind":"screen","app":"Zed","text":"fn main() {}",
+            "document":{"app":"Zed","label":"main.rs",
+                "locator":{"scheme":"file","rootId":"repo","relative":"src/main.rs"}}
+        }))
+        .unwrap();
+        assert!(located.valid());
+        let mut traversing = located.clone();
+        traversing.document.as_mut().unwrap().locator = super::super::action::Locator::File {
+            root_id: "repo".into(),
+            relative: "../etc/passwd".into(),
+        };
+        assert!(!traversing.valid());
         for invalid in [
             serde_json::json!({"kind":"clipboard","app":"Settings","text":"x"}),
             serde_json::json!({"app":"Settings","text":"x"}),

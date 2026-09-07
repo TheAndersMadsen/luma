@@ -121,6 +121,21 @@ fn routes(api: ApiState) -> Router {
                 .route_layer(Extension(LookupService::Places))
                 .layer(DefaultBodyLimit::max(4096)),
         )
+        // Host, application and root lists do not fit the owner body limit,
+        // and an authored command entry list fits neither; both raise it for
+        // their own route exactly as the lookup routes already do.
+        .route(
+            "/surface-api/v1/surfaces/:surface_id/device-actions",
+            get(device_action_policy)
+                .post(set_device_action_policy)
+                .layer(DefaultBodyLimit::max(2048)),
+        )
+        .route(
+            "/surface-api/v1/surfaces/:surface_id/device-commands",
+            get(device_command_policy)
+                .post(set_device_command_policy)
+                .layer(DefaultBodyLimit::max(4096)),
+        )
         .layer(axum::middleware::map_response(no_store))
         .with_state(api)
 }
@@ -450,6 +465,44 @@ struct ScreenContextApproval {
 fn required_screen_policy<'de, D>(
     deserializer: D,
 ) -> Result<Option<crate::ambiance::screen::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeviceActionApproval {
+    approval: String,
+    approval_revision: u64,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_action_policy")]
+    policy: Option<crate::ambiance::action::Policy>,
+}
+
+fn required_action_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::action::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeviceCommandApproval {
+    approval: String,
+    approval_revision: u64,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_command_policy")]
+    policy: Option<crate::ambiance::action::CommandPolicy>,
+}
+
+fn required_command_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::action::CommandPolicy>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -822,6 +875,114 @@ async fn set_screen_context_policy(
         )
         .await?;
     let crate::ambiance::RuntimeResult::ScreenContextPolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+async fn device_action_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::DeviceActionPolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::DeviceActionPolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+/// The owner's statement of what one native installation may be asked to do.
+/// An operation its approved manifest does not declare is not writable here,
+/// and the class is capped by that installation's own private-display
+/// ceiling: an action permission spends a posture, it never raises one.
+async fn set_device_action_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<DeviceActionApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != crate::ambiance::action::OWNER_APPROVAL {
+        return Err(invalid());
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetDeviceActionPolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::DeviceActionPolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+async fn device_command_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::DeviceCommandPolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::DeviceCommandPolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+/// The commands the owner authored for one installation. There are no
+/// parameters and no shell string: argv is fixed here, once, by a person.
+async fn set_device_command_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<DeviceCommandApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != crate::ambiance::action::COMMAND_OWNER_APPROVAL {
+        return Err(invalid());
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetDeviceCommandPolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::DeviceCommandPolicy(approval) = result else {
         return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
     };
     Ok(Json(json!({"approval": approval})))
@@ -1605,6 +1766,195 @@ mod tests {
                 .await
                 .0,
             StatusCode::OK
+        );
+    }
+
+    /// The two device-action permissions are native-only statements about one
+    /// installation, bound to its approval revision, with their own raised
+    /// body limits and the same compare-and-swap shape as every other one.
+    #[tokio::test]
+    async fn ambiance_device_action_http_routes_bounds_and_revisions() {
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let app = with_pairing(store, Some(verifier()), None);
+        let owner = bearer("owner");
+        let other = bearer("other");
+        let approve = |platform: &'static str| {
+            let mut descriptor = native_approval(Uuid::new_v4());
+            descriptor["platform"] = platform.into();
+            descriptor
+        };
+        let (status, mac) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/native",
+            Some(&owner),
+            None,
+            approve("macos"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let mac = mac["native"]["surfaceId"].as_str().unwrap().to_owned();
+        let (status, tv) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/native",
+            Some(&owner),
+            None,
+            approve("android_tv"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let tv = tv["native"]["surfaceId"].as_str().unwrap().to_owned();
+        let actions = format!("/surface-api/v1/surfaces/{mac}/device-actions");
+        let commands = format!("/surface-api/v1/surfaces/{mac}/device-commands");
+        let grant = json!({
+            "approval": crate::ambiance::action::OWNER_APPROVAL,
+            "approvalRevision": 1, "expectedRevision": 0,
+            "policy": {"maximumClass": "shared_room",
+                "open": {"hosts": ["github.com"], "apps": [], "roots": []}}
+        });
+        let entries = json!({
+            "approval": crate::ambiance::action::COMMAND_OWNER_APPROVAL,
+            "approvalRevision": 1, "expectedRevision": 0,
+            "policy": {"maximumClass": "shared_room", "offerOutputToCognition": false,
+                "entries": [{"id": "project-tests", "label": "Project tests",
+                    "argv": ["./revival", "check", "cosmos"],
+                    "cwd": "/Users/owner/Projects", "mutates": true, "budgetMs": 900000}]}
+        });
+        for (path, body) in [(&actions, &grant), (&commands, &entries)] {
+            for authorization in [None, Some("Bearer invalid")] {
+                for method in ["GET", "POST"] {
+                    assert_eq!(
+                        call(&app, method, path, authorization, None, body.clone())
+                            .await
+                            .0,
+                        StatusCode::UNAUTHORIZED
+                    );
+                }
+            }
+            for method in ["GET", "POST"] {
+                assert_eq!(
+                    call(&app, method, path, Some(&other), None, body.clone())
+                        .await
+                        .0,
+                    StatusCode::NOT_FOUND
+                );
+            }
+            assert_eq!(
+                call(&app, "GET", path, Some(&owner), None, json!(null))
+                    .await
+                    .1,
+                json!({"approval": null})
+            );
+        }
+        let mut wrong = grant.clone();
+        wrong["approval"] = crate::ambiance::screen::OWNER_APPROVAL.into();
+        let mut extra = grant.clone();
+        extra["policy"]["run"] = json!({"entries": []});
+        let mut empty = grant.clone();
+        empty["policy"] = json!({"maximumClass": "shared_room"});
+        for invalid in [wrong, extra, empty] {
+            assert_eq!(
+                call(&app, "POST", &actions, Some(&owner), None, invalid)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        // A television declares no `action.open` and never holds one.
+        let tv_actions = format!("/surface-api/v1/surfaces/{tv}/device-actions");
+        assert_eq!(
+            call(&app, "POST", &tv_actions, Some(&owner), None, grant.clone())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let tv_commands = format!("/surface-api/v1/surfaces/{tv}/device-commands");
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                &tv_commands,
+                Some(&owner),
+                None,
+                entries.clone()
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        // Above the shared ceiling without a personal declaration is refused.
+        let mut private = grant.clone();
+        private["policy"]["maximumClass"] = "private".into();
+        assert_eq!(
+            call(&app, "POST", &actions, Some(&owner), None, private)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let (status, saved) = call(&app, "POST", &actions, Some(&owner), None, grant.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["approval"]["revision"], 1);
+        // Compare-and-swap: the same write twice is a conflict.
+        assert_eq!(
+            call(&app, "POST", &actions, Some(&owner), None, grant.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        let (status, saved) = call(&app, "POST", &commands, Some(&owner), None, entries).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            saved["approval"]["policy"]["entries"][0]["id"],
+            "project-tests"
+        );
+        // Each route raises the owner body limit only as far as its own
+        // maximum policy needs: a full host, application and root list does
+        // not fit the 1024-byte owner limit, and a full command entry list
+        // does not fit the action route's 2048.
+        let mut full = grant.clone();
+        full["approvalRevision"] = 1.into();
+        full["expectedRevision"] = 1.into();
+        full["policy"]["open"] = json!({
+            "hosts": (0..16).map(|i| format!("h{i:02}.example.com")).collect::<Vec<_>>(),
+            "apps": (0..8).map(|i| json!({"id": format!("com.example.app{i}"), "label": format!("App {i}")})).collect::<Vec<_>>(),
+            "roots": (0..4).map(|i| json!({"id": format!("root{i}"), "label": format!("Root {i}"), "path": format!("/Users/owner/Projects/root{i}")})).collect::<Vec<_>>()
+        });
+        assert!(serde_json::to_vec(&full).unwrap().len() > 1024);
+        assert!(serde_json::to_vec(&full).unwrap().len() <= 2048);
+        assert_eq!(
+            call(&app, "POST", &actions, Some(&owner), None, full)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let mut many = json!({
+            "approval": crate::ambiance::action::COMMAND_OWNER_APPROVAL,
+            "approvalRevision": 1, "expectedRevision": 1,
+            "policy": {"maximumClass": "shared_room", "offerOutputToCognition": false,
+                "entries": (0..8).map(|i| json!({
+                    "id": format!("task-{i}"), "label": format!("Task {i}"),
+                    "argv": ["./revival", "check", "cosmos", "--filter",
+                        "ambiance_device_action_digest_matches_the_canonical_tuple",
+                        "--include-ignored", "--no-capture", "--locked"],
+                    "cwd": "/Users/owner/Documents/GitHub/ai-pin-revival",
+                    "mutates": false, "budgetMs": 900000
+                })).collect::<Vec<_>>()}
+        });
+        assert!(serde_json::to_vec(&many).unwrap().len() > 2048);
+        assert!(serde_json::to_vec(&many).unwrap().len() <= 4096);
+        assert_eq!(
+            call(&app, "POST", &commands, Some(&owner), None, many.clone())
+                .await
+                .0,
+            StatusCode::OK
+        );
+        many["policy"]["entries"] = json!([]);
+        assert_eq!(
+            call(&app, "POST", &commands, Some(&owner), None, many)
+                .await
+                .0,
+            StatusCode::CONFLICT
         );
     }
 

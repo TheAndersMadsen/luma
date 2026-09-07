@@ -234,7 +234,9 @@ fn native_enrollment_signing_golden_vector_and_real_crypto_bind_every_field() {
         enrollment_id: Uuid::from_u128(1),
         surface_id: Uuid::from_u128(2),
         approval_revision: 7,
-        approval: surface_registry::NATIVE_APPROVAL.to_owned(),
+        // The signed bytes carry the approval the record actually holds, so
+        // an installation on an earlier profile keeps its exact vector.
+        approval: surface_registry::LEGACY_NATIVE_SPEECH_APPROVAL.to_owned(),
         public_key_fingerprint: public_key_fingerprint(&public_key).unwrap(),
         challenge_id: Uuid::from_u128(3),
         nonce: URL_SAFE_NO_PAD.encode([4u8; 32]),
@@ -487,4 +489,131 @@ fn native_enrollment_expiry_reapproval_and_failed_signature_never_create_authori
     let reapproved = challenge(&mut state, &records, id, 70_500);
     assert_eq!(reapproved.approval_revision, 3);
     assert_eq!(reapproved.current_incarnation, None);
+}
+
+/// Publishing a new approval profile must not stop an installation on an
+/// earlier one from connecting. The challenge carries the approval the
+/// record actually holds, so a client that compiles in its own profile keeps
+/// matching until the owner reapproves.
+#[test]
+fn native_challenge_carries_the_records_own_approval() {
+    let (mut state, records, id) = fixture();
+    assert_eq!(
+        challenge(&mut state, &records, id, 100).approval,
+        surface_registry::NATIVE_APPROVAL
+    );
+
+    let (mut state, mut records, id) = fixture();
+    records.get_mut(&id).unwrap().approved_manifest =
+        surface_registry::legacy_native_speech_manifest();
+    assert_eq!(
+        challenge(&mut state, &records, id, 100).approval,
+        surface_registry::LEGACY_NATIVE_SPEECH_APPROVAL
+    );
+
+    let (mut state, mut records, id) = fixture();
+    records.get_mut(&id).unwrap().approved_manifest =
+        surface_registry::legacy_native_display_manifest();
+    assert_eq!(
+        challenge(&mut state, &records, id, 100).approval,
+        surface_registry::LEGACY_NATIVE_DISPLAY_APPROVAL
+    );
+
+    // A manifest Cosmos never published is not an origin at all.
+    let (mut state, mut records, id) = fixture();
+    records.get_mut(&id).unwrap().approved_manifest = serde_json::json!({"class": "native"});
+    assert!(matches!(
+        state.apply(
+            PRINCIPAL,
+            &records,
+            RuntimeOperation::NativeChallenge {
+                surface_id: id,
+                enrollment_id: Uuid::from_u128(1),
+                audience: AUDIENCE.to_owned(),
+                challenge_id: Uuid::from_u128(9),
+                nonce: URL_SAFE_NO_PAD.encode([4u8; 32]),
+            },
+            100,
+        ),
+        Err(RuntimeError::InvalidOrigin)
+    ));
+}
+
+/// The owner's Mac, phone and Linux PC are connected on the speech profile
+/// right now. After the action profile is published they must keep connecting,
+/// rendering and speaking, and gain no action channel until they are
+/// reapproved.
+#[test]
+fn a_v3_installation_still_connects_renders_and_speaks_after_the_v4_bump() {
+    let (mut state, mut records, id) = fixture();
+    records.get_mut(&id).unwrap().approved_manifest =
+        surface_registry::legacy_native_speech_manifest();
+    let challenge = challenge(&mut state, &records, id, 100);
+    assert_eq!(
+        challenge.approval,
+        surface_registry::LEGACY_NATIVE_SPEECH_APPROVAL
+    );
+    let request = signed(&challenge, Uuid::from_u128(2), 6);
+    let (RuntimeResult::NativeOpened { connection, .. }, _) = state
+        .apply(PRINCIPAL, &records, operation(id, request.clone(), 20), 120)
+        .unwrap()
+    else {
+        panic!("a speech-profile installation still opens its connection")
+    };
+    let proof = NativeProof {
+        surface_id: id,
+        incarnation: connection.incarnation,
+        token_hash: request.session_token_hash,
+    };
+    state
+        .apply(
+            PRINCIPAL,
+            &records,
+            RuntimeOperation::RoomControl {
+                connection: RoomProof::Native(proof.clone()),
+                stamp: InputStamp {
+                    epoch: connection.epoch,
+                    sequence: 1,
+                    instance_id: Uuid::from_u128(1),
+                },
+                control: BrowserControl::State { visible: true },
+            },
+            130,
+        )
+        .unwrap();
+    let record = &records[&id];
+    let candidate = |channel| {
+        state
+            .candidate(
+                &records,
+                record,
+                id,
+                channel,
+                crate::ambiance::PrivacyClass::SharedRoom,
+                None,
+                None,
+                140,
+            )
+            .blocker
+    };
+    assert_eq!(candidate(crate::ambiance::Channel::VisualCard), None);
+    // Speech still needs the origin's disclosure, which this fixture has not
+    // granted; the point here is that the manifest still declares it.
+    assert!(surface_registry::native_declares(record, "audio.tts"));
+    // And it declares no action channel at all until the owner reapproves.
+    for channel in [
+        crate::ambiance::Channel::ActionOpen,
+        crate::ambiance::Channel::ActionRoute,
+        crate::ambiance::Channel::ActionPlay,
+        crate::ambiance::Channel::ActionRun,
+        crate::ambiance::Channel::ConfirmTap,
+    ] {
+        assert!(!surface_registry::native_declares(record, channel.as_str()));
+        assert_eq!(
+            candidate(channel),
+            Some(crate::ambiance::policy::Blocker::Capability),
+            "{channel:?}"
+        );
+    }
+    assert!(state.action_channels(&records, id).is_empty());
 }

@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "state": "native-shared-speech-acceptance-in-progress",
+  "state": "native-device-action-definition-in-progress",
   "scope": "Owner-approved installation key, signed connection, sequenced text and foreground visibility in the shared Cosmos/Center room, with one shared-room visual card acknowledged after the installation's exact render and one shared-room spoken reply synthesized by Cosmos under the origin's speech-provider disclosure, streamed as bounded frames and acknowledged after the installation's complete playback. Native capture and physical device acceptance remain unfinished.",
-  "profile": "native-shared-speech-v3",
-  "legacyProfile": "native-shared-display-v2 approvals keep rendering cards and connecting but play no speech until the owner reapproves at the current revision.",
+  "profile": "native-device-action-v4",
+  "legacyProfile": "native-shared-speech-v3 and native-shared-display-v2 approvals keep connecting, rendering cards and (for v3) speaking, and declare no action channel until the owner reapproves at the current revision. The challenge carries the approval the record actually holds, so publishing this profile does not stop an installation on an earlier one from connecting.",
   "descriptor": {
     "maximumBytes": 1024,
     "fields": {
       "enrollmentId": "non-nil UUID",
       "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
       "platform": "macos|linux|android|android_tv",
-      "approval": "native-shared-speech-v3"
+      "approval": "native-device-action-v4"
     },
     "additionalProperties": false
   },
@@ -49,7 +49,7 @@
         "enrollmentId": "non-nil UUID",
         "surfaceId": "non-nil UUID",
         "approvalRevision": "positive safe integer",
-        "approval": "native-shared-speech-v3",
+        "approval": "the approval profile this installation's record holds: native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
         "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
         "challengeId": "non-nil UUID",
         "nonce": "canonical unpadded base64url of 32 random bytes",
@@ -271,14 +271,517 @@
     "Native text and controls use the shared room RPC only. There is no parallel REST input/control/state/close interface, and native participants cannot acknowledge browser rendering.",
     "This wire contract and its vectors do not establish installed clients, production acceptance or paper conformance."
   ],
-  "legacyProfile": {
-    "profile": "native-shared-text-v1",
-    "status": "Persisted approvals stay input-only until the owner reapproves at the current revision; reapproval bumps the revision and drops the current connection."
-  },
   "display": {
     "eligibility": "A native surface is a visual.card candidate only with the current display manifest, a current signed connection and a state control reporting visible=true on that connection. Visibility is availability, never occupancy, privacy or actor evidence.",
     "frames": "Runtime render/clear frames use the browser room wire shape; the client replies {version:1,kind:\"received\",stamp} only for a frame naming its exact surface/incarnation with a matching content digest and supported credit grammar.",
     "controls": "{kind:\"state\",visible} and {kind:\"acknowledge\",actionId,turnId,generation,channel:\"visual.card\",contentDigest} share the native input cursor; acknowledge instance IDs equal the action ID and are accepted only for actions dispatched to that connection.",
     "hint": "Cognition may propose target browser|macos|linux|android|android_tv from explicit request text. Policy adds a bounded rank component for eligible non-origin surfaces of that kind only; blocked or hidden surfaces and self-nomination gain nothing."
+  },
+  "deviceActions": {
+    "scope": "Definition only. The runtime binds and logs device actions; no dispatch, ceremony, report or client execution exists yet.",
+    "manifests": {
+      "macos": {
+        "class": "native",
+        "capabilities": {
+          "input": [
+            "text.public",
+            "state.visibility",
+            "context.screen",
+            "action.report"
+          ],
+          "output": {
+            "visual.card": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "audio.tts": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "action.open": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "low",
+              "idempotent": true,
+              "reportBudgetMs": 10000
+            },
+            "action.run": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "high",
+              "idempotent": false,
+              "reportBudgetMs": 900000
+            },
+            "confirm.tap": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "attestation": [
+                "foreground_tap",
+                "device_owner_auth"
+              ]
+            }
+          }
+        },
+        "constraints": [
+          "actor_unknown",
+          "occupancy_unknown",
+          "render_unverified",
+          "playback_unverified",
+          "visible_foreground_only",
+          "no_background_output",
+          "effect_unverified",
+          "no_effect_isolation"
+        ],
+        "expression": {
+          "visual.card": [
+            "acknowledged",
+            "degraded"
+          ],
+          "audio.tts": [
+            "acknowledged",
+            "degraded"
+          ],
+          "action.open": [
+            "acknowledged",
+            "degraded"
+          ],
+          "action.run": [
+            "thinking",
+            "acknowledged",
+            "degraded"
+          ],
+          "confirm.tap": [
+            "confirming",
+            "awaiting_permission"
+          ]
+        },
+        "cognition": {
+          "declaredClass": 0,
+          "models": []
+        },
+        "authority": {
+          "mayOriginate": [
+            "state.change",
+            "user.request",
+            "action.report"
+          ],
+          "reflexive": []
+        }
+      },
+      "linux": {
+        "class": "native",
+        "capabilities": {
+          "input": [
+            "text.public",
+            "state.visibility",
+            "context.screen",
+            "action.report"
+          ],
+          "output": {
+            "visual.card": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "audio.tts": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "action.open": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "low",
+              "idempotent": true,
+              "reportBudgetMs": 10000
+            },
+            "confirm.tap": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "attestation": [
+                "foreground_tap"
+              ]
+            }
+          }
+        },
+        "constraints": [
+          "actor_unknown",
+          "occupancy_unknown",
+          "render_unverified",
+          "playback_unverified",
+          "visible_foreground_only",
+          "no_background_output",
+          "effect_unverified",
+          "no_effect_isolation"
+        ],
+        "expression": {
+          "visual.card": [
+            "acknowledged",
+            "degraded"
+          ],
+          "audio.tts": [
+            "acknowledged",
+            "degraded"
+          ],
+          "action.open": [
+            "acknowledged",
+            "degraded"
+          ],
+          "confirm.tap": [
+            "confirming",
+            "awaiting_permission"
+          ]
+        },
+        "cognition": {
+          "declaredClass": 0,
+          "models": []
+        },
+        "authority": {
+          "mayOriginate": [
+            "state.change",
+            "user.request",
+            "action.report"
+          ],
+          "reflexive": []
+        }
+      },
+      "android": {
+        "class": "native",
+        "capabilities": {
+          "input": [
+            "text.public",
+            "state.visibility",
+            "context.screen",
+            "action.report"
+          ],
+          "output": {
+            "visual.card": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "audio.tts": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "action.open": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "low",
+              "idempotent": true,
+              "reportBudgetMs": 10000
+            },
+            "action.route": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "low",
+              "idempotent": true,
+              "reportBudgetMs": 20000
+            },
+            "confirm.tap": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "attestation": [
+                "foreground_tap"
+              ]
+            }
+          }
+        },
+        "constraints": [
+          "actor_unknown",
+          "occupancy_unknown",
+          "render_unverified",
+          "playback_unverified",
+          "visible_foreground_only",
+          "no_background_output",
+          "effect_unverified",
+          "foreground_or_assistant_session_only"
+        ],
+        "expression": {
+          "visual.card": [
+            "acknowledged",
+            "degraded"
+          ],
+          "audio.tts": [
+            "acknowledged",
+            "degraded"
+          ],
+          "action.open": [
+            "acknowledged",
+            "degraded"
+          ],
+          "action.route": [
+            "acknowledged",
+            "degraded"
+          ],
+          "confirm.tap": [
+            "confirming",
+            "awaiting_permission"
+          ]
+        },
+        "cognition": {
+          "declaredClass": 0,
+          "models": []
+        },
+        "authority": {
+          "mayOriginate": [
+            "state.change",
+            "user.request",
+            "action.report"
+          ],
+          "reflexive": []
+        }
+      },
+      "android_tv": {
+        "class": "native",
+        "capabilities": {
+          "input": [
+            "text.public",
+            "state.visibility",
+            "action.report"
+          ],
+          "output": {
+            "visual.card": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "audio.tts": {
+              "maxClass": "shared_room",
+              "shared": true
+            },
+            "action.play": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "low",
+              "idempotent": true,
+              "reportBudgetMs": 30000
+            }
+          }
+        },
+        "constraints": [
+          "actor_unknown",
+          "occupancy_unknown",
+          "render_unverified",
+          "playback_unverified",
+          "visible_foreground_only",
+          "no_background_output",
+          "effect_unverified"
+        ],
+        "expression": {
+          "visual.card": [
+            "acknowledged",
+            "degraded"
+          ],
+          "audio.tts": [
+            "acknowledged",
+            "degraded"
+          ],
+          "action.play": [
+            "acknowledged",
+            "degraded"
+          ]
+        },
+        "cognition": {
+          "declaredClass": 0,
+          "models": []
+        },
+        "authority": {
+          "mayOriginate": [
+            "state.change",
+            "user.request",
+            "action.report"
+          ],
+          "reflexive": []
+        }
+      }
+    },
+    "channels": {
+      "action.open": "One locator the platform opens. Low risk, idempotent, never repaired, retried at most once on the same surface with the same idempotency key.",
+      "action.route": "One place the platform navigates to. Low risk, idempotent, coordinates minted by the runtime from its own completed lookup receipt.",
+      "action.play": "One media item the platform plays. Low risk, idempotent; a launch that cannot be observed further is an unknown outcome, never a completed one.",
+      "action.run": "One owner-authored command entry. High risk when it changes files, never idempotent, never repaired, never retried.",
+      "confirm.tap": "The policy engine's own description of a command awaiting the owner's confirmation. Never model prose."
+    },
+    "classCeiling": "Every channel declares maxClass shared_room, the undeclared default. The only thing that lifts it is the owner's approve-private-display-v1 for that installation, bound to its approval revision and dropped on reapproval; it never applies to audio.tts, and android_tv can never hold it.",
+    "statuses": [
+      "proposed",
+      "awaiting_grant",
+      "dispatched",
+      "acknowledged",
+      "running",
+      "completed",
+      "refused",
+      "failed",
+      "cancelled",
+      "outcome_unknown"
+    ],
+    "outcomeGate": "On an action channel an acknowledgment means the device bound this exact command and it is legal there. It is not an outcome and sets no turn outcome; only a device's own final report may.",
+    "proposal": {
+      "branch": "device_action",
+      "shape": {
+        "operation": "open|route|play|run",
+        "reference": "a runtime-minted candidate identifier, 1-64 bytes",
+        "reason": "one short sentence for the owner's record, at most 200 bytes"
+      },
+      "binding": "Cognition names a runtime-minted reference, never an argument. Locators, argv, coordinates, package names, place ids and file paths are minted by the runtime from state it committed under a permission of its own.",
+      "candidates": {
+        "choice:N": "One item of an acknowledged choice list, bound to that list's content digest, for 600 s at the list's class (never above shared_room). Offered with its title. Binds action.play.",
+        "place:1": "One item of this turn's completed place lookup receipt. Minted by the runtime under the same call's then=\"route\"; never offered to cognition. Binds action.route.",
+        "doc:1": "The structured document handle the origin attached with its screen context, this turn. Offered with its identifier and kind only. Binds action.open.",
+        "cont:1": "A stored continuation, for 600 s at its own class. Offered with its identifier and kind only. Binds action.open.",
+        "cmd:<entry-id>": "One entry of approve-device-command-v1 on a currently eligible installation. Offered with the owner's own label. Binds action.run."
+      },
+      "withheld": "doc:* and cont:* are offered only on a turn already at private or above whose origin holds approve-screen-context-v1. cmd:* is offered on no turn that carries screen context, so a page the owner is reading cannot name a process.",
+      "failure": "An unknown, expired, class-ineligible or context-forbidden reference, or an operation that disagrees with its reference's kind, is a parse failure: the turn is cancelled exactly as for a malformed proposal. A device_action combined with any other branch is rejected before any runtime work; it is never silently reduced to the action.",
+      "then": "place_lookup accepts then=\"route\". The model proposes it in the same call, before any provider result exists. A receipt with exactly one place becomes a route the runtime binds from its own evidence; more than one leaves the address card standing."
+    },
+    "digests": {
+      "vectors": "contracts/fixtures/ambiance-device-action-digests-v1.json",
+      "algorithm": "sha256 over the compact JSON serialization of the canonical array",
+      "tuples": {
+        "open": [
+          "cosmos.device-action.open",
+          1,
+          "scheme",
+          "locatorValue",
+          "locatorRoot|null",
+          "version|null",
+          "positionKind|null",
+          "positionValue|null",
+          "label"
+        ],
+        "route": [
+          "cosmos.device-action.route",
+          1,
+          "placeId",
+          "name",
+          "address",
+          "lat",
+          "lng"
+        ],
+        "play": [
+          "cosmos.device-action.play",
+          1,
+          "title",
+          "query",
+          "providers",
+          "itemDigest"
+        ],
+        "run": [
+          "cosmos.device-action.run",
+          1,
+          "entryId",
+          "label",
+          "entryDigest",
+          "argvDigest",
+          "budgetMs",
+          "mutates"
+        ],
+        "confirm": [
+          "cosmos.confirmation",
+          1,
+          "verb",
+          "subject",
+          "deviceKind",
+          "effect",
+          "class"
+        ],
+        "commandArgv": [
+          "cosmos.device-command.argv",
+          1,
+          "argv",
+          "cwd"
+        ],
+        "commandEntry": [
+          "cosmos.device-command.entry",
+          1,
+          "id",
+          "label",
+          "argvDigest",
+          "mutates",
+          "budgetMs"
+        ],
+        "actionItem": [
+          "cosmos.action-item",
+          1,
+          "listDigest",
+          "itemId"
+        ],
+        "actionKey": [
+          "cosmos.action-key",
+          1,
+          "surfaceId",
+          "incarnation",
+          "actionId"
+        ]
+      },
+      "coordinates": "lat and lng are ASCII decimal strings with an optional leading '-' and exactly six fraction digits, formatted once by the runtime, because float formatting is the one conversion that drifts across Rust, Swift, Kotlin, Python and TypeScript.",
+      "positionValue": "the line or page number as a decimal string, or the fragment text"
+    },
+    "bounds": {
+      "label": 120,
+      "title": 120,
+      "name": 120,
+      "address": 200,
+      "query": 200,
+      "url": 2048,
+      "relative": 512,
+      "placeId": 1024,
+      "fragment": 200,
+      "providers": 4,
+      "entryId": 48,
+      "rootId": 32,
+      "budgetMs": 900000,
+      "output": 6144
+    },
+    "owner": {
+      "approve-device-actions-v1": {
+        "routes": {
+          "GET|POST": "/surface-api/v1/surfaces/:surfaceId/device-actions"
+        },
+        "bodyBytes": 2048,
+        "policy": {
+          "maximumClass": "public|shared_room|near_user|private",
+          "open": {
+            "hosts": "at most 16 bare lowercase registrable hosts, sorted, no scheme, port, userinfo or path",
+            "apps": "at most 8 {id,label}",
+            "roots": "at most 4 {id,label,path}, absolute, at most 256 bytes"
+          },
+          "route": {
+            "app": "google_maps"
+          },
+          "play": {
+            "providers": "1-4 sorted provider ids"
+          }
+        },
+        "caps": "An operation the installation's approved manifest does not declare is invalid_request. maximumClass is capped by that installation's approve-private-display-v1 ceiling at the same approval revision, and by shared_room without it; it is never raised past it. The permission is dropped on revocation or reapproval with the approval revision."
+      },
+      "approve-device-command-v1": {
+        "routes": {
+          "GET|POST": "/surface-api/v1/surfaces/:surfaceId/device-commands"
+        },
+        "bodyBytes": 4096,
+        "platforms": [
+          "macos"
+        ],
+        "policy": {
+          "maximumClass": "public|shared_room|near_user|private",
+          "offerOutputToCognition": "boolean",
+          "entries": "1-8 {id,label,argv,cwd,mutates,budgetMs}"
+        },
+        "caps": "argv is a fixed array of 1-12 elements of at most 256 bytes each, with no control characters and no '..' component in argv[0]; there is no shell string and no parameter. cwd is absolute. budgetMs is at most 900000. Every entry confirms; there is no never-confirm field. A label the runtime classifies above private is refused at policy-write time, because a silently sensitive label would make an owner-approved entry permanently unrunnable and indistinguishable from a capability miss."
+      }
+    },
+    "ledger": {
+      "device_action_policy_changed": "surfaceId, approval",
+      "device_command_policy_changed": "surfaceId, approval",
+      "action_candidates_offered": "fence, candidate kinds, count",
+      "action_bound": "fence, channel, operation kind, candidate kind, reference digest, entry digest, content digest",
+      "contentFree": "No entry carries a locator, argv, place name, media title, command output, device id or model text."
+    },
+    "notShipped": [
+      "Dispatch: no act, revoke, confirm or progress frame, and no report or grant control.",
+      "The confirmation ceremony and its grants (invariant-03 stays pending).",
+      "Per-principal action budgets, dispatch-time revalidation, the presence split and worker-lease renewal.",
+      "Turn outcomes, preemption and the two fixed shared-perceivable sentences.",
+      "Client execution on every platform, and the shared client's own decoding of these shapes."
+    ]
   }
 }

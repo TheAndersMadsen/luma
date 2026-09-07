@@ -144,7 +144,7 @@ impl NativeConnection {
         !self.closed
             && !record.revoked
             && matches!(record.binding, Binding::Native { .. })
-            && surface_registry::known_native_manifest(&record.approved_manifest)
+            && surface_registry::known_native_manifest(record)
             && self.approval_revision == record.revision
             && now < self.expires_at_ms
             && now < self.lease_expires_at_ms
@@ -187,7 +187,7 @@ fn record(
         .get(&surface_id)
         .filter(|record| {
             !record.revoked
-                && surface_registry::known_native_manifest(&record.approved_manifest)
+                && surface_registry::known_native_manifest(record)
                 && matches!(record.binding, Binding::Native { enrollment_id: id, .. } if id == enrollment_id)
         })
         .ok_or(RuntimeError::InvalidOrigin)
@@ -218,7 +218,7 @@ pub fn signing_message(
 ) -> Result<Vec<u8>, RuntimeError> {
     if challenge.version != 1
         || challenge.audience != canonical_audience(&challenge.audience)?
-        || challenge.approval != surface_registry::NATIVE_APPROVAL
+        || !surface_registry::known_native_approval(&challenge.approval)
         || challenge.approval_revision == 0
         || challenge.approval_revision > surface_registry::MAX_NATIVE_REVISION
         || challenge.expires_at_ms <= 0
@@ -276,6 +276,51 @@ fn verify(
     Ok(surface_registry::hash(&message))
 }
 
+#[cfg(test)]
+impl RuntimeState {
+    /// A current, visible signed connection for one approved installation,
+    /// for tests that exercise routing rather than the enrollment handshake.
+    pub(super) fn connect_native_for_test(&mut self, record: &Record, now: i64) -> NativeProof {
+        let incarnation = Uuid::new_v4();
+        let epoch = Uuid::new_v4();
+        let token_hash = surface_registry::hash(incarnation.as_bytes());
+        self.native_connections.insert(
+            record.surface_id,
+            NativeState {
+                approval_revision: record.revision,
+                pending: None,
+                connection: Some(NativeConnection {
+                    incarnation,
+                    approval_revision: record.revision,
+                    epoch,
+                    previous_incarnation: None,
+                    expires_at_ms: now + surface_registry::CONNECTION_MS,
+                    lease_expires_at_ms: now + surface_registry::LEASE_MS,
+                    closed: false,
+                    visible: true,
+                    token_hash: token_hash.clone(),
+                }),
+                consumed: None,
+            },
+        );
+        self.ingress.insert(
+            record.surface_id,
+            super::state::InputCursor {
+                incarnation,
+                epoch,
+                high_water: 0,
+                receipts: Vec::new(),
+                controls: Vec::new(),
+            },
+        );
+        NativeProof {
+            surface_id: record.surface_id,
+            incarnation,
+            token_hash,
+        }
+    }
+}
+
 impl RuntimeState {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn native_challenge(
@@ -321,7 +366,12 @@ impl RuntimeState {
             enrollment_id,
             surface_id,
             approval_revision: record.revision,
-            approval: surface_registry::NATIVE_APPROVAL.to_owned(),
+            // The challenge carries the approval the record actually holds.
+            // Publishing a new profile must not stop an installation on an
+            // earlier one from connecting, rendering and speaking.
+            approval: surface_registry::native_approval(record)
+                .ok_or(RuntimeError::InvalidOrigin)?
+                .to_owned(),
             public_key_fingerprint: public_key_fingerprint(public_key)?,
             challenge_id,
             nonce,
@@ -465,7 +515,7 @@ impl RuntimeState {
             .filter(|record| {
                 !record.revoked
                     && matches!(record.binding, Binding::Native { .. })
-                    && surface_registry::known_native_manifest(&record.approved_manifest)
+                    && surface_registry::known_native_manifest(record)
             })
             .ok_or(RuntimeError::InvalidOrigin)?;
         let connection = self
@@ -574,7 +624,7 @@ impl RuntimeState {
                 !r.revoked
                     && r.revision == state.approval_revision
                     && matches!(r.binding, Binding::Native { .. })
-                    && surface_registry::known_native_manifest(&r.approved_manifest)
+                    && surface_registry::known_native_manifest(r)
             });
             if let Some(connection) = state.connection.as_mut().filter(|c| !c.closed)
                 && (!approved

@@ -318,6 +318,72 @@ only, never occupancy, privacy or actor evidence. Losing the foreground fails
 dispatch-time revalidation, so a shown card is cancelled and the logged
 fallback receives its own new action.
 
+The device-action increment gives a surface a third thing it can be asked to
+do. An action travels the same pipeline as a card and a spoken reply: cognition
+proposes, the runtime binds, policy decides, and only the device's own report
+may say it happened. This increment lands the definition and the binding, and
+deliberately stops before anything can happen: there is no dispatch frame, no
+confirmation ceremony, no execution report and no client work, so a bound
+action is proposed, routed, logged and then goes nowhere.
+
+The native approval profile is now `native-device-action-v4` and it differs per
+platform, because what a device may be asked to do depends on what its
+operating system can honestly report. macOS declares `action.open`,
+`action.run` and a `confirm.tap` venue that can ask for device-owner
+authentication; the Omarchy PC declares `action.open` and a keyboard-first
+`confirm.tap`; the phone declares `action.open` and `action.route`; the Shield
+declares `action.play` and no ceremony venue at all, because a television is
+bystander-perceivable by construction. Every channel declares the shared-room
+ceiling, which only the owner's own `approve-private-display-v1` for that
+installation lifts. Persisted `native-shared-speech-v3` and
+`native-shared-display-v2` approvals keep connecting, rendering and speaking and
+declare no action channel until the owner reapproves: the challenge now carries
+the approval the record actually holds, so publishing a new profile never stops
+an installation on an earlier one from connecting. Reapproval bumps the
+installation's revision and therefore drops its private-display, screen-context,
+speech-disclosure, lookup and device-action permissions, which have to be
+granted again.
+
+Two owner permissions live under Devices. **Let this device act**
+(`approve-device-actions-v1`) names the hosts, applications and directory roots
+it may open, whether it may route to a place, and which media providers it may
+play; an operation its manifest does not declare cannot be written, and its
+class is capped by that installation's private-display ceiling. **Tasks on this
+device** (`approve-device-command-v1`, macOS only) is a list of at most eight
+commands the owner authored, each with a fixed `argv` array — there is no shell
+string and no model-supplied parameter, at any risk level — a working directory,
+a millisecond budget and whether it changes files. A task label the runtime would
+classify as sensitive is refused when it is saved, because a silently
+unrunnable task is indistinguishable from a missing capability.
+
+Cognition proposes `device_action` with an operation and a *reference*, never an
+argument. The reference names a candidate the runtime itself put in front of it
+this turn: an item of an acknowledged choice list (bound to that list's content
+digest, so "number two" resolves against exactly the list that was shown or
+against nothing), the document handle the origin attached with its screen
+context, a stored continuation, or one of the owner's own task labels. Locators,
+`argv`, coordinates, package names, place ids and file paths are minted by the
+runtime from state it committed under a permission of its own. A command
+candidate is offered on no turn that carries screen context, so a page the owner
+is reading cannot name a process; a document is named to cognition by identifier
+and kind only, never by title, application, path or line. An unresolvable
+reference is a parse failure, and a device action combined with any other
+proposal branch is rejected rather than silently reduced to the action. A
+`place_lookup` may carry `then: "route"` in the same call, before any provider
+result exists, and a receipt with exactly one place becomes a route the runtime
+binds from its own evidence.
+
+Five canonical content digests bind a command to its exact arguments across the
+runtime, the shared client and Center, with coordinates as fixed six-digit
+decimal strings because float formatting is the one conversion that drifts
+between languages. The vectors are checked in against the first commit, in
+[`contracts/fixtures/ambiance-device-action-digests-v1.json`](contracts/fixtures/ambiance-device-action-digests-v1.json),
+and the per-platform manifests, statuses and owner routes are published in
+[`contracts/ambiance-native.json`](contracts/ambiance-native.json).
+Transient content references now carry the surface the decision named and are
+refused to any other, which is what makes a reference authority for a channel
+rather than for anyone who holds it.
+
 A completed place lookup now leaves bounded recent context for the owner: the
 user's own query text with its source surface and privacy class, for ten
 minutes, in the durable runtime state (provider content stays transient). The
@@ -358,14 +424,17 @@ offered for a TV or a browser. Set up the usual permissions turns it on for
 phones only.
 
 **Settings → Account → Activity** lists recent turns from the runtime ledger,
-newest first: when and from which kind of device each was asked ("Asked from
-your phone"), what happened to the reply ("Shown on your Mac", "Spoken on your
-Ai Pin", "Private reply on your phone", "Nowhere to show it", "Cancelled",
-"Cannot confirm"), and a Why disclosure naming each candidate device with its
-blocker in plain words, the routing hint and the request's class. The ledger
-holds no request text or reply content, so the page shows none; an empty or
-unreadable ledger says so. The page is rendered on the server and reads
-without JavaScript.
+newest first and grouped by day: when and from which kind of device each was
+asked ("Asked from your phone"), what happened to the reply ("Shown on your
+Mac", "Spoken on your Ai Pin", "Private reply on your phone", "Nowhere to show
+it", "Cancelled", "Cannot confirm"), and a Why disclosure naming each candidate
+device in a sentence ("Your TV could not show a card — its app was not in
+front."), the routing hint and what the request's class meant. The ledger holds
+no request text or reply content, so the page shows none; an empty or unreadable
+ledger says so in plain words and offers the one thing to do next. The page is
+rendered on the server in UTC and reads without JavaScript; once it hydrates the
+viewer's own clock relabels each row ("Just now", "12 minutes ago", "Yesterday
+22:41") and groups the rows into local days.
 
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
 `android_tv`) only from explicit request text such as "show this on the TV".
@@ -631,23 +700,45 @@ same current connection without renewing its deadlines. Enrollment and current
 connection evidence remain separate from actor identity and physical privacy.
 
 On this branch, **Settings → Devices** is the owner's everyday view: one card
-per approved phone, TV or computer plus this browser. Each card shows a plain
-status read from the runtime's own connection state (Connected, Connected · app
-in background, Not connected), one line naming what the device may do, and a
-**Manage** panel with plain switches: Speak replies, Look things up on the web,
-Find places and Show private replies here (a TV is a shared screen and never
-offers the last). **Add a device** expects the QR code or “Approve in Center”
-link the device shows during its own set-up; the link's `#descriptor=` fragment
-is consumed once in the browser and never sent to the server. The review step
-names the kind of device and shows the key fingerprint in 4-character groups to
-compare with the device before **Approve this device**; one further click can
-record the usual permissions in sequence, each confirmed by Cosmos separately
-and reported honestly when a step did not commit. Manual descriptor entry, the
+per approved phone, TV or computer plus this browser. Each card is titled the
+way the owner would say it (Phone, TV, Mac, Linux PC, This browser — the same
+names the native clients use) and shows a plain status read from the runtime's
+own connection state (Connected, Connected · in the background, Offline), one
+line naming what the device may do, and a **Manage** panel with plain switches:
+Speak replies, Look things up on the web, Find places, Show private replies here
+and Use what's on the screen (a TV is a shared screen and never offers the last
+two). Each switch carries one sentence on what it allows and one, quieter, on
+what it means for privacy. **Add a device** is three numbered steps ending in
+the comparison: the device shows a QR code or an “Approve in Center” link during
+its own set-up, and that link's `#descriptor=` fragment is consumed once in the
+browser and never sent to the server. The review step names the kind of device
+and shows the key fingerprint in 4-character groups to compare with the device
+before **Approve this device**; one further click can record the usual
+permissions in sequence, each confirmed by Cosmos separately and reported
+honestly when a step did not commit. Entering the device details by hand, the
 enrollment ID, fingerprint, approval revision and **Remove this device** sit
-behind disclosures. Every switch reads its saved state before writing, and a
-missing write response requires a fresh read before another change. Approval
-is never proof of a connection or of delivery, and the native profile still
-grants no microphone, screen/media context, private memory or device actions.
+behind disclosures. A list that a hidden tab invalidated says it is out of date;
+only a failed read uses failure words. Every switch reads its saved state before
+writing, and a missing write response requires a fresh read before another
+change. Approval is never proof of a connection or of delivery, and the native
+profile still grants no microphone, screen/media context, private memory or
+device actions.
+
+The **Ask Cosmos** panel in Center's own chrome follows the same words as the
+native clients. One switch makes this tab a shared display for an hour; until
+then the panel shows the welcome state — a nebula, "Ask anything", and three
+prompts that work with the permissions a browser can hold. A sent line is
+acknowledged the instant it leaves as the **Now** line, and the field and Send
+stay down until Cosmos admits or refuses it, so nothing double-submits. Where
+the turn stands is one reserved two-part line in the shared state vocabulary
+(Working, Waiting for a device, Waiting for you, Completed · Shown on your Mac,
+Cannot confirm, Disconnected), so no status arriving moves the card under it. A
+choice list is numbered 1–8 and answered by clicking a row, pressing Enter on
+it, walking it with the arrow keys, or typing its number into an empty prompt;
+the client sends the item's exact title. Closing the panel hides it and does not
+cancel a running turn — **Cancel task** is its own explicit action, offered only
+while a turn is open.
+
 Native applications remain unfinished. This branch connects authenticated native current text to the
 existing Center renderer through one shared principal room coordinator. After
 challenge/open, the native room endpoint authenticates the raw session secret

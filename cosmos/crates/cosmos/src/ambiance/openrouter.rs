@@ -124,10 +124,21 @@ fn normalize_arguments(arguments: &str) -> Option<String> {
     let nested = object.get("intent").and_then(|intent| {
         let kind = intent.get("kind")?.as_str()?;
         let branch = match kind {
-            "web_lookup" | "place_lookup" => json!({"query": intent.get("query")?.clone()}),
+            "web_lookup" => json!({"query": intent.get("query")?.clone()}),
+            "place_lookup" => {
+                let mut branch = json!({"query": intent.get("query")?.clone()});
+                if let Some(then) = intent.get("then") {
+                    branch["then"] = then.clone();
+                }
+                branch
+            }
             "choice_list" => json!({
                 "title": intent.get("title")?.clone(),
                 "items": intent.get("items")?.clone(),
+            }),
+            "device_action" => json!({
+                "operation": intent.get("operation")?.clone(),
+                "reference": intent.get("reference")?.clone(),
             }),
             _ => return None,
         };
@@ -140,6 +151,24 @@ fn normalize_arguments(arguments: &str) -> Option<String> {
             object.insert(kind, branch);
         }
         normalized = true;
+    }
+    // Dropping a branch is only safe when nothing was going to happen. A
+    // device action combined with any other branch is refused here, before
+    // any runtime work: silently discarding the answer and keeping the effect
+    // is the wrong direction to fail.
+    if object.contains_key("device_action")
+        && [
+            "intent",
+            "analysis",
+            "web_lookup",
+            "place_lookup",
+            "choice_list",
+        ]
+        .iter()
+        .any(|branch| object.contains_key(*branch))
+    {
+        tracing::warn!("cognition combined a device action with another branch");
+        return None;
     }
     if ["analysis", "web_lookup", "place_lookup", "choice_list"]
         .iter()

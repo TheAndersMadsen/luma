@@ -72,6 +72,14 @@ impl RuntimeState {
             let state = match outcome.channel {
                 Channel::VisualCard => TurnState::Shown,
                 Channel::AudioTts => TurnState::Spoken,
+                // Only a device report may set an action-channel outcome, and
+                // no report is accepted yet; an outcome the origin cannot name
+                // is reported as one the runtime cannot confirm.
+                Channel::ActionOpen
+                | Channel::ActionRoute
+                | Channel::ActionPlay
+                | Channel::ActionRun
+                | Channel::ConfirmTap => TurnState::Unknown,
             };
             (state, Some(outcome.surface_id))
         } else if let Some(pending) = actions

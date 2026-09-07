@@ -13,12 +13,79 @@ pub enum PrivacyClass {
     Sensitive,
 }
 
+/// One output capability, with its own privacy properties. The four
+/// `action.*` channels change something about the world; `confirm.tap` is the
+/// ceremony that authorizes the ones that need it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Channel {
     #[serde(rename = "visual.card")]
     VisualCard,
     #[serde(rename = "audio.tts")]
     AudioTts,
+    #[serde(rename = "action.open")]
+    ActionOpen,
+    #[serde(rename = "action.route")]
+    ActionRoute,
+    #[serde(rename = "action.play")]
+    ActionPlay,
+    #[serde(rename = "action.run")]
+    ActionRun,
+    #[serde(rename = "confirm.tap")]
+    ConfirmTap,
+}
+
+impl Channel {
+    /// The manifest key this channel is declared under.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VisualCard => "visual.card",
+            Self::AudioTts => "audio.tts",
+            Self::ActionOpen => "action.open",
+            Self::ActionRoute => "action.route",
+            Self::ActionPlay => "action.play",
+            Self::ActionRun => "action.run",
+            Self::ConfirmTap => "confirm.tap",
+        }
+    }
+
+    /// Whether this channel can change something about the world. A device
+    /// can accept such a command and then fail to carry it out, which is why
+    /// an acknowledgment on it is not an outcome.
+    pub fn is_action(self) -> bool {
+        matches!(
+            self,
+            Self::ActionOpen | Self::ActionRoute | Self::ActionPlay | Self::ActionRun
+        )
+    }
+
+    /// Whether every command on this channel needs a confirmation ceremony.
+    pub fn needs_grant(self) -> bool {
+        self == Self::ActionRun
+    }
+
+    /// Whether beginning here requires the installation's own visible
+    /// foreground. Visibility is required to begin, never to continue.
+    pub fn needs_foreground(self) -> bool {
+        self.is_action() || self == Self::ConfirmTap
+    }
+
+    /// Whether a lost acknowledgment may be retried once with the same
+    /// idempotency key on the same surface. `action.run` never retries.
+    pub fn idempotent(self) -> bool {
+        matches!(
+            self,
+            Self::ActionOpen | Self::ActionRoute | Self::ActionPlay
+        )
+    }
+
+    /// The channel's risk ceiling. The bound operation refines it: a command
+    /// entry that changes files is `high` whatever else it declares.
+    pub fn risk(self) -> super::action::Risk {
+        match self {
+            Self::ActionRun => super::action::Risk::High,
+            _ => super::action::Risk::Low,
+        }
+    }
 }
 
 pub const MIN_CHOICES: usize = 2;
@@ -45,16 +112,37 @@ fn choice_text(value: &str, maximum: usize) -> bool {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SemanticIntent {
-    InformationalSpeech { text: String },
-    VisualTextCard { text: String },
-    PlaceAddressCard { content: super::visual::Reference },
-    ChoiceList { title: String, items: Vec<Choice> },
+    InformationalSpeech {
+        text: String,
+    },
+    VisualTextCard {
+        text: String,
+    },
+    PlaceAddressCard {
+        content: super::visual::Reference,
+    },
+    ChoiceList {
+        title: String,
+        items: Vec<Choice>,
+    },
+    /// One bound device command. The runtime minted every argument.
+    DeviceAction {
+        operation: super::action::Operation,
+    },
+    /// The policy engine's own description of a command awaiting the owner's
+    /// confirmation. Never model prose.
+    Confirmation {
+        request: super::action::Description,
+    },
 }
 impl SemanticIntent {
     pub fn text(&self) -> &str {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text,
-            Self::PlaceAddressCard { .. } | Self::ChoiceList { .. } => "",
+            Self::PlaceAddressCard { .. }
+            | Self::ChoiceList { .. }
+            | Self::DeviceAction { .. }
+            | Self::Confirmation { .. } => "",
         }
     }
     /// Every model-authored word of the proposal, for the runtime's own
@@ -73,6 +161,12 @@ impl SemanticIntent {
                 }
                 text
             }
+            // Human-visible operation strings can raise the class and never
+            // lower it; a command contributes the owner's own label only.
+            Self::DeviceAction { operation } => operation.classified_text(),
+            Self::Confirmation { request } => {
+                format!("{}\n{}", request.subject, request.effect)
+            }
         }
     }
     /// Whether the durable action still carries content to clear.
@@ -81,12 +175,17 @@ impl SemanticIntent {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => !text.is_empty(),
             Self::PlaceAddressCard { .. } => false,
             Self::ChoiceList { title, items } => !title.is_empty() || !items.is_empty(),
+            // A bound command and a ceremony description are the runtime's own
+            // record of what it decided, not retained content.
+            Self::DeviceAction { .. } | Self::Confirmation { .. } => false,
         }
     }
     pub fn clear_payload(&mut self) {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text.clear(),
-            Self::PlaceAddressCard { .. } => {}
+            Self::PlaceAddressCard { .. }
+            | Self::DeviceAction { .. }
+            | Self::Confirmation { .. } => {}
             Self::ChoiceList { title, items } => {
                 title.clear();
                 items.clear();
@@ -99,11 +198,15 @@ impl SemanticIntent {
             Self::VisualTextCard { .. }
             | Self::PlaceAddressCard { .. }
             | Self::ChoiceList { .. } => Channel::VisualCard,
+            Self::DeviceAction { operation } => operation.channel(),
+            Self::Confirmation { .. } => Channel::ConfirmTap,
         }
     }
     pub fn valid(&self) -> bool {
         match self {
             Self::PlaceAddressCard { content } => content.valid(),
+            Self::DeviceAction { operation } => operation.valid(),
+            Self::Confirmation { request } => request.valid(),
             Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
                 !self.text().trim().is_empty() && self.text().len() <= 4000
             }
@@ -122,6 +225,8 @@ impl SemanticIntent {
     pub fn content_digest(&self) -> String {
         match self {
             Self::PlaceAddressCard { content } => content.digest.clone(),
+            Self::DeviceAction { operation } => operation.content_digest(),
+            Self::Confirmation { request } => request.content_digest(),
             Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
                 crate::surface_registry::hash(self.text().as_bytes())
             }
@@ -227,11 +332,11 @@ pub fn candidate(
         (Binding::Browser, Channel::VisualCard) => {
             crate::surface_registry::known_browser_manifest(&record.approved_manifest)
         }
-        (Binding::Native { .. }, Channel::VisualCard) => {
-            crate::surface_registry::known_native_manifest(&record.approved_manifest)
-        }
-        (Binding::Native { .. }, Channel::AudioTts) => {
-            record.approved_manifest == crate::surface_registry::native_manifest()
+        // Every native channel is the installation's own approved manifest
+        // declaring it. An installation on an earlier profile therefore keeps
+        // rendering and speaking and declares no action channel at all.
+        (Binding::Native { .. }, channel) => {
+            crate::surface_registry::native_declares(record, channel.as_str())
         }
         (Binding::Pin { .. }, Channel::AudioTts) => {
             record.surface_id == origin
@@ -239,7 +344,7 @@ pub fn candidate(
         }
         _ => false,
     };
-    let personal = personal && channel == Channel::VisualCard;
+    let personal = personal && channel != Channel::AudioTts;
     let blocker = if privacy > PrivacyClass::SharedRoom && !personal {
         Some(Blocker::Privacy)
     } else if !capability {
@@ -452,7 +557,7 @@ mod tests {
     #[test]
     fn legacy_native_approvals_render_cards_but_have_no_speech_capability() {
         let mut legacy = native("macos");
-        legacy.approved_manifest = crate::surface_registry::legacy_native_manifest();
+        legacy.approved_manifest = crate::surface_registry::legacy_native_display_manifest();
         let card = candidate(
             &legacy,
             present(Uuid::new_v4()),
