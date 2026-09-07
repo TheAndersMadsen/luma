@@ -25,6 +25,10 @@ GENERATOR_SEC1 = bytes.fromhex(
     "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
     "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
 )
+# The four calls a build needs before it may carry a command out at all.
+ACTION_SYMBOLS = ("cosmos_surface_acknowledge_task", "cosmos_surface_report", "cosmos_surface_grant",
+                  "cosmos_surface_device_policy")
+ACTION_ID = "2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d"
 
 
 def library_path():
@@ -79,7 +83,9 @@ class FakeHandle:
         if name.startswith("_") or name not in self.exported:
             raise AttributeError(name)
         if name not in self.functions:
-            self.functions[name] = FakeFunction(name, self.calls)
+            # Holding no policy is the ordinary state of a fresh handle.
+            result = native.EMPTY if name == "cosmos_surface_device_policy" else native.OK
+            self.functions[name] = FakeFunction(name, self.calls, result)
         return self.functions[name]
 
 
@@ -118,14 +124,55 @@ class OptionalSymbolTest(unittest.TestCase):
 
     def test_older_library_reports_no_features_and_refuses_the_richer_calls(self):
         handle, library = self.load(())
-        self.assertEqual(library.features, native.Features(targets=False, context=False))
+        self.assertEqual(library.features, native.Features(targets=False, context=False, actions=False))
         surface = native.Surface(library, b'{"version":1}', NullBindings())
         self.assertEqual(surface.send_text_to("hello", "macos"), native.UNAVAILABLE)
         self.assertEqual(surface.send_text_with_context("hello", "Mail", "body", None), native.UNAVAILABLE)
+        self.assertEqual(surface.report(ACTION_ID, b'{"outcome":"unknown"}'), native.UNAVAILABLE)
+        # A build that cannot read the owner's policy holds none, which is
+        # exactly what it should then do.
+        self.assertIsNone(surface.device_policy(64))
         self.assertEqual([name for name, _ in handle.calls], ["cosmos_surface_create"])
         self.assertEqual(surface.send_text("hello"), native.OK)
         self.assertEqual(handle.calls[-1][0], "cosmos_surface_send_text")
         self.assertEqual(self.argument_bytes(handle.calls[-1][1], 1), b"hello")
+        surface.destroy()
+
+    def test_the_device_action_calls_are_one_set_and_report_names_its_action(self):
+        """A build missing any of the four cannot carry a command out honestly:
+        without the policy call it could not read the owner's permission, and
+        its `report` would be the older call that names no action."""
+        for missing in ACTION_SYMBOLS:
+            handle, library = self.load(tuple(name for name in ACTION_SYMBOLS if name != missing))
+            self.assertFalse(library.features.actions, missing)
+        handle, library = self.load(ACTION_SYMBOLS)
+        self.assertTrue(library.features.actions)
+        self.assertEqual(len(handle.functions["cosmos_surface_report"].argtypes), 5)
+        self.assertEqual(len(handle.functions["cosmos_surface_device_policy"].argtypes), 4)
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        self.assertEqual(surface.report(ACTION_ID, b'{"outcome":"unknown"}'), native.OK)
+        name, arguments = handle.calls[-1]
+        self.assertEqual(name, "cosmos_surface_report")
+        self.assertEqual(self.argument_bytes(arguments, 1), ACTION_ID.encode("utf-8"))
+        self.assertEqual(self.argument_bytes(arguments, 3), b'{"outcome":"unknown"}')
+        # The action the report is about is bounded before the library sees it.
+        before = len(handle.calls)
+        for action in ("", "not-a-uuid", ACTION_ID + "0", ACTION_ID[:-1] + "\0"):
+            self.assertEqual(surface.report(action, b'{"outcome":"unknown"}'), native.INVALID_ARGUMENT, action)
+        self.assertEqual(surface.report(ACTION_ID, b""), native.INVALID_ARGUMENT)
+        self.assertEqual(len(handle.calls), before, "nothing reached the library")
+        surface.destroy()
+
+    def test_the_policy_document_is_copied_out_by_the_length_the_snapshot_named(self):
+        handle, library = self.load(ACTION_SYMBOLS)
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        self.assertIsNone(surface.device_policy(64), "an empty buffer means this installation holds none")
+        name, arguments = handle.calls[-1]
+        self.assertEqual(name, "cosmos_surface_device_policy")
+        self.assertEqual(arguments[2], 64)
+        for length in (0, -1, native.MAX_POLICY_BYTES + 1):
+            with self.assertRaises(native.NativeError, msg=length):
+                surface.device_policy(length)
         surface.destroy()
 
     def test_newer_library_binds_send_text_to_and_with_context(self):
@@ -238,15 +285,20 @@ class NativeSmokeTest(unittest.TestCase):
                 self.assertEqual(surface.send_text_to("hello", "macos"), native.UNAVAILABLE)
             self.assertTrue(self.library.features.actions,
                             "this library predates the device-action calls")
-            # The three calls exist and bound input is refused before anything
-            # is enqueued; there is no task or ceremony on a prepared surface.
-            self.assertEqual(surface.report(b""), native.INVALID_ARGUMENT)
-            self.assertEqual(surface.report(b'{"outcome":"nonsense"}'), native.INVALID_ARGUMENT)
+            # The four calls exist and bound input is refused before anything
+            # is enqueued; there is no task, ceremony or policy on a prepared
+            # surface, and holding no policy is an ordinary state.
+            self.assertIsNone(surface.device_policy(native.MAX_POLICY_BYTES))
+            self.assertEqual(surface.report(ACTION_ID, b""), native.INVALID_ARGUMENT)
+            self.assertEqual(surface.report(ACTION_ID, b'{"outcome":"nonsense"}'), native.INVALID_ARGUMENT)
+            self.assertEqual(surface.report("00000000-0000-0000-0000-000000000000",
+                                            b'{"outcome":"unknown","evidence":{"kind":"open","opened":false}}'),
+                             native.INVALID_ARGUMENT)
             self.assertEqual(surface.grant(True, None), native.INVALID_ARGUMENT)
             self.assertEqual(surface.grant(True, "not_an_attestation"), native.INVALID_ARGUMENT)
             self.assertEqual(surface.acknowledge_task(), native.OK)
             self.assertEqual(surface.report(
-                b'{"outcome":"unknown","evidence":{"kind":"open","opened":false}}'), native.OK)
+                ACTION_ID, b'{"outcome":"unknown","evidence":{"kind":"open","opened":false}}'), native.OK)
             self.assertEqual(surface.grant(False, None), native.OK)
         finally:
             self.assertEqual(surface.destroy(), native.OK)

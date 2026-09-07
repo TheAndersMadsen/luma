@@ -3,15 +3,19 @@ package dk.andersmadsen.cosmos.android
 import dk.andersmadsen.cosmos.android.action.DeclineReason
 import dk.andersmadsen.cosmos.android.action.DeviceApp
 import dk.andersmadsen.cosmos.android.action.DevicePolicy
+import dk.andersmadsen.cosmos.android.action.HeldPolicy
 import dk.andersmadsen.cosmos.android.action.Locator
+import dk.andersmadsen.cosmos.android.action.MediaProviders
 import dk.andersmadsen.cosmos.android.action.Operation
 import dk.andersmadsen.cosmos.android.action.PlannedAction
 import dk.andersmadsen.cosmos.android.action.Position
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.UUID
 
 class DevicePolicyTest {
     private val policy = DevicePolicy(
@@ -105,22 +109,94 @@ class DevicePolicyTest {
         assertEquals(DeclineReason.NO_HANDLER, policy.refusal(run, DevicePolicy.PHONE))
     }
 
+    // ---------------------------------------------------------------------
+    // The copy Cosmos delivers over the connection this device already holds
+    // ---------------------------------------------------------------------
+
+    private val surface = UUID.fromString("22222222-2222-4222-8222-222222222222")
+
+    private val document = """{"version":1,"surfaceId":"$surface","approvalRevision":4,""" +
+        """"actions":{"revision":2,"maximumClass":"shared_room",""" +
+        """"open":{"hosts":["github.com"],"apps":[{"id":"com.google.android.youtube","label":"YouTube"}],"roots":[]},""" +
+        """"route":{"app":"google_maps"},"play":{"providers":["youtube"]}}}"""
+
+    /** What a snapshot would say about [body]; the digest and the length are of those exact bytes. */
+    private fun named(
+        body: String = document, surfaceId: UUID = surface, approvalRevision: Long = 4,
+        actionsRevision: Long? = 2, commandsRevision: Long? = null,
+        digest: String = DevicePolicy.digest(body.toByteArray()), byteLength: Int = body.toByteArray().size,
+    ) = HeldPolicy(surfaceId, approvalRevision, actionsRevision, commandsRevision, digest, byteLength)
+
     @Test
-    fun readsTheOwnersOwnCopyAndRefusesOneThatIsOutOfShape() {
-        val file = """{"version":1,"open":{"hosts":["GitHub.com"],"apps":[{"id":"com.google.android.youtube","label":"YouTube"}]},
-            "route":{"app":"google_maps"},"play":{"providers":["youtube"]}}"""
-        val decoded = DevicePolicy.decode(file.toByteArray())
+    fun readsTheCopyCosmosDeliveredForThisInstallation() {
+        val decoded = DevicePolicy.decode(document.toByteArray(), named())!!
         assertEquals(setOf("github.com"), decoded.hosts)
         assertEquals(listOf(DeviceApp("com.google.android.youtube", "YouTube")), decoded.apps)
         assertTrue(decoded.route)
         assertEquals(setOf("youtube"), decoded.providers)
-        // Half an allowlist is worse than none: an over-cap or malformed copy is empty.
-        val toMany = """{"open":{"hosts":[${(1..20).joinToString(",") { "\"host$it.example\"" }}]}}"""
-        assertTrue(DevicePolicy.decode(toMany.toByteArray()).isEmpty)
-        assertTrue(DevicePolicy.decode("not json".toByteArray()).isEmpty)
-        assertTrue(DevicePolicy.decode(ByteArray(0)).isEmpty)
-        assertTrue(DevicePolicy.decode(ByteArray(DevicePolicy.MAX_FILE_BYTES + 1) { 'x'.code.toByte() }).isEmpty)
-        // Only one route application exists; anything else is not a route.
-        assertFalse(DevicePolicy.decode("""{"route":{"app":"other_maps"}}""".toByteArray()).route)
+        // What the Pixel is actually sent: it may route, and nothing else.
+        val routing = """{"version":1,"surfaceId":"$surface","approvalRevision":4,""" +
+            """"actions":{"revision":2,"maximumClass":"shared_room","route":{"app":"google_maps"}}}"""
+        val only = DevicePolicy.decode(routing.toByteArray(), named(routing))!!
+        assertTrue(only.route)
+        assertTrue(only.hosts.isEmpty() && only.apps.isEmpty() && only.providers.isEmpty())
+        // The provider id is the owner's; the package it maps to stays here.
+        assertEquals(listOf("com.google.android.youtube.tv", "com.google.android.youtube"), MediaProviders.packages("youtube"))
+        // Bytes are what they were said to be; the hex is the fleet's own.
+        assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", DevicePolicy.digest(ByteArray(0)))
+    }
+
+    @Test
+    fun holdsOnlyTheOwnersStatementAboutThisSurfaceAndThisApproval() {
+        // Someone else's permission, and the owner's permission at another
+        // approval, are both refused whole rather than half-held.
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(surfaceId = UUID.randomUUID())))
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(approvalRevision = 5)))
+        // A section revision the snapshot did not name is a copy that drifted.
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(actionsRevision = 3)))
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(actionsRevision = null)))
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(commandsRevision = 1)))
+        // And these have to be the exact bytes the snapshot named.
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(digest = "0".repeat(64))))
+        assertNull(DevicePolicy.decode(document.toByteArray(), named(byteLength = document.toByteArray().size - 1)))
+    }
+
+    @Test
+    fun refusesADocumentThatIsOutOfShapeAnywhereAtAll() {
+        val refused = { body: String -> assertNull(body, DevicePolicy.decode(body.toByteArray(), named(body))) }
+        // Half an allowlist is worse than none: every bound the runtime applied
+        // when the owner saved this is applied again here, to the whole copy.
+        refused(document.replace("\"github.com\"", (1..20).joinToString(",") { "\"host$it.example\"" }))
+        refused(document.replace("\"github.com\"", "\"Not A Host\""))
+        refused(document.replace("com.google.android.youtube", "com.example/../evil"))
+        refused(document.replace("\"YouTube\"", "\"\""))
+        refused(document.replace("\"youtube\"", "\"YouTube!\""))
+        refused(document.replace("\"version\":1", "\"version\":2"))
+        refused(document.replace("\"shared_room\"", "\"sensitive\""))
+        refused(document.replace("\"label\":\"YouTube\"", "\"desktop\":\"youtube.desktop\""))
+        refused("not json")
+        assertNull(DevicePolicy.decode(ByteArray(0), named("")))
+        val tooLong = "x".repeat(DevicePolicy.MAX_POLICY_BYTES + 1)
+        assertNull(DevicePolicy.decode(tooLong.toByteArray(), named(tooLong)))
+        // Only one route application exists; anything else is simply not a route.
+        val other = document.replace("google_maps", "other_maps")
+        assertFalse(DevicePolicy.decode(other.toByteArray(), named(other))!!.route)
+    }
+
+    @Test
+    fun aDeviceHoldingNothingCarriesNothingOutAtAll() {
+        // Disconnected, reapproved, or never allowed anything: it is the same
+        // state, and in it every command is refused with a reason, never run.
+        val nothing = DevicePolicy()
+        assertTrue(nothing.isEmpty)
+        for (platform in listOf(DevicePolicy.PHONE, DevicePolicy.TV)) {
+            for (operation in listOf(link, route, play)) {
+                assertNull(nothing.plan(operation, platform))
+                assertNotNull(nothing.refusal(operation, platform))
+            }
+        }
+        assertEquals(DeclineReason.NOT_PERMITTED, nothing.refusal(link, DevicePolicy.PHONE))
+        assertEquals(DeclineReason.NOT_PERMITTED, nothing.refusal(route, DevicePolicy.PHONE))
+        assertEquals(DeclineReason.NOT_PERMITTED, nothing.refusal(play, DevicePolicy.TV))
     }
 }

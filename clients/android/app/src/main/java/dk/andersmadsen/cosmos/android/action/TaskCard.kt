@@ -39,26 +39,38 @@ object TaskCards {
     const val CANNOT_CONFIRM = "Cannot confirm"
 
     /**
-     * [device] is the phone or the television in the owner's own words, and
-     * [explain] is false on a shared screen, where a refusal is never named.
+     * [device] is the phone or the television in the owner's own words,
+     * [explain] is false on a shared screen, where a refusal is never named,
+     * and [holdsPermission] is false while this device holds no copy of the
+     * owner's permission at all — which is why it refused, and is a different
+     * thing from being allowed some things but not this one.
      */
-    fun card(stage: TaskStage, device: String, explain: Boolean = true): TaskCard? = when (stage) {
+    fun card(stage: TaskStage, device: String, explain: Boolean = true, holdsPermission: Boolean = true): TaskCard? = when (stage) {
         is TaskStage.Confirming ->
             if (!explain) null
             else TaskCard(WAITING, "Confirm to ${stage.description.verb} ${stage.description.subject}.")
         is TaskStage.Working -> TaskCard(
             WORKING, working(stage.operation), elapsed = elapsed(stage.elapsedMs), canCancel = true,
         )
-        is TaskStage.Reported -> reported(stage.operation, stage.report, device, explain)
+        is TaskStage.Reported -> reported(stage.operation, stage.report, device, explain, holdsPermission)
     }
 
-    private fun reported(operation: Operation, report: Report, device: String, explain: Boolean): TaskCard? =
+    /** Said when this device has been given nothing at all yet, in place of a bare refusal. */
+    private fun nothingHeld(device: String): String = "Cosmos has not given $device anything it may do yet."
+
+    private fun reported(
+        operation: Operation, report: Report, device: String, explain: Boolean, holdsPermission: Boolean,
+    ): TaskCard? =
         when (report.outcome) {
             ReportOutcome.COMPLETED -> TaskCard(COMPLETED, completed(operation, device))
             ReportOutcome.UNKNOWN -> TaskCard(CANNOT_CONFIRM, if (explain) unconfirmed(operation, device) else null)
             ReportOutcome.REFUSED -> if (!explain) null else {
                 val reason = (report.evidence as? Evidence.Declined)?.reason ?: DeclineReason.UNRESOLVABLE
-                TaskCard(NOT_DONE, refusal(reason, device), next(reason))
+                // A device holding no copy did not refuse this one thing; it has
+                // nothing to do anything with, and that is what it says.
+                if (reason == DeclineReason.NOT_PERMITTED && !holdsPermission)
+                    TaskCard(NOT_DONE, nothingHeld(device), next(reason))
+                else TaskCard(NOT_DONE, refusal(reason, device), next(reason))
             }
             ReportOutcome.CANCELLED ->
                 if (!explain) null else TaskCard(NOT_DONE, "Stopped when you asked for something else.")

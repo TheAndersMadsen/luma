@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from .native import MAX_SPEECH_BYTES, MAX_TEXT_BYTES
+from .native import MAX_POLICY_BYTES, MAX_SPEECH_BYTES, MAX_TEXT_BYTES
 
 # Mirrors PROFILE in the Rust client (surface-client wire.rs). The descriptor the
 # library reports is verified against it; a different profile is an invalid response.
@@ -21,7 +21,8 @@ PLATFORM = "linux"
 OPERATIONS = frozenset({
     "prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending", "cancel",
     "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task", "report", "progress", "grant",
-    "display", "speech", "invitation", "status", "task", "confirmation", "disconnect", "heartbeat",
+    "display", "speech", "invitation", "status", "task", "confirmation", "policy", "disconnect",
+    "heartbeat",
 })
 PRIVACY_LEVELS = ("public", "shared_room", "near_user", "private")
 PRIVATE_LEVELS = frozenset({"near_user", "private"})
@@ -212,6 +213,20 @@ class Revoked:
 
 
 @dataclass(frozen=True)
+class PolicyRecord:
+    """The owner's own policy for this installation, named but not repeated: the
+    document itself is copied out of the library with the digest and length
+    named here. None on the snapshot means this installation holds none."""
+
+    surface_id: str
+    approval_revision: int
+    actions_revision: Optional[int]
+    commands_revision: Optional[int]
+    digest: str
+    byte_length: int
+
+
+@dataclass(frozen=True)
 class SpeechReply:
     action_id: str
     turn_id: str
@@ -243,6 +258,7 @@ class NativeEvent:
     task: Optional[Task] = None
     confirmation: Optional[Confirmation] = None
     revoked: Optional[Revoked] = None
+    policy: Optional[PolicyRecord] = None
 
     @property
     def ok(self) -> bool:
@@ -594,6 +610,28 @@ def _revoked(value) -> Optional[Revoked]:
     return Revoked(_uuid(record, "actionId"), reason)
 
 
+def _policy(value) -> Optional[PolicyRecord]:
+    """What the snapshot says about the owner's policy. None is an ordinary
+    state: this installation holds none and may do nothing at all."""
+    if value is None:
+        return None
+    record = _record(value, "policy")
+
+    def revision(key: str) -> Optional[int]:
+        """A section this installation was given nothing for is null, not zero."""
+        return None if record.get(key) is None else _integer(record, key)
+
+    held = PolicyRecord(
+        surface_id=_uuid(record, "surfaceId"), approval_revision=_integer(record, "approvalRevision"),
+        actions_revision=revision("actionsRevision"), commands_revision=revision("commandsRevision"),
+        digest=_string(record, "digest"),
+        byte_length=_integer(record, "byteLength", 1, MAX_POLICY_BYTES),
+    )
+    if not HEX64.match(held.digest):
+        raise InvalidEvent("policy digest is not lowercase hex")
+    return held
+
+
 def _speech(value) -> Optional[SpeechReply]:
     if value is None:
         return None
@@ -642,4 +680,7 @@ def decode(raw: bytes) -> NativeEvent:
         task=_task(record.get("task")) if connected else None,
         confirmation=_confirmation(record.get("confirmation")) if connected else None,
         revoked=_revoked(record.get("revoked")) if connected else None,
+        # The copy belongs to the connection that carried it: losing the
+        # connection drops it, and this installation then holds nothing.
+        policy=_policy(record.get("policy")) if connected else None,
     )

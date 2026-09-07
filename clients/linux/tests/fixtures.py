@@ -81,6 +81,40 @@ def speech_reply(action_id: str = SPEECH_ID, byte_length: int = 5) -> dict:
 
 TASK_ID = "2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d"
 GRANT_ID = "e5aa1b2c-3d4e-4f5a-8b6c-7d8e9f0a1b2c"
+SURFACE_ID = "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+APPROVAL_REVISION = 4
+
+
+def policy_document(hosts=("github.com",), apps=(), roots=(), surface_id: str = SURFACE_ID,
+                    approval_revision: int = APPROVAL_REVISION, revision: int = 3,
+                    maximum_class: str = "private", **extra) -> bytes:
+    """The owner's own permission for this installation, in the runtime's own
+    compact serialization and declaration order — the bytes both sides hash."""
+    section = {}
+    if hosts:
+        section["hosts"] = sorted(hosts)
+    if apps:
+        section["apps"] = [dict(entry) for entry in apps]
+    if roots:
+        section["roots"] = [dict(entry) for entry in roots]
+    document = {"version": 1, "surfaceId": surface_id, "approvalRevision": approval_revision,
+                "actions": {"revision": revision, "maximumClass": maximum_class, "open": section}}
+    document.update(extra)
+    return json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def policy_record(document: bytes, **overrides) -> dict:
+    """What the snapshot says about that document: its identity and its length,
+    never its bytes."""
+    parsed = json.loads(document.decode("utf-8"))
+    actions = parsed.get("actions") or {}
+    record = {
+        "surfaceId": parsed.get("surfaceId"), "approvalRevision": parsed.get("approvalRevision"),
+        "actionsRevision": actions.get("revision"), "commandsRevision": None,
+        "digest": hashlib.sha256(document).hexdigest(), "byteLength": len(document),
+    }
+    record.update(overrides)
+    return record
 
 
 def open_task(operation: Optional[dict] = None, action_id: str = TASK_ID, key: str = "d" * 64,
@@ -151,6 +185,8 @@ class FakeSurface:
         self.commands: list = []
         self.queue: deque = deque()
         self.audio = b""
+        # The owner's policy document the worker published, if one is held.
+        self.policy: Optional[bytes] = None
         self.destroyed = False
         self.callback_failure: Optional[str] = None
         self.refuse: dict = {}
@@ -203,10 +239,10 @@ class FakeSurface:
             return UNAVAILABLE
         return self._command("acknowledge_task")
 
-    def report(self, report: bytes) -> int:
+    def report(self, action_id: str, report: bytes) -> int:
         if not self.features.actions:
             return UNAVAILABLE
-        return self._command("report", json.loads(bytes(report).decode("utf-8")))
+        return self._command("report", json.loads(bytes(report).decode("utf-8")), action_id)
 
     def grant(self, granted: bool, attestation) -> int:
         if not self.features.actions:
@@ -225,6 +261,13 @@ class FakeSurface:
         if len(self.audio) != expected_length:
             raise NativeError(1, "speech_audio")
         return self.audio
+
+    def device_policy(self, expected_length: int) -> Optional[bytes]:
+        if not self.features.actions or self.policy is None:
+            return None
+        if len(self.policy) != expected_length:
+            raise NativeError(2, "device_policy")
+        return self.policy
 
     def destroy(self) -> int:
         self.destroyed = True

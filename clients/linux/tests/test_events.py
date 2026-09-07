@@ -1,10 +1,11 @@
 import unittest
 
 from cosmos_linux.events import InvalidEvent, decode
+from cosmos_linux.native import MAX_POLICY_BYTES
 
 from .fixtures import (
-    ACTION_ID, TURN_ID, admission, choices_card, descriptor, encode, places_card, snapshot, speech_reply, status,
-    text_card,
+    ACTION_ID, APPROVAL_REVISION, SURFACE_ID, TURN_ID, admission, choices_card, descriptor, encode,
+    places_card, policy_document, policy_record, snapshot, speech_reply, status, text_card,
 )
 
 
@@ -190,6 +191,25 @@ class EventDecodingTest(unittest.TestCase):
                        {"privacy": "secret"}, {"generation": 0}, {"turnId": "nope"}):
             with self.assertRaises(InvalidEvent, msg=str(change)):
                 decode(encode(snapshot("status", connected=True, status={**status(), **change})))
+
+    def test_the_policy_the_snapshot_names_is_read_only_while_connected(self):
+        record = policy_record(policy_document())
+        event = decode(encode(snapshot("policy", connected=True, policy=record)))
+        self.assertEqual(event.operation, "policy")
+        self.assertEqual(event.policy.surface_id, SURFACE_ID)
+        self.assertEqual((event.policy.approval_revision, event.policy.actions_revision), (APPROVAL_REVISION, 3))
+        self.assertIsNone(event.policy.commands_revision, "this platform runs no commands")
+        self.assertEqual(event.policy.byte_length, len(policy_document()))
+        # Null is an ordinary state: this installation holds no copy at all, and
+        # a copy never outlives the connection that carried it.
+        self.assertIsNone(decode(encode(snapshot("policy", connected=True, policy=None))).policy)
+        self.assertIsNone(decode(encode(snapshot("policy", connected=False, policy=record))).policy)
+        self.assertIsNone(decode(encode(snapshot("heartbeat", connected=True))).policy, "absent means none")
+        for change in ({"surfaceId": "nope"}, {"approvalRevision": 0}, {"digest": "F" * 64},
+                       {"digest": "abc"}, {"byteLength": 0}, {"byteLength": MAX_POLICY_BYTES + 1},
+                       {"actionsRevision": 0}, {"commandsRevision": "two"}):
+            with self.assertRaises(InvalidEvent, msg=str(change)):
+                decode(encode(snapshot("policy", connected=True, policy={**record, **change})))
 
 
 if __name__ == "__main__":

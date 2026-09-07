@@ -2,6 +2,8 @@ package dk.andersmadsen.cosmos.android.action
 
 import org.json.JSONObject
 import java.net.URI
+import java.security.MessageDigest
+import java.util.UUID
 
 /**
  * This installation's own copy of the owner's device-action policy, and the
@@ -13,17 +15,25 @@ import java.net.URI
  * confused orchestrator cannot widen what this phone will open or what this TV
  * will play.
  *
- * The copy is the same object the owner wrote in Center → Devices, in a file
- * the owner puts on the device itself:
+ * The copy is the same object the owner wrote in Center → Devices. Cosmos
+ * delivers it over the connection this installation already holds, bound to
+ * the surface and the approval revision that connection was opened at:
  *
  * ```json
- * {"version":1,
- *  "open":{"hosts":["github.com"],"apps":[{"id":"com.google.android.youtube","label":"YouTube"}]},
- *  "route":{"app":"google_maps"},
- *  "play":{"providers":["youtube"]}}
+ * {"version":1,"surfaceId":"…","approvalRevision":4,
+ *  "actions":{"revision":2,"maximumClass":"shared_room",
+ *             "open":{"hosts":["github.com"],
+ *                     "apps":[{"id":"com.google.android.youtube","label":"YouTube"}]},
+ *             "route":{"app":"google_maps"},
+ *             "play":{"providers":["youtube"]}}}
  * ```
  *
- * A missing file means "do nothing", never "do anything".
+ * Delivery is not authority. The document is a cache of one approval revision:
+ * it is held only while the connection is, it is never written to disk, and an
+ * installation holding none does nothing at all rather than anything.
+ *
+ * Cosmos holds no package names, so the application id is this platform's own
+ * package and the provider id is mapped to packages here ([MediaProviders]).
  */
 data class DevicePolicy(
     val hosts: Set<String> = emptySet(),
@@ -110,8 +120,8 @@ data class DevicePolicy(
     companion object {
         const val PHONE = "android"
         const val TV = "android_tv"
-        const val FILE_NAME = "device-actions.json"
-        const val MAX_FILE_BYTES = 8192
+        /** The whole document, exactly as the runtime bounds it before it commits one. */
+        const val MAX_POLICY_BYTES = 8192
         const val MAX_HOSTS = 16
         const val MAX_APPS = 8
         const val MAX_PROVIDERS = 4
@@ -119,29 +129,62 @@ data class DevicePolicy(
         const val MAX_QUERY_BYTES = 200
         const val MAX_URL_BYTES = 2048
 
-        /** A missing or malformed copy is the empty policy: this device does nothing. */
-        fun decode(bytes: ByteArray): DevicePolicy {
-            if (bytes.isEmpty() || bytes.size > MAX_FILE_BYTES) return DevicePolicy()
+        /**
+         * The delivered copy, read against what the snapshot said it is.
+         *
+         * The document has to be the exact bytes the snapshot named — its
+         * length and its SHA-256 — and it has to be the owner's statement
+         * about *this* connection: another surface or another approval
+         * revision is somebody else's permission and is never held here. Half
+         * an allowlist is worse than none, so anything out of shape anywhere
+         * refuses the whole document and this device then holds nothing.
+         */
+        fun decode(bytes: ByteArray, held: HeldPolicy): DevicePolicy? {
+            if (bytes.size != held.byteLength || bytes.isEmpty() || bytes.size > MAX_POLICY_BYTES) return null
+            if (digest(bytes) != held.digest) return null
             val policy = runCatching {
                 val value = JSONObject(String(bytes, Charsets.UTF_8))
-                require(value.optInt("version", 1) == 1) { "unsupported policy" }
-                val open = value.optJSONObject("open")
+                require(value.getInt("version") == 1) { "unsupported policy" }
+                // The owner's statement is about one surface at one approval.
+                require(UUID.fromString(value.getString("surfaceId")) == held.surfaceId) { "another surface" }
+                require(value.getLong("approvalRevision") == held.approvalRevision) { "another approval" }
+                // A section is present exactly where the snapshot named its revision.
+                require(value.has("actions") == (held.actionsRevision != null)) { "actions disagree" }
+                require(value.has("commands") == (held.commandsRevision != null)) { "commands disagree" }
+                if (held.commandsRevision != null) {
+                    val commands = value.getJSONObject("commands")
+                    require(commands.getLong("revision") == held.commandsRevision) { "another commands revision" }
+                    require(commands.getString("maximumClass") in ActionWire.PRIVACY_CLASSES) { "unknown class" }
+                    commands.getBoolean("offerOutputToCognition")
+                }
+                // The owner granted this installation no device actions at all;
+                // it still holds the copy, and the copy allows it nothing.
+                if (held.actionsRevision == null) return@runCatching DevicePolicy()
+                val actions = value.getJSONObject("actions")
+                require(actions.getLong("revision") == held.actionsRevision) { "another actions revision" }
+                require(actions.getString("maximumClass") in ActionWire.PRIVACY_CLASSES) { "unknown class" }
+                val open = actions.optJSONObject("open")
                 val hostArray = open?.optJSONArray("hosts")
                 val appArray = open?.optJSONArray("apps")
-                val playArray = value.optJSONObject("play")?.optJSONArray("providers")
+                val playArray = actions.optJSONObject("play")?.optJSONArray("providers")
                 DevicePolicy(
                     hosts = buildSet { for (index in 0 until (hostArray?.length() ?: 0)) add(hostArray!!.getString(index).lowercase()) },
+                    // Cosmos holds no package names: the id is this platform's own.
                     apps = List(appArray?.length() ?: 0) { index ->
                         val app = appArray!!.getJSONObject(index)
-                        DeviceApp(app.getString("id"), app.optString("label", app.getString("id")))
+                        DeviceApp(app.getString("id"), app.getString("label"))
                     },
                     // Only one route application exists; an unknown one is not a route.
-                    route = value.optJSONObject("route")?.optString("app") == "google_maps",
+                    route = actions.optJSONObject("route")?.optString("app") == "google_maps",
                     providers = buildSet { for (index in 0 until (playArray?.length() ?: 0)) add(playArray!!.getString(index)) },
                 )
-            }.getOrNull() ?: return DevicePolicy()
-            return if (policy.wellFormed) policy else DevicePolicy()
+            }.getOrNull() ?: return null
+            return if (policy.wellFormed) policy else null
         }
+
+        /** The one binding both implementations recompute over the delivered bytes. */
+        fun digest(bytes: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
         /** Text a person reads: non-blank, bounded, and without control characters. */
         fun text(value: String, maximum: Int): Boolean =

@@ -4,6 +4,7 @@ The digests are asserted against the same fixture file the runtime, the Mac,
 the phone and Center assert against, so a drift in any implementation refuses
 the command instead of carrying out something the owner never approved.
 """
+import hashlib
 import json
 import os
 import tempfile
@@ -13,6 +14,8 @@ from pathlib import Path
 from cosmos_linux import actions as A
 from cosmos_linux import policy as P
 from cosmos_linux.events import Task
+
+from .fixtures import APPROVAL_REVISION, SURFACE_ID, policy_document
 
 FIXTURES = Path(__file__).resolve().parents[3] / "contracts" / "fixtures" / \
     "ambiance-device-action-digests-v1.json"
@@ -33,6 +36,18 @@ def which_all(name):
 
 def which_none(_name):
     return None
+
+
+def delivered(**overrides) -> P.Policy:
+    """The owner's permission as Cosmos delivered it on this connection."""
+    document = policy_document(**overrides)
+    return P.parse_policy(document, surface_id=SURFACE_ID, approval_revision=APPROVAL_REVISION,
+                          digest=hashlib.sha256(document).hexdigest())
+
+
+def local_openers(**document) -> P.Openers:
+    """How this desktop opens a file, which is nobody else's business."""
+    return P.parse_openers({"version": 1, **document})
 
 
 class DigestTest(unittest.TestCase):
@@ -81,9 +96,9 @@ class DigestTest(unittest.TestCase):
     def test_a_command_whose_digest_does_not_match_its_own_shape_is_refused(self):
         operation = {"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a"},
                      "label": "A"}
-        policy = P.parse({"version": 1, "open": {"hosts": ["github.com"]}})
-        self.assertTrue(A.plan(task(operation), policy, which_all).bound)
-        drifted = A.plan(task(operation, digest="f" * 64), policy, which_all)
+        policy = delivered(hosts=["github.com"])
+        self.assertTrue(A.plan(task(operation), policy, which=which_all).bound)
+        drifted = A.plan(task(operation, digest="f" * 64), policy, which=which_all)
         self.assertFalse(drifted.bound)
         self.assertEqual(drifted.refusal, A.NOT_PERMITTED)
 
@@ -94,7 +109,8 @@ class UnsupportedTest(unittest.TestCase):
     def test_each_unsupported_operation_is_refused_by_name(self):
         for channel, kind, name in (("action.run", "run", "run"), ("action.route", "route", "route"),
                                     ("action.play", "play", "play")):
-            decision = A.plan(task({"kind": kind}, channel=channel, digest="a" * 64), P.EMPTY_POLICY, which_all)
+            decision = A.plan(task({"kind": kind}, channel=channel, digest="a" * 64), delivered(),
+                              which=which_all)
             self.assertFalse(decision.bound, channel)
             self.assertEqual(decision.refusal, A.NOT_PERMITTED)
             self.assertEqual(decision.unsupported, name)
@@ -102,9 +118,35 @@ class UnsupportedTest(unittest.TestCase):
                              {"outcome": "refused", "evidence": {"kind": "declined", "reason": "not_permitted"}})
 
     def test_an_open_channel_carrying_another_operation_is_refused(self):
-        decision = A.plan(task({"kind": "run"}, digest="a" * 64), P.EMPTY_POLICY, which_all)
+        decision = A.plan(task({"kind": "run"}, digest="a" * 64), delivered(), which=which_all)
         self.assertFalse(decision.bound)
         self.assertEqual(decision.unsupported, "run")
+
+
+class NoPermissionTest(unittest.TestCase):
+    """An installation holding no delivered policy carries nothing out."""
+
+    def test_every_operation_is_refused_while_no_permission_is_held(self):
+        for operation in ({"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a"},
+                           "label": "A"},
+                          {"kind": "open", "locator": {"scheme": "app", "id": "dev.zed.Zed"}, "label": "Zed"},
+                          {"kind": "open", "locator": {"scheme": "file", "rootId": "repo",
+                                                       "relative": "src/state.rs"}, "label": "state.rs"}):
+            decision = A.plan(task(operation), None, local_openers(
+                applications=[{"id": "dev.zed.Zed", "desktop": "dev.zed.Zed.desktop"}]), which_all)
+            self.assertFalse(decision.bound, operation)
+            self.assertEqual(decision.refusal, A.NOT_PERMITTED)
+            # It is still a report, never silence.
+            self.assertEqual(A.refusal_report(decision.refusal)["outcome"], "refused")
+
+    def test_a_command_above_the_class_the_owner_spent_is_refused(self):
+        operation = {"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a"},
+                     "label": "A"}
+        private = task(operation)
+        self.assertTrue(A.plan(private, delivered(maximum_class="private"), which=which_all).bound)
+        capped = A.plan(private, delivered(maximum_class="shared_room"), which=which_all)
+        self.assertFalse(capped.bound)
+        self.assertEqual(capped.refusal, A.NOT_PERMITTED)
 
 
 class OpenTest(unittest.TestCase):
@@ -115,12 +157,17 @@ class OpenTest(unittest.TestCase):
         self.document = self.root / "src" / "state.rs"
         self.document.write_text("fn main() {}\n", encoding="utf-8")
         self.digest = A.file_digest(str(self.document))
-        self.policy = P.parse({"version": 1, "open": {
-            "hosts": ["github.com"],
-            "apps": [{"id": "dev.zed.Zed", "label": "Zed", "desktop": "dev.zed.Zed.desktop"}],
-            "roots": [{"id": "repo", "label": "Projects", "path": str(self.root)}],
-            "openers": [{"suffixes": [".rs"], "argv": ["code", "-g", "{path}:{line}"]}],
-        }})
+        # What the owner allowed, delivered by Cosmos…
+        self.policy = delivered(
+            hosts=["github.com"],
+            apps=[{"id": "dev.zed.Zed", "label": "Zed"}],
+            roots=[{"id": "repo", "label": "Projects", "path": str(self.root)}],
+        )
+        # …and how this desktop carries it out, which stays here.
+        self.openers = local_openers(
+            openers=[{"suffixes": [".rs"], "argv": ["code", "-g", "{path}:{line}"]}],
+            applications=[{"id": "dev.zed.Zed", "desktop": "dev.zed.Zed.desktop"}],
+        )
         self.addCleanup(self.temporary.cleanup)
 
     def file_operation(self, **overrides) -> dict:
@@ -134,14 +181,14 @@ class OpenTest(unittest.TestCase):
     def test_an_allowed_host_opens_through_xdg_open(self):
         decision = A.plan(task({"kind": "open", "locator": {
             "scheme": "https", "url": "https://github.com/owner/repo/pull/412"}, "label": "PR 412"}),
-            self.policy, which_all)
+            self.policy, self.openers, which_all)
         self.assertTrue(decision.bound)
         self.assertEqual(decision.launch.argv, ("xdg-open", "https://github.com/owner/repo/pull/412"))
 
     def test_a_host_absent_from_the_local_copy_is_refused_whatever_the_runtime_said(self):
         decision = A.plan(task({"kind": "open", "locator": {
             "scheme": "https", "url": "https://evil.example/owner"}, "label": "Page"}),
-            self.policy, which_all)
+            self.policy, self.openers, which_all)
         self.assertFalse(decision.bound)
         self.assertEqual(decision.refusal, A.NOT_PERMITTED)
 
@@ -149,16 +196,16 @@ class OpenTest(unittest.TestCase):
         fragment = A.plan(task({"kind": "open", "locator": {
             "scheme": "https", "url": "https://github.com/owner/repo/pull/412"},
             "position": {"kind": "fragment", "value": "discussion_r1"}, "label": "PR 412"}),
-            self.policy, which_all)
+            self.policy, self.openers, which_all)
         self.assertEqual(fragment.launch.argv[1], "https://github.com/owner/repo/pull/412#discussion_r1")
         line = A.plan(task({"kind": "open", "locator": {
             "scheme": "https", "url": "https://github.com/owner/repo/pull/412"},
-            "position": {"kind": "line", "line": 12}, "label": "PR 412"}), self.policy, which_all)
+            "position": {"kind": "line", "line": 12}, "label": "PR 412"}), self.policy, self.openers, which_all)
         self.assertFalse(line.bound)
         self.assertEqual(line.refusal, A.NO_HANDLER)
 
     def test_a_file_under_a_declared_root_opens_at_its_line(self):
-        decision = A.plan(task(self.file_operation()), self.policy, which_all)
+        decision = A.plan(task(self.file_operation()), self.policy, self.openers, which_all)
         self.assertTrue(decision.bound)
         self.assertEqual(decision.launch.argv,
                          ("code", "-g", f"{os.path.realpath(self.document)}:1710"))
@@ -168,7 +215,7 @@ class OpenTest(unittest.TestCase):
     def test_a_root_this_installation_never_declared_is_refused(self):
         decision = A.plan(task(self.file_operation(
             locator={"scheme": "file", "rootId": "downloads", "relative": "src/state.rs"})),
-            self.policy, which_all)
+            self.policy, self.openers, which_all)
         self.assertFalse(decision.bound)
         self.assertEqual(decision.refusal, A.NOT_PERMITTED)
 
@@ -179,13 +226,13 @@ class OpenTest(unittest.TestCase):
         os.symlink(outside / "id_ed25519", self.root / "src" / "key.rs")
         decision = A.plan(task(self.file_operation(
             locator={"scheme": "file", "rootId": "repo", "relative": "src/key.rs"}, version=None)),
-            self.policy, which_all)
+            self.policy, self.openers, which_all)
         self.assertFalse(decision.bound)
         self.assertEqual(decision.refusal, A.UNRESOLVABLE)
 
     def test_a_document_that_changed_since_it_was_read_is_not_opened(self):
         self.document.write_text("fn main() { changed(); }\n", encoding="utf-8")
-        decision = A.plan(task(self.file_operation()), self.policy, which_all)
+        decision = A.plan(task(self.file_operation()), self.policy, self.openers, which_all)
         self.assertFalse(decision.bound)
         self.assertEqual(decision.refusal, A.VERSION_CHANGED)
 
@@ -194,7 +241,7 @@ class OpenTest(unittest.TestCase):
                           {"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a"},
                            "label": "A"},
                           {"kind": "open", "locator": {"scheme": "app", "id": "dev.zed.Zed"}, "label": "Zed"}):
-            decision = A.plan(task(operation), self.policy, which_none)
+            decision = A.plan(task(operation), self.policy, self.openers, which_none)
             self.assertFalse(decision.bound)
             self.assertEqual(decision.refusal, A.NO_HANDLER)
 
@@ -203,7 +250,7 @@ class OpenTest(unittest.TestCase):
         pdf.write_bytes(b"%PDF-1.4\n")
         decision = A.plan(task(self.file_operation(
             locator={"scheme": "file", "rootId": "repo", "relative": "src/thesis.pdf"},
-            position={"kind": "page", "page": 12}, version=None)), self.policy, which_all)
+            position={"kind": "page", "page": 12}, version=None)), self.policy, self.openers, which_all)
         self.assertFalse(decision.bound)
         self.assertEqual(decision.refusal, A.NO_HANDLER)
 
@@ -212,17 +259,25 @@ class OpenTest(unittest.TestCase):
         text.write_text("hello\n", encoding="utf-8")
         decision = A.plan(task(self.file_operation(
             locator={"scheme": "file", "rootId": "repo", "relative": "notes.txt"},
-            position=None, version=None)), self.policy, which_all)
+            position=None, version=None)), self.policy, self.openers, which_all)
         self.assertEqual(decision.launch.argv, ("xdg-open", os.path.realpath(text)))
         self.assertIsNone(decision.launch.resolved_app)
 
-    def test_an_application_needs_a_desktop_entry_the_owner_declared(self):
-        decision = A.plan(task({"kind": "open", "locator": {"scheme": "app", "id": "dev.zed.Zed"},
-                                "label": "Zed"}), self.policy, which_all)
+    def test_only_an_application_the_delivered_policy_names_is_ever_started(self):
+        """Cosmos says which application may start; this machine says which
+        desktop entry starts it. Both are needed, and neither substitutes."""
+        zed = task({"kind": "open", "locator": {"scheme": "app", "id": "dev.zed.Zed"}, "label": "Zed"})
+        decision = A.plan(zed, self.policy, self.openers, which_all)
         self.assertEqual(decision.launch.argv, ("gio", "launch", "dev.zed.Zed.desktop"))
-        unknown = A.plan(task({"kind": "open", "locator": {"scheme": "app", "id": "com.other.App"},
-                               "label": "Other"}), self.policy, which_all)
+        # A local entry for an application the owner never allowed starts nothing.
+        other = task({"kind": "open", "locator": {"scheme": "app", "id": "com.other.App"}, "label": "Other"})
+        unknown = A.plan(other, self.policy, local_openers(
+            applications=[{"id": "com.other.App", "desktop": "com.other.App.desktop"}]), which_all)
         self.assertEqual(unknown.refusal, A.NOT_PERMITTED)
+        # An allowed application this desktop cannot start is a local gap.
+        unmapped = A.plan(zed, self.policy, P.NO_OPENERS, which_all)
+        self.assertFalse(unmapped.bound)
+        self.assertEqual(unmapped.refusal, A.NO_HANDLER)
 
 
 class ReportTest(unittest.TestCase):

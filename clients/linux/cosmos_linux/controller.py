@@ -26,13 +26,13 @@ from .endpoint import (
     valid_text,
 )
 from .events import (
-    PLATFORM, Admission, Confirmation, Descriptor, DisplayCard, InvalidEvent, Invitation, NativeEvent, Revoked,
-    SpeechReply, Task, TurnStatus, decode,
+    PLATFORM, Admission, Confirmation, Descriptor, DisplayCard, InvalidEvent, Invitation, NativeEvent,
+    PolicyRecord, Revoked, SpeechReply, Task, TurnStatus, decode,
 )
 from .native import (
     INVALID_ARGUMENT, OK, QUEUE_FULL, UNAVAILABLE, Features, NativeError, PlatformBindings, Surface,
 )
-from .policy import EMPTY_POLICY, Policy
+from .policy import NO_OPENERS, InvalidPolicy, Openers, Policy, parse_policy
 from .viewstate import (
     EMPTY_LINE, TARGETS, TASK_DONE, TASK_FAILED, TASK_REFUSED, TASK_STOPPED, TASK_UNKNOWN, TASK_WORKING, Line,
     TaskView, status_line,
@@ -149,9 +149,14 @@ class State:
     # Escape dismisses the panel and answers nothing; the request then runs out.
     ceremony_dismissed: bool = False
     ceremony_seconds: int = 0
-    # What this computer is allowed to open, read from the owner's own file.
-    policy_loaded: bool = False
-    policy_error: Optional[str] = None
+    # Whether Cosmos has given this installation permission on this connection.
+    # Without one it carries nothing out, which is an ordinary state.
+    policy_held: bool = False
+    # Set when a delivered document arrived and this client would not act on it.
+    policy_refused: bool = False
+    # How this desktop opens a file, read from its own openers file.
+    openers_loaded: bool = False
+    openers_error: Optional[str] = None
 
     @property
     def presence(self) -> Line:
@@ -301,7 +306,7 @@ class Controller:
                  server_origin: Optional[str] = None,
                  persist_server: Optional[Callable[[str], None]] = None,
                  reconnect_delays: tuple = RECONNECT_DELAYS,
-                 policy: Optional[Policy] = None,
+                 openers: Optional[Openers] = None,
                  launcher: Optional[actions.Launcher] = None,
                  which: Callable[[str], Optional[str]] = shutil.which,
                  now_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
@@ -313,7 +318,17 @@ class Controller:
         self._boot_epoch = boot_epoch
         self._persist_server = persist_server
         self._delays = tuple(reconnect_delays)
-        self._policy = policy if policy is not None else EMPTY_POLICY
+        self._openers = openers if openers is not None else NO_OPENERS
+        # The owner's own permission, as delivered on the connection this
+        # installation holds. It is never read from or written to disk.
+        self._policy: Optional[Policy] = None
+        # The copy this client last decided about, so re-delivery of the same
+        # document is idempotent and a refusal is not re-reported every tick.
+        self._policy_seen: Optional[tuple] = None
+        # The surface and approval revision this connection's policy belongs
+        # to, learned from the first copy delivered on it. A later document
+        # naming any other is not this connection's and is refused.
+        self._policy_binding: Optional[tuple] = None
         self._launcher = launcher if launcher is not None else actions.ProcessLauncher()
         self._which = which
         self._now_ms = now_ms
@@ -326,7 +341,7 @@ class Controller:
         self._grant_id: Optional[str] = None
         self._listeners: list[Callable[[State], None]] = []
         self._state = State(server_origin=server_origin or DEFAULT_SERVER_ORIGIN,
-                            policy_loaded=self._policy.loaded, policy_error=self._policy.error)
+                            openers_loaded=self._openers.loaded, openers_error=self._openers.error)
         self._surface: Optional[Surface] = None
         self._expected: Optional[str] = None
         self._deadline = 0.0
@@ -586,8 +601,71 @@ class Controller:
     # -- device actions ------------------------------------------------------
 
     @property
-    def policy(self) -> Policy:
+    def policy(self) -> Optional[Policy]:
+        """The owner's own permission for this installation, or None while it
+        holds none. It lives only as long as the connection that carried it."""
         return self._policy
+
+    @property
+    def openers(self) -> Openers:
+        return self._openers
+
+    def _sync_policy(self, event: NativeEvent) -> None:
+        """Hold exactly what the owner allowed on this connection, and nothing
+        while there is no connection.
+
+        The snapshot names the copy; the bytes are copied out of the library and
+        re-verified here against that digest, that surface and that approval
+        revision, exactly as against a file. A document this client will not act
+        on leaves it holding nothing rather than half a permission.
+        """
+        record: Optional[PolicyRecord] = event.policy if event.connected else None
+        if record is None:
+            self._drop_policy(refused=False)
+            return
+        seen = (record.surface_id, record.approval_revision, record.digest)
+        if self._policy_seen == seen or self._surface is None:
+            # This exact copy was already decided about; re-delivery is idempotent.
+            return
+        self._policy_seen = seen
+        binding = (record.surface_id, record.approval_revision)
+        if self._policy_binding is not None and self._policy_binding != binding:
+            # A copy for another surface or another approval is not this
+            # connection's permission, whatever the snapshot said.
+            log.warning("a delivered policy named another surface or approval; nothing is held")
+            self._drop_policy(refused=True)
+            return
+        try:
+            raw = self._surface.device_policy(record.byte_length)
+        except NativeError:
+            log.warning("the delivered policy bytes were not available")
+            self._drop_policy(refused=False)
+            return
+        if raw is None:
+            self._drop_policy(refused=False)
+            return
+        try:
+            policy = parse_policy(raw, surface_id=record.surface_id,
+                                  approval_revision=record.approval_revision, digest=record.digest)
+        except InvalidPolicy as error:
+            log.warning("a delivered policy was refused whole: %s", error)
+            self._drop_policy(refused=True)
+            return
+        self._policy = policy
+        self._policy_binding = binding
+        log.info("holding the owner's policy for this installation (actions revision %d)", policy.revision)
+        self._update(policy_held=True, policy_refused=False)
+
+    def _drop_policy(self, refused: bool) -> None:
+        """Holding nothing is an ordinary state: this computer then does nothing."""
+        self._policy = None
+        if not refused:
+            # A connection that ends takes its copy and its binding with it; a
+            # transient read failure is retried on the next snapshot.
+            self._policy_seen = None
+            self._policy_binding = None
+        if self._state.policy_held or self._state.policy_refused != refused:
+            self._update(policy_held=False, policy_refused=refused)
 
     def _begin_task(self, task: Task) -> None:
         """One command, decided entirely here. Acknowledging says it is legal on
@@ -613,7 +691,7 @@ class Controller:
             self._acknowledge_task(task)
             self._send_report(task, retained, self._phase_for(retained), label)
             return
-        decision = actions.plan(task, self._policy, self._which)
+        decision = actions.plan(task, self._policy, self._openers, self._which)
         if not decision.bound:
             # Never acknowledge a command this computer will not attempt.
             self._send_report(task, actions.refusal_report(decision.refusal), TASK_REFUSED, label,
@@ -648,7 +726,9 @@ class Controller:
             return
         payload = actions.report_bytes(report)
         action_id = task.action_id
-        self._defer("report", lambda: self._surface.report(payload),
+        # The report names the action it is about, so a command the runtime
+        # replaced between this decision and the worker's queue closes nothing.
+        self._defer("report", lambda: self._surface.report(action_id, payload),
                     guard=lambda: self._task_action == action_id and self._state.phase == Phase.CONNECTED)
 
     def _collect_launch(self) -> None:
@@ -709,7 +789,10 @@ class Controller:
         return True
 
     def _fold_action(self, event: NativeEvent) -> None:
-        """Everything the snapshot says about commands and ceremonies."""
+        """Everything the snapshot says about permission, commands and ceremonies."""
+        # The permission first: a command in this same snapshot is verified
+        # against the copy this snapshot delivered, never against an older one.
+        self._sync_policy(event)
         revoked: Optional[Revoked] = event.revoked
         if (revoked is not None and self._task_action == revoked.action_id and not self._task_reported):
             self._stop_task(revoked.reason)
@@ -761,6 +844,8 @@ class Controller:
     def _reset_actions(self) -> None:
         if self._task_action is not None or self._launcher.busy:
             self._launcher.stop()
+        # The permission belongs to the connection; without one, nothing is held.
+        self._drop_policy(refused=False)
         self._task = None
         self._task_action = None
         self._task_launch = None
@@ -905,10 +990,12 @@ class Controller:
                 failure = Failure.IDENTITY_UNAVAILABLE
             elif callback == "storage":
                 failure = Failure.STORAGE_BLOCKED if event.error == "persistence" else Failure.STORAGE_UNAVAILABLE
-        if event.error in ("no_task", "no_confirmation"):
-            # The runtime withdrew the command or the ceremony before this
-            # answer reached it. There is nothing left to say and nothing wrong
-            # with the connection.
+        if event.error in ("no_task", "no_confirmation", "stale_task"):
+            # The runtime withdrew or replaced the command, or the ceremony,
+            # before this answer reached it. `stale_task` says this report was
+            # about a command that is no longer current, so it closed nothing:
+            # it is not a failure of the effect and not a fault in the
+            # connection. There is simply nothing left to say.
             failure = None
         storage_blocked = failure in (Failure.STORAGE_BLOCKED, Failure.STORAGE_UNAVAILABLE)
         has_pending = event.pending is not None or event.pending_open or storage_blocked

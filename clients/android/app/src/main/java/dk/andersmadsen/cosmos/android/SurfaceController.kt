@@ -12,7 +12,9 @@ import dk.andersmadsen.cosmos.android.action.ActionRunner
 import dk.andersmadsen.cosmos.android.action.Ceremony
 import dk.andersmadsen.cosmos.android.action.CeremonyEvent
 import dk.andersmadsen.cosmos.android.action.CeremonyState
+import dk.andersmadsen.cosmos.android.action.DevicePolicy
 import dk.andersmadsen.cosmos.android.action.DeviceTask
+import dk.andersmadsen.cosmos.android.action.HeldPolicy
 import dk.andersmadsen.cosmos.android.action.Operation
 import dk.andersmadsen.cosmos.android.action.PlannedAction
 import dk.andersmadsen.cosmos.android.action.PlaybackState
@@ -66,6 +68,13 @@ data class SurfaceState(
     val taskClosed: Boolean = false,
     /** The ceremony this device is the venue for, and how it was answered. */
     val ceremony: Ceremony? = null,
+    /**
+     * The owner's own permission for this installation, as Cosmos delivered it
+     * over the connection this device holds. Null means this device holds none
+     * — the ordinary state before the owner allows anything, and the state
+     * again the moment the connection drops — and then it carries nothing out.
+     */
+    val permission: DevicePolicy? = null,
     val speaking: Boolean = false,
     val message: String = "Prepare this installation, then approve its public descriptor in Center.",
     val busy: Boolean = false,
@@ -214,9 +223,10 @@ class SurfaceController(context: Context) {
 
     private fun fold(event: NativeEvent) {
         // Snapshots are redacted by the native client: no journal, token or request text.
-        Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId} speech=${event.speech?.actionId} waiting=${event.invitation?.id}")
+        Log.d(TAG, "snapshot ${event.operation} ${if (event.ok) "ok" else event.error} connected=${event.connected} visible=${event.visible} card=${event.display?.actionId} speech=${event.speech?.actionId} waiting=${event.invitation?.id} permission=${event.policy != null}")
+        val permission = hold(event.policy)
         _state.update { previous ->
-            val failure = event.error?.let(::message)
+            val failure = event.error?.let(::explain)
             val phase = when {
                 event.connected -> Phase.CONNECTED
                 event.error in setOf("invalid_signature", "invalid_response", "invalid_journal", "panic", "persistence") -> Phase.BLOCKED
@@ -231,7 +241,11 @@ class SurfaceController(context: Context) {
             if (approved != previous.approved) preferences.edit().putBoolean("approved", approved).apply()
             previous.copy(
                 approved = approved,
-                alert = failure != null,
+                // A stale report says the command it named is no longer the
+                // current one. Nothing was closed and nothing failed, so it is
+                // said plainly and never styled as a failure.
+                alert = event.error?.let(::isFailure) == true,
+                permission = permission,
                 operation = event.operation,
                 phase = phase,
                 descriptor = event.descriptor ?: previous.descriptor,
@@ -266,6 +280,9 @@ class SurfaceController(context: Context) {
                     "speech" -> if (event.speech != null) "Speaking the reply here." else previous.message
                     // The status line already says Working; the notice stays quiet on a clean send.
                     "send_text" -> ""
+                    // A report that landed says nothing; only a stale one, which
+                    // is the `failure` above, has anything left to say.
+                    "report" -> ""
                     "cancel" -> "The task was cancelled."
                     "disconnect" -> "Disconnected. This phone stays approved in Center."
                     "display", "speech", "heartbeat" -> if (!event.connected && previous.phase == Phase.CONNECTED && wantsConnection) "Reconnecting…" else previous.message
@@ -284,6 +301,29 @@ class SurfaceController(context: Context) {
         // report; the steady state carries the same command over and over.
         event.task?.let { task -> scope.launch { carryOut(task, event.operation == "task") } }
     }
+
+    /**
+     * The owner's own permission for this installation, as this device holds
+     * it. The snapshot names the copy; these are its bytes, read again only
+     * when the digest it names changes, and verified here against that name
+     * before anything is held. A snapshot naming none — including every
+     * snapshot of a dropped connection — leaves this device holding nothing,
+     * and nothing is ever written to disk: it is a cache of one approval.
+     */
+    private fun hold(named: HeldPolicy?): DevicePolicy? {
+        if (named == null) {
+            heldDigest = null
+            return null
+        }
+        if (named.digest == heldDigest) return _state.value.permission
+        heldDigest = named.digest
+        val policy = NativeSurface.devicePolicy(handle)?.let { DevicePolicy.decode(it, named) }
+        if (policy == null) Log.w(TAG, "the delivered permission did not verify against this connection")
+        return policy
+    }
+
+    /** The digest of the copy already held, so an unchanged one is not read again. */
+    @Volatile private var heldDigest: String? = null
 
     /** True when this snapshot carries a command this device has not seen before. */
     private fun fresh(event: NativeEvent, previous: SurfaceState): Boolean =
@@ -333,21 +373,6 @@ class SurfaceController(context: Context) {
         File(application.cacheDir, "speech-$id.mp3").delete()
     }
 
-    /** One sentence on what happened, one on what to do; nothing technical and no identifiers. */
-    private fun message(code: String): String = when (code) {
-        "pending_operation" -> "The last request has an unknown outcome. Retry it before asking again."
-        "persistence", "invalid_journal" -> "This phone could not save its session. Retry the last request before asking again."
-        "invalid_signature" -> "This phone could not use its own key. Set it up again."
-        "invalid_config" -> "That server address cannot be used. Enter an address that starts with https:// and nothing after it."
-        "invalid_input" -> "That question is too long. Shorten it and send it again."
-        "denied" -> "This phone is not approved yet. Approve it in Center, then connect."
-        "busy" -> "Cosmos is still on the last request. Wait a moment and try again."
-        "no_display" -> "There is no reply on screen."
-        "no_speech" -> "There is no spoken reply right now."
-        "not_in_this_build" -> "Cosmos on this phone cannot use screen text or another device yet. Nothing was sent — choose This phone, remove the screen chip and ask again."
-        else -> "Cosmos could not confirm that. Try again in a moment."
-    }
-
     private suspend fun command(name: String, block: () -> Int) = commands.withLock {
         if (handle == 0L) {
             _state.update { it.copy(alert = true, message = "Set this phone up first.", sends = it.sends + finished(name)) }
@@ -360,12 +385,12 @@ class SurfaceController(context: Context) {
         if (code == NativeSurface.NOT_IN_THIS_BUILD) {
             // Refused here, before anything left the phone; the owner is told plainly that it did not go.
             Log.w(TAG, "native $name is not in this build")
-            _state.update { it.copy(busy = false, alert = true, operation = name, message = message("not_in_this_build"), sends = it.sends + finished(name)) }
+            _state.update { it.copy(busy = false, alert = true, operation = name, message = explain("not_in_this_build"), sends = it.sends + finished(name)) }
             return@withLock
         }
         if (code != NativeSurface.OK) {
             Log.w(TAG, "native $name refused with code $code")
-            _state.update { it.copy(busy = false, alert = true, message = if (code == NativeSurface.QUEUE_FULL) message("busy") else message("unavailable"), sends = it.sends + finished(name)) }
+            _state.update { it.copy(busy = false, alert = true, message = if (code == NativeSurface.QUEUE_FULL) explain("busy") else explain("unavailable"), sends = it.sends + finished(name)) }
             return@withLock
         }
         // Wait for the operation's own snapshot; the poll loop folds it.
@@ -408,7 +433,7 @@ class SurfaceController(context: Context) {
                             handle = created
                             preferences.edit().putString("serverOrigin", origin).apply()
                         } else {
-                            _state.update { it.copy(phase = Phase.DISCONNECTED, alert = true, message = message(if (created == NativeSurface.QUEUE_FULL.toLong()) "busy" else "invalid_config") + " (native $created)") }
+                            _state.update { it.copy(phase = Phase.DISCONNECTED, alert = true, message = explain(if (created == NativeSurface.QUEUE_FULL.toLong()) "busy" else "invalid_config") + " (native $created)") }
                         }
                     }.onFailure { error ->
                         Log.w(TAG, "prepare failed", error)
@@ -452,7 +477,7 @@ class SurfaceController(context: Context) {
             val previous = ledger.recall(task.idempotencyKey, now)
             if (previous != null) {
                 // A repeat produces no second effect, only the same report.
-                if (redispatched) scope.launch { deliver(previous) }
+                if (redispatched) scope.launch { deliver(task.actionId, previous) }
                 return@withLock false
             }
             if (!ledger.begin(task.idempotencyKey, now)) return@withLock false
@@ -461,7 +486,10 @@ class SurfaceController(context: Context) {
         }
         if (!start) return
         try {
-            val policy = runner.policy()
+            // Whatever Cosmos said, this device may only do what the copy it
+            // holds says. Holding none is holding nothing: everything is
+            // refused until the owner's own permission arrives again.
+            val policy = _state.value.permission ?: DevicePolicy()
             val plan = policy.plan(task.operation, runner.platform)
             if (plan == null) {
                 // Refused here, whatever Cosmos said, and never acknowledged:
@@ -542,11 +570,20 @@ class SurfaceController(context: Context) {
     private suspend fun settle(task: DeviceTask, report: Report) {
         ledger.finish(task.idempotencyKey, report, System.currentTimeMillis())
         _state.update { if (it.task?.actionId == task.actionId) it.copy(taskReport = report) else it }
-        deliver(report)
+        deliver(task.actionId, report)
     }
 
-    private suspend fun deliver(report: Report) {
-        command("report") { NativeSurface.optional { NativeSurface.report(handle, report.json().toByteArray()) } }
+    /**
+     * Say what this device observed about exactly that command. A report names
+     * the action it is about, so a command Cosmos replaced between this device
+     * reading it and the worker sending closes nothing.
+     */
+    private suspend fun deliver(actionId: UUID, report: Report) {
+        command("report") {
+            NativeSurface.optional {
+                NativeSurface.report(handle, actionId.toString().toByteArray(), report.json().toByteArray())
+            }
+        }
     }
 
     /** A revoke supersedes remaining work; it does not un-open an application. */

@@ -95,6 +95,27 @@ data class Confirmation(
     val expiresAtMs: Long,
 )
 
+/**
+ * What a snapshot says about the copy of the owner's permission this
+ * installation holds: the surface and the approval revision it was granted
+ * under, the revision of each section, and the digest and length of the exact
+ * document [dk.andersmadsen.cosmos.android.NativeSurface.devicePolicy]
+ * returns. It names the copy; it is not the copy.
+ *
+ * Null in a snapshot means this installation holds nothing, which is an
+ * ordinary state and means it carries nothing out at all.
+ */
+data class HeldPolicy(
+    val surfaceId: UUID,
+    val approvalRevision: Long,
+    /** Null where the owner granted this installation no device actions at all. */
+    val actionsRevision: Long?,
+    /** Null where it may run no commands, which is always true on a phone or a television. */
+    val commandsRevision: Long?,
+    val digest: String,
+    val byteLength: Int,
+)
+
 enum class RevokeReason { CANCELLED, PREEMPTED, SUPERSEDED, EXPIRED, REVALIDATION_FAILED }
 
 /** One retired command and why, so this device can say what happened plainly. */
@@ -256,6 +277,30 @@ object ActionWire {
             if (attestation == "device_owner_auth") Attestation.DEVICE_OWNER_AUTH else Attestation.FOREGROUND_TAP,
             privacy, value.getLong("expiresAtMs"),
         )
+    }
+
+    /**
+     * The snapshot's account of the copy this installation holds. A section
+     * revision is null exactly where the owner granted that section nothing,
+     * and a copy naming no section at all is a shape the runtime never sends.
+     */
+    fun policy(value: JSONObject?): HeldPolicy? {
+        value ?: return null
+        val approval = value.getLong("approvalRevision")
+        val actions = revision(value, "actionsRevision")
+        val commands = revision(value, "commandsRevision")
+        val digest = value.getString("digest")
+        val length = value.getInt("byteLength")
+        require(approval in 1..MAX_SAFE && HEX64.matches(digest) && (actions != null || commands != null)
+            && length in 1..DevicePolicy.MAX_POLICY_BYTES) { "invalid policy" }
+        return HeldPolicy(uuid(value.getString("surfaceId")), approval, actions, commands, digest, length)
+    }
+
+    private fun revision(value: JSONObject, key: String): Long? {
+        if (value.isNull(key)) return null
+        val revision = value.getLong(key)
+        require(revision in 1..MAX_SAFE) { "invalid revision" }
+        return revision
     }
 
     fun revoked(value: JSONObject?): Revoked? {

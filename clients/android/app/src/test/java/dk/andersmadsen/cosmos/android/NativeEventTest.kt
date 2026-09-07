@@ -1,5 +1,6 @@
 package dk.andersmadsen.cosmos.android
 
+import dk.andersmadsen.cosmos.android.action.DevicePolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -102,6 +103,44 @@ class NativeEventTest {
             dk.andersmadsen.cosmos.android.action.Operation.Unsupported("teleport"),
             event.task!!.operation,
         )
+    }
+
+    private val policy = """{"surfaceId":"22222222-2222-4222-8222-222222222222","approvalRevision":4,
+        "actionsRevision":2,"commandsRevision":null,"digest":"${"7".repeat(64)}","byteLength":214}"""
+
+    private fun withPolicy(policy: String?): String = base.format("null")
+        .replace("\"speech\":null", "\"speech\":null,\"policy\":${policy ?: "null"}")
+        .replace("\"operation\":\"display\"", "\"operation\":\"policy\"")
+
+    @Test
+    fun decodesTheCopyOfTheOwnersPermissionThisInstallationHolds() {
+        val held = NativeEvent.decode(withPolicy(policy).toByteArray())
+        assertEquals("policy", held.operation)
+        assertEquals(java.util.UUID.fromString("22222222-2222-4222-8222-222222222222"), held.policy!!.surfaceId)
+        assertEquals(4L, held.policy!!.approvalRevision)
+        assertEquals(2L, held.policy!!.actionsRevision)
+        // A phone and a television never run commands, so that section is absent.
+        assertNull(held.policy!!.commandsRevision)
+        assertEquals("7".repeat(64), held.policy!!.digest)
+        assertEquals(214, held.policy!!.byteLength)
+        // Withdrawn, absent and disconnected all read as holding nothing, which
+        // is an ordinary state: this device then carries nothing out at all.
+        assertNull(NativeEvent.decode(withPolicy(null).toByteArray()).policy)
+        assertNull(NativeEvent.decode(base.format("null").toByteArray()).policy)
+        assertNull(NativeEvent.decode(withPolicy(policy).replace("\"connected\":true", "\"connected\":false").toByteArray()).policy)
+    }
+
+    @Test
+    fun refusesAPolicyTheSnapshotNamesOutOfShape() {
+        val refused = { broken: String -> assertThrows(Exception::class.java) { NativeEvent.decode(withPolicy(broken).toByteArray()) } }
+        refused(policy.replace("\"${"7".repeat(64)}\"", "\"${"7".repeat(63)}\""))
+        refused(policy.replace("\"byteLength\":214", "\"byteLength\":0"))
+        refused(policy.replace("\"byteLength\":214", "\"byteLength\":${DevicePolicy.MAX_POLICY_BYTES + 1}"))
+        refused(policy.replace("\"approvalRevision\":4", "\"approvalRevision\":0"))
+        refused(policy.replace("\"actionsRevision\":2", "\"actionsRevision\":0"))
+        // A copy that names no section at all is a shape the runtime never sends.
+        refused(policy.replace("\"actionsRevision\":2", "\"actionsRevision\":null"))
+        refused(policy.replace("22222222-2222-4222-8222-222222222222", "00000000-0000-0000-0000-000000000000"))
     }
 
     @Test

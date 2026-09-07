@@ -80,6 +80,22 @@ class TaskCardTest {
     }
 
     @Test
+    fun aDeviceHoldingNoPermissionSaysSoRatherThanRefusingOneThing() {
+        val refused = TaskStage.Reported(link, ActionOutcome.refused(DeclineReason.NOT_PERMITTED))
+        val card = TaskCards.card(refused, "this phone", holdsPermission = false)!!
+        assertEquals("Not done", card.state)
+        assertEquals("Cosmos has not given this phone anything it may do yet.", card.sentence)
+        assertEquals("Allow it in Center → Devices, then ask again.", card.next)
+        // Not being allowed *this* is the other sentence, and the two never mix.
+        assertEquals("This phone has not been allowed to do that.", TaskCards.card(refused, "this phone")?.sentence)
+        // Nothing else changes: a missing handler is still a missing handler.
+        val nothing = TaskStage.Reported(link, ActionOutcome.refused(DeclineReason.NO_HANDLER))
+        assertEquals("Nothing on this phone can open that.", TaskCards.card(nothing, "this phone", holdsPermission = false)?.sentence)
+        // A television explains no refusal, whether it holds a copy or not.
+        assertNull(TaskCards.card(refused, "this TV", explain = false, holdsPermission = false))
+    }
+
+    @Test
     fun aTelevisionNeverExplainsARefusal() {
         for (reason in DeclineReason.entries) {
             val refused = TaskStage.Reported(play, ActionOutcome.refused(reason))

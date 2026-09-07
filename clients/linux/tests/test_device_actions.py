@@ -1,8 +1,10 @@
 """The controller carrying one command out: bind, acknowledge, observe, report.
 
-Acknowledging says the command is legal here and claims nothing. Only what this
-computer observed is reported, exactly once, and a repeat opens nothing a second
-time. A revoke stops what can be stopped and reports cancelled.
+What this computer may open is the permission Cosmos delivers on the connection
+it holds; how it opens it is the local openers file. Acknowledging says the
+command is legal here and claims nothing. Only what this computer observed is
+reported, exactly once, about the action it names, and a repeat opens nothing a
+second time. A revoke stops what can be stopped and reports cancelled.
 """
 import os
 import tempfile
@@ -13,12 +15,13 @@ from cosmos_linux import actions as A
 from cosmos_linux import policy as P
 from cosmos_linux import strings as S
 from cosmos_linux import viewstate
+from cosmos_linux.app import policy_notice
 from cosmos_linux.controller import RECONNECT_DELAYS, Controller, Failure, Phase
 from cosmos_linux.native import Features
 
 from .fixtures import (
-    BOOT_EPOCH, TASK_ID, FakeIdentity, FakeJournal, FakeLauncher, FakePlayer, FakeScheduler, FakeSurface,
-    confirmation, open_task, revoked, snapshot,
+    APPROVAL_REVISION, BOOT_EPOCH, SURFACE_ID, TASK_ID, FakeIdentity, FakeJournal, FakeLauncher, FakePlayer,
+    FakeScheduler, FakeSurface, confirmation, open_task, policy_document, policy_record, revoked, snapshot,
 )
 
 
@@ -33,16 +36,17 @@ class DeviceActionHarness(unittest.TestCase):
         (self.root / "src").mkdir(parents=True)
         self.document = self.root / "src" / "state.rs"
         self.document.write_text("fn main() {}\n", encoding="utf-8")
-        self.policy = P.parse({"version": 1, "open": {
-            "hosts": ["github.com"],
-            "roots": [{"id": "repo", "label": "Projects", "path": str(self.root)}],
-            "openers": [{"suffixes": [".rs"], "argv": ["code", "-g", "{path}:{line}"]}],
-        }})
+        # What the owner allowed, as Cosmos will deliver it…
+        self.delivered = policy_document(
+            hosts=["github.com"], roots=[{"id": "repo", "label": "Projects", "path": str(self.root)}])
+        # …and how this desktop opens a `.rs` at a line, which stays here.
+        self.openers = P.parse_openers({
+            "version": 1, "openers": [{"suffixes": [".rs"], "argv": ["code", "-g", "{path}:{line}"]}]})
         self.now_ms = 1_900_000_000_000
         self.controller = Controller(
             surface_factory=lambda config, platform: FakeSurface(config, platform), identity=FakeIdentity(),
             journal=FakeJournal(), scheduler=self.scheduler, player=FakePlayer(), boot_epoch=BOOT_EPOCH,
-            policy=self.policy, launcher=self.launcher, which=lambda name: "/usr/bin/" + name,
+            openers=self.openers, launcher=self.launcher, which=lambda name: "/usr/bin/" + name,
             now_ms=lambda: self.now_ms,
         )
         self.addCleanup(self.temporary.cleanup)
@@ -55,7 +59,7 @@ class DeviceActionHarness(unittest.TestCase):
     def state(self):
         return self.controller.state
 
-    def connected(self) -> FakeSurface:
+    def connected(self, policy: bool = True) -> FakeSurface:
         self.assertTrue(self.controller.prepare("https://center.andersmadsen.dk"))
         self.surface.emit(snapshot("prepare"))
         self.controller.drain()
@@ -63,10 +67,22 @@ class DeviceActionHarness(unittest.TestCase):
         self.surface.emit(snapshot("connect", connected=True, needsReconnect=False))
         self.controller.drain()
         self.assertEqual(self.state.phase, Phase.CONNECTED)
+        if policy:
+            self.deliver(self.delivered)
         return self.surface
+
+    def deliver(self, document: bytes, **overrides) -> None:
+        """One `policy` frame: the worker publishes the bytes, the snapshot
+        names them, and this client re-verifies them before holding anything."""
+        self.surface.policy = document
+        self.fold(operation="policy", policy=policy_record(document, **overrides))
 
     def fold(self, **overrides):
         base = dict(connected=True, needsReconnect=False)
+        if self.surface.policy is not None:
+            # Every snapshot names the copy the worker holds, exactly as the
+            # library's own does.
+            base["policy"] = policy_record(self.surface.policy)
         base.update(overrides)
         self.surface.emit(snapshot(base.pop("operation", "task"), **base))
         self.controller.drain()
@@ -157,14 +173,119 @@ class BindingTest(DeviceActionHarness):
         self.assertEqual((card.title, card.detail, card.remedy),
                          (S.NOT_DONE, S.UNSUPPORTED_RUN, S.UNSUPPORTED_REMEDY))
 
-    def test_an_empty_policy_opens_nothing_at_all(self):
-        controller = Controller(
-            surface_factory=lambda config, platform: FakeSurface(config, platform), identity=FakeIdentity(),
-            journal=FakeJournal(), scheduler=FakeScheduler(), player=FakePlayer(), boot_epoch=BOOT_EPOCH,
-            launcher=FakeLauncher(), which=lambda name: "/usr/bin/" + name,
-        )
-        self.assertTrue(controller.policy.empty)
-        self.assertFalse(controller.state.policy_loaded)
+    def test_a_report_names_the_action_it_is_about(self):
+        self.connected()
+        self.fold(task=self.file_task())
+        self.settle("acknowledge_task")
+        self.launcher.observe(A.Observation(A.EXITED, 0))
+        self.controller.drain()
+        self.assertEqual(self.commands("report")[0][2], TASK_ID)
+
+
+class PermissionTest(DeviceActionHarness):
+    """The owner's permission arrives from Cosmos, and nothing is held without it."""
+
+    def test_every_operation_is_refused_while_this_computer_holds_no_permission(self):
+        self.connected(policy=False)
+        self.assertFalse(self.state.policy_held)
+        self.assertIsNone(self.controller.policy)
+        for task in (self.file_task(),
+                     open_task({"kind": "open", "locator": {
+                         "scheme": "https", "url": "https://github.com/owner/repo/pull/412"},
+                         "label": "PR 412"}, action_id="3a2b1c09-4d5e-4a6b-8c7d-9e0f1a2b3c4d", key="e" * 64)):
+            self.fold(task=task)
+            self.assertEqual(self.commands("acknowledge_task"), [], "nothing was bound")
+            self.assertEqual(self.launcher.started, [], "nothing was opened")
+            self.settle("report")
+        self.assertTrue(all(report[1] == {"outcome": "refused", "evidence": {
+            "kind": "declined", "reason": "not_permitted"}} for report in self.commands("report")))
+        # And the window says so plainly rather than looking ready.
+        self.assertEqual(policy_notice(self.state), S.POLICY_NONE + " " + S.POLICY_NONE_REMEDY)
+
+    def test_the_delivered_document_is_what_this_computer_verifies_against(self):
+        self.connected()
+        self.assertTrue(self.state.policy_held)
+        self.assertEqual(self.controller.policy.approval_revision, APPROVAL_REVISION)
+        self.assertEqual(policy_notice(self.state), "")
+        self.fold(task=self.file_task())
+        self.assertEqual(len(self.launcher.started), 1)
+        self.settle("acknowledge_task")
+        self.launcher.observe(A.Observation(A.EXITED, 0))
+        self.controller.drain()
+        self.settle("report")
+        # The owner narrows it in Center: the same folder is no longer allowed,
+        # and this computer follows the new document, not an older file.
+        self.deliver(policy_document(hosts=["github.com"], revision=4))
+        self.assertEqual(self.controller.policy.revision, 4)
+        self.fold(task=self.file_task(action_id="3a2b1c09-4d5e-4a6b-8c7d-9e0f1a2b3c4d", key="e" * 64))
+        self.assertEqual(len(self.launcher.started), 1, "nothing was opened under the old copy")
+        self.assertEqual(self.commands("report")[-1][1]["evidence"]["reason"], "not_permitted")
+
+    def test_a_document_that_is_not_this_connection_is_refused_and_nothing_is_held(self):
+        self.connected()
+        for overrides in ({"surfaceId": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"},
+                          {"approvalRevision": APPROVAL_REVISION + 1}):
+            self.deliver(policy_document(hosts=["github.com"], **{
+                "surface_id": overrides.get("surfaceId", SURFACE_ID),
+                "approval_revision": overrides.get("approvalRevision", APPROVAL_REVISION)}), **overrides)
+            self.assertFalse(self.state.policy_held, overrides)
+            self.assertTrue(self.state.policy_refused, overrides)
+            self.assertIsNone(self.controller.policy)
+            self.assertEqual(policy_notice(self.state), S.POLICY_REFUSED + " " + S.POLICY_REFUSED_REMEDY)
+            self.fold(task=self.file_task())
+            self.assertEqual(self.launcher.started, [])
+            self.assertEqual(self.commands("report")[-1][1]["evidence"]["reason"], "not_permitted")
+            self.settle("report")
+
+    def test_a_document_that_is_not_the_one_the_snapshot_named_is_refused_whole(self):
+        self.connected(policy=False)
+        self.deliver(policy_document(hosts=["github.com"]), digest="f" * 64)
+        self.assertFalse(self.state.policy_held)
+        self.assertTrue(self.state.policy_refused)
+        # So is one this client will not act on any part of.
+        self.deliver(policy_document(hosts=["GitHub.com"]))
+        self.assertFalse(self.state.policy_held)
+        self.assertIsNone(self.controller.policy)
+
+    def test_the_copy_goes_with_the_connection_and_is_never_written_down(self):
+        self.connected()
+        self.assertTrue(self.state.policy_held)
+        # The connection drops: the copy drops with it, and this computer
+        # carries nothing out until the new policy arrives.
+        self.surface.policy = None
+        self.fold(operation="heartbeat", connected=False, needsReconnect=True)
+        self.assertFalse(self.state.policy_held)
+        self.assertIsNone(self.controller.policy)
+        self.assertEqual([entry for entry in os.listdir(self.temporary.name)], ["projects"])
+
+    def test_a_withdrawn_policy_leaves_this_computer_doing_nothing(self):
+        self.connected()
+        self.surface.policy = None
+        self.fold(operation="policy")
+        self.assertFalse(self.state.policy_held)
+        self.assertFalse(self.state.policy_refused)
+        self.fold(task=self.file_task())
+        self.assertEqual(self.launcher.started, [])
+        self.assertEqual(self.commands("report")[-1][1]["evidence"]["reason"], "not_permitted")
+
+
+class StaleReportTest(DeviceActionHarness):
+    """A report is about one action. A task the runtime replaced in between is a
+    different command, and closing it would claim an outcome nobody observed."""
+
+    def test_a_report_for_a_task_that_is_no_longer_current_closes_nothing(self):
+        self.connected()
+        self.fold(task=self.file_task())
+        self.settle("acknowledge_task")
+        self.launcher.observe(A.Observation(A.EXITED, 0))
+        self.controller.drain()
+        self.assertEqual(self.commands("report")[0][2], TASK_ID)
+        # The runtime replaced the command between the read and the queue.
+        self.fold(operation="report", error="stale_task")
+        self.assertIsNone(self.state.failure, "a stale report is not a failed effect")
+        self.assertEqual(self.state.phase, Phase.CONNECTED)
+        self.assertEqual(self.state.task.phase, viewstate.TASK_DONE)
+        self.assertEqual(len(self.commands("report")), 1, "it is never re-sent for that action")
 
 
 class HandoffTest(DeviceActionHarness):

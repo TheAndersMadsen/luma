@@ -4,9 +4,12 @@ Cosmos can ask this installation to open something. Three rules shape every
 line here:
 
 * **Re-verify locally.** The command is checked against this installation's own
-  copy of the owner's policy (:mod:`cosmos_linux.policy`) *and* its content
-  digest is recomputed from the canonical tuple. A host, application or root
-  that is not in the local copy is refused whatever the runtime said.
+  copy of the owner's permission — the document Cosmos delivered
+  (:mod:`cosmos_linux.policy`) — *and* its content digest is recomputed from the
+  canonical tuple. A host, application or root that is not in that copy is
+  refused whatever the runtime said, and an installation holding no copy at all
+  carries nothing out. How this desktop opens a file is separate: the openers
+  file decides *how*, never *whether*.
 * **Never build a command from strings.** The argv comes from the owner's own
   opener template with exactly three validated substitutions; there is no
   shell, no interpolation and no model-supplied argument.
@@ -35,7 +38,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
 from . import policy as policy_module
-from .policy import Policy, Resolved, resolve_under_root
+from .policy import NO_OPENERS, Openers, Policy, Resolved, resolve_under_root
 
 log = logging.getLogger("cosmos.actions")
 
@@ -170,17 +173,30 @@ class Plan:
     unsupported: Optional[str] = None
 
 
-def plan(task, policy: Policy, which: Callable[[str], Optional[str]] = shutil.which,
+def plan(task, policy: Optional[Policy], openers: Openers = NO_OPENERS,
+         which: Callable[[str], Optional[str]] = shutil.which,
          resolve: Callable[..., Resolved] = resolve_under_root,
          digest_of: Callable[[str], Optional[str]] = file_digest) -> Plan:
-    """What this computer will do with one command, decided entirely locally."""
+    """What this computer will do with one command, decided entirely locally.
+
+    ``policy`` is the owner's own permission as Cosmos delivered it, or None
+    while this installation holds none — which allows nothing at all.
+    """
     operation = task.operation
     if task.channel in UNSUPPORTED_CHANNELS:
         return Plan(bound=False, refusal=NOT_PERMITTED, unsupported=UNSUPPORTED_CHANNELS[task.channel])
     if task.channel != OPEN_CHANNEL or operation.get("kind") != "open":
         return Plan(bound=False, refusal=NOT_PERMITTED, unsupported=str(operation.get("kind") or "that"))
+    if policy is None:
+        # No permission is held here, so nothing is permitted here. That is an
+        # ordinary state, and it is still a report rather than silence.
+        return Plan(bound=False, refusal=NOT_PERMITTED)
     if content_digest(operation) != task.content_digest:
         # Either side drifting means this is not the command the runtime bound.
+        return Plan(bound=False, refusal=NOT_PERMITTED)
+    if not policy.allows_class(task.privacy):
+        # The owner spent a ceiling when they gave this permission; a command
+        # routed above it is not the permission that was given.
         return Plan(bound=False, refusal=NOT_PERMITTED)
     locator = operation.get("locator") or {}
     scheme = locator.get("scheme")
@@ -189,9 +205,10 @@ def plan(task, policy: Policy, which: Callable[[str], Optional[str]] = shutil.wh
     if scheme == "https":
         return _plan_https(locator.get("url") or "", position, label, policy, which)
     if scheme == "app":
-        return _plan_app(locator.get("id") or "", position, label, policy, which)
+        return _plan_app(locator.get("id") or "", position, label, policy, openers, which)
     if scheme == "file":
-        return _plan_file(locator, operation.get("version"), position, label, policy, which, resolve, digest_of)
+        return _plan_file(locator, operation.get("version"), position, label, policy, openers, which,
+                          resolve, digest_of)
     return Plan(bound=False, refusal=UNRESOLVABLE)
 
 
@@ -216,22 +233,26 @@ def _plan_https(url: str, position: Optional[dict], label: str, policy: Policy,
     return Plan(bound=True, launch=Launch(argv=(XDG_OPEN, target), label=label))
 
 
-def _plan_app(identifier: str, position: Optional[dict], label: str, policy: Policy,
+def _plan_app(identifier: str, position: Optional[dict], label: str, policy: Policy, openers: Openers,
               which: Callable[[str], Optional[str]]) -> Plan:
     entry = policy.app(identifier)
     if entry is None:
+        # Only an application the delivered policy names is ever started.
         return Plan(bound=False, refusal=NOT_PERMITTED)
     if position is not None:
         # Starting an application puts nothing at a place.
         return Plan(bound=False, refusal=NO_HANDLER)
-    if entry.desktop is None or which(GIO) is None:
+    desktop = openers.desktop_for(identifier)
+    if desktop is None or which(GIO) is None:
+        # The owner allowed it; this machine does not know which entry starts
+        # it. That is a local gap, not a permission.
         return Plan(bound=False, refusal=NO_HANDLER)
-    return Plan(bound=True, launch=Launch(argv=(GIO, "launch", entry.desktop),
-                                          resolved_app=entry.desktop, label=label or entry.label))
+    return Plan(bound=True, launch=Launch(argv=(GIO, "launch", desktop),
+                                          resolved_app=desktop, label=label or entry.label))
 
 
 def _plan_file(locator: dict, version: Optional[str], position: Optional[dict], label: str, policy: Policy,
-               which: Callable[[str], Optional[str]], resolve: Callable[..., Resolved],
+               openers: Openers, which: Callable[[str], Optional[str]], resolve: Callable[..., Resolved],
                digest_of: Callable[[str], Optional[str]]) -> Plan:
     resolved = resolve(policy, locator.get("rootId") or "", locator.get("relative") or "")
     if resolved.path is None:
@@ -241,7 +262,8 @@ def _plan_file(locator: dict, version: Optional[str], position: Optional[dict], 
         if digest_of(resolved.path) != version:
             return Plan(bound=False, refusal=VERSION_CHANGED)
     relative = locator.get("relative") or ""
-    opener = policy.opener_for(relative)
+    # How this desktop opens that suffix is its own business, never Cosmos's.
+    opener = openers.opener_for(relative)
     if position is not None:
         kind = position.get("kind")
         if opener is None:

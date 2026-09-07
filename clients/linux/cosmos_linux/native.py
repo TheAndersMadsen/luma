@@ -31,12 +31,17 @@ MAX_TARGET_BYTES = 16
 MAX_JOURNAL_BYTES = 32768
 MAX_EVENT_BYTES = 16384
 MAX_SPEECH_BYTES = 1_048_576
+# The owner's own policy document for this installation, bounded so the whole
+# `policy` frame fits the transport envelope.
+MAX_POLICY_BYTES = 8192
 # Bounded like the macOS bridge: the client never signs more than one transcript.
 MAX_SIGN_MESSAGE_BYTES = 2048
 # The report a task ends with is bounded UTF-8 JSON; this client never sends
 # command output, because it never runs commands.
 MAX_REPORT_BYTES = 16 * 1024
 MAX_ATTESTATION_BYTES = 64
+# The action a report is about, exactly as the snapshot spelled it.
+ACTION_ID_BYTES = 36
 
 LIBRARY_NAMES = {
     "linux": "libcosmos_surface_client_ffi.so",
@@ -120,8 +125,10 @@ class Features:
 
     targets: bool = False  # cosmos_surface_send_text_to
     context: bool = False  # cosmos_surface_send_text_with_context
-    # acknowledge_task + report + grant: without all three this build cannot
-    # carry a command out honestly, so it refuses locally and says so.
+    # acknowledge_task + report + grant + device_policy: without all four this
+    # build cannot carry a command out honestly — it could not read the owner's
+    # permission, and its `report` would be the older call that names no
+    # action — so it refuses locally and says so.
     actions: bool = False
 
 
@@ -132,8 +139,12 @@ OPTIONAL_SIGNATURES = {
     "cosmos_surface_send_text_with_context": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t,
                                               _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
     "cosmos_surface_acknowledge_task": [ctypes.c_void_p],
-    "cosmos_surface_report": [ctypes.c_void_p, _BYTES, ctypes.c_size_t],
+    # A report names the action it is about: a task the runtime replaced
+    # between this client's read and the worker's queue closes nothing.
+    "cosmos_surface_report": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
     "cosmos_surface_grant": [ctypes.c_void_p, ctypes.c_int32, _BYTES, ctypes.c_size_t],
+    "cosmos_surface_device_policy": [ctypes.c_void_p, _BYTES, ctypes.c_size_t,
+                                     ctypes.POINTER(ctypes.c_size_t)],
 }
 
 
@@ -167,7 +178,8 @@ class Library:
             function.restype = ctypes.c_int32
         self._handle = handle
         actions = [self._bind_optional(name) for name in
-                   ("cosmos_surface_acknowledge_task", "cosmos_surface_report", "cosmos_surface_grant")]
+                   ("cosmos_surface_acknowledge_task", "cosmos_surface_report", "cosmos_surface_grant",
+                    "cosmos_surface_device_policy")]
         self.features = Features(
             targets=self._bind_optional("cosmos_surface_send_text_to"),
             context=self._bind_optional("cosmos_surface_send_text_with_context"),
@@ -390,15 +402,24 @@ class Surface:
             return UNAVAILABLE
         return self._library.cosmos_surface_acknowledge_task(handle)
 
-    def report(self, report: bytes) -> int:
-        """What this computer observed, once per task."""
+    def report(self, action_id: str, report: bytes) -> int:
+        """What this computer observed, once per task, about the action it names.
+
+        A report for anything but the current task comes back as ``stale_task``
+        and closes nothing: the runtime replaced the command between the
+        snapshot this client read and this call, so it is a different command.
+        """
         handle = self._require()
         if not self.features.actions:
             return UNAVAILABLE
         if not isinstance(report, (bytes, bytearray)) or not report or len(report) > MAX_REPORT_BYTES:
             return INVALID_ARGUMENT
+        action = (action_id or "").encode("utf-8")
+        if len(action) != ACTION_ID_BYTES or "\0" in (action_id or ""):
+            return INVALID_ARGUMENT
         encoded = bytes(report)
-        return self._library.cosmos_surface_report(handle, self._buffer(encoded), len(encoded))
+        return self._library.cosmos_surface_report(handle, self._buffer(action), len(action),
+                                                   self._buffer(encoded), len(encoded))
 
     def grant(self, granted: bool, attestation: Optional[str]) -> int:
         """Answer the ceremony. Granting needs the evidence the request asked
@@ -437,6 +458,27 @@ class Surface:
         code = self._library.cosmos_surface_speech_audio(handle, buffer, expected_length, ctypes.byref(written))
         if code != OK or written.value != expected_length:
             raise NativeError(code if code != OK else BUFFER_TOO_SMALL, "speech_audio")
+        return ctypes.string_at(buffer, expected_length)
+
+    def device_policy(self, expected_length: int) -> Optional[bytes]:
+        """The owner's own policy document for this installation; the snapshot's
+        byteLength bounds the copy. None means this installation holds none,
+        which is an ordinary state and means it may do nothing at all."""
+        handle = self._require()
+        if not self.features.actions:
+            # A build that cannot read the policy holds none, and holding none
+            # is exactly what it should then do.
+            return None
+        if expected_length <= 0 or expected_length > MAX_POLICY_BYTES:
+            raise NativeError(INVALID_ARGUMENT, "device_policy")
+        buffer = (ctypes.c_uint8 * expected_length)()
+        written = ctypes.c_size_t(0)
+        code = self._library.cosmos_surface_device_policy(handle, buffer, expected_length,
+                                                          ctypes.byref(written))
+        if code == EMPTY:
+            return None
+        if code != OK or written.value != expected_length:
+            raise NativeError(code if code != OK else BUFFER_TOO_SMALL, "device_policy")
         return ctypes.string_at(buffer, expected_length)
 
     def destroy(self) -> int:

@@ -63,8 +63,15 @@ object NativeSurface {
      * will not attempt.
      */
     @JvmStatic external fun acknowledgeTask(handle: Long): Int
-    /** Say what this device observed, once, as the bounded JSON of a report. */
-    @JvmStatic external fun report(handle: Long, report: ByteArray): Int
+    /**
+     * Say what this device observed, once, as the bounded JSON of a report.
+     * [actionId] is the command the report is about, exactly as the snapshot
+     * spelled it. A report for anything but the current command is refused
+     * with `stale_task` and closes nothing: a command the runtime replaced
+     * between this device reading it and the worker sending is a different
+     * command, and claiming its outcome would be a false outcome claim.
+     */
+    @JvmStatic external fun report(handle: Long, actionId: ByteArray, report: ByteArray): Int
     /** Say the current command is still running; it claims no outcome. */
     @JvmStatic external fun progress(handle: Long, sequence: Int, elapsedMs: Long): Int
     /** Answer the current ceremony with the actor evidence actually obtained. */
@@ -73,5 +80,13 @@ object NativeSurface {
     @JvmStatic external fun poll(handle: Long): ByteArray?
     /** The current spoken reply's complete audio/mpeg bytes, or null when none is current. */
     @JvmStatic external fun speechAudio(handle: Long): ByteArray?
+    /**
+     * The exact bytes of the owner's own policy document for this installation,
+     * or null when it holds none — an ordinary state that means it may do
+     * nothing at all. The snapshot names this document's digest and length;
+     * these are its bytes. It is a cache of one approval revision and is never
+     * written to disk.
+     */
+    @JvmStatic external fun devicePolicy(handle: Long): ByteArray?
     @JvmStatic external fun destroy(handle: Long): Int
 }

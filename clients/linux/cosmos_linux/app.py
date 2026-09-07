@@ -38,7 +38,7 @@ from .events import (
 from .identity import APP_ID, IdentityError, InstallationStore, default_data_dir, open_identity
 from .journal import AlreadyRunning, InstallationLease, JournalStore
 from .native import Features, Surface, load_library
-from .policy import example_document as example_policy, load as load_policy, policy_path
+from .policy import example_document as example_openers, load_openers, openers_path
 from .qr import approval_qr_data_url
 from .viewstate import TASK_REFUSED, TASK_WORKING, Line, TaskView
 
@@ -184,6 +184,24 @@ def credit_line_html(parts) -> str:
     return "".join(pieces)
 
 
+def policy_notice(state: State) -> str:
+    """What this computer may open, and how it opens it, said once and plainly.
+
+    The permission is Cosmos's and arrives on the connection; the openers file
+    is this machine's own and grants nothing. A computer holding no permission
+    says so rather than looking ready.
+    """
+    if state.openers_error is not None:
+        return S.OPENERS_INVALID + " " + S.OPENERS_INVALID_REMEDY
+    if state.policy_refused:
+        return S.POLICY_REFUSED + " " + S.POLICY_REFUSED_REMEDY
+    if state.phase == Phase.CONNECTED and not state.policy_held:
+        return S.POLICY_NONE + " " + S.POLICY_NONE_REMEDY
+    if state.policy_held and not state.openers_loaded:
+        return S.OPENERS_MISSING + " " + S.OPENERS_MISSING_REMEDY
+    return ""
+
+
 def view_for(state: State, has_surface: bool, editing_server: bool) -> str:
     if editing_server or state.descriptor is None or not has_surface:
         return "setup"
@@ -230,7 +248,8 @@ def preview_state(kind: str) -> State:
         return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
                      session_seen=True, features=replace(features, actions=True), task=task, status=status,
                      status_line=viewstate.status_line(status, Line()),
-                     sent_text="Continue on my PC", message=S.NOTICE_TASK, policy_loaded=True)
+                     sent_text="Continue on my PC", message=S.NOTICE_TASK, policy_held=True,
+                     openers_loaded=True)
     if kind in ("ceremony", "ceremony-locked"):
         # The ceremony: the owner's own words for the effect, two equal choices,
         # a visible countdown. Enter confirms, Escape answers nothing.
@@ -252,7 +271,7 @@ def preview_state(kind: str) -> State:
         return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
                      session_seen=True, features=replace(features, actions=True), confirmation=confirmation,
                      ceremony_seconds=21, sent_text="Continue on my PC", message=S.NOTICE_CONFIRM,
-                     policy_loaded=True)
+                     policy_held=True, openers_loaded=True)
     if kind == "choices":
         choices = DisplayCard(
             action_id="0d3b5f2e-8a4c-4f1a-9b6d-2e7c8a9f0b1c", turn_id="1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
@@ -425,23 +444,13 @@ def make_backend_class():
                               "canConfirm": ceremony.can_confirm, "cannotReason": ceremony.cannot_reason}
                              if ceremony is not None else None),
                 "canCancelTask": state.can_cancel_task,
-                "policyReady": state.policy_loaded and state.policy_error is None,
-                "policyNotice": self._policy_notice(state),
+                "policyNotice": policy_notice(state),
                 "speech": ({"actionId": state.speech.action_id, "text": state.speech.text}
                            if state.speech is not None else None),
                 "invitation": state.invitation is not None,
                 "reducedMotion": self._reduced_motion,
                 "preview": self._preview is not None,
             }
-
-        @staticmethod
-        def _policy_notice(state: State) -> str:
-            """What this computer is allowed to open, said once, plainly."""
-            if state.policy_error is not None:
-                return S.POLICY_INVALID + " " + S.POLICY_INVALID_REMEDY
-            if not state.policy_loaded:
-                return S.POLICY_MISSING + " " + S.POLICY_MISSING_REMEDY
-            return ""
 
         @staticmethod
         def _display(card: Optional[DisplayCard]) -> Optional[dict]:
@@ -675,8 +684,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--screenshot-delay", type=int, default=SCREENSHOT_DELAY_MS,
                         help="milliseconds to wait before the screenshot")
     parser.add_argument("--no-auto-prepare", action="store_true", help="wait on the setup view even with a stored installation")
-    parser.add_argument("--example-policy", action="store_true",
-                        help="print an example device-actions.json and exit")
+    parser.add_argument("--example-openers", action="store_true",
+                        help="print an example openers.json and exit")
     parser.add_argument("--verbose", action="store_true", help="debug logging on stderr")
     return parser.parse_args(argv)
 
@@ -685,12 +694,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
     logging.basicConfig(level=logging.DEBUG if arguments.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
-    if arguments.example_policy:
-        # What this computer may be asked to open is the owner's own file. It is
-        # missing by default, and a missing file means "open nothing".
+    if arguments.example_openers:
+        # How this desktop opens a document at a line or a page. It allows
+        # nothing on its own: what this computer may open is the permission the
+        # owner gives it in Center, which Cosmos delivers over the connection.
         data_dir = arguments.data_dir or default_data_dir()
-        print(f"# {policy_path(data_dir)}")
-        print(example_policy())
+        print(f"# {openers_path(data_dir)}")
+        print(example_openers())
         return 0
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     try:
@@ -754,22 +764,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         except InvalidServer:
             initial = DEFAULT_SERVER_ORIGIN
         player_holder: dict = {}
-        # What this computer may be asked to open, read from the owner's own
-        # file. A missing file allows nothing.
-        device_policy = load_policy(policy_path(data_dir))
+        # How this desktop opens a document. What it may open at all is the
+        # owner's permission, and that arrives from Cosmos on the connection.
+        openers = load_openers(openers_path(data_dir))
         controller = Controller(
             surface_factory=lambda config, platform: Surface(library, config, platform),
             identity=identity, journal=journal, scheduler=QtScheduler(), player=_player(player_holder),
             boot_epoch=epoch, server_origin=initial,
             persist_server=lambda origin: store.set("serverOrigin", origin),
-            policy=device_policy,
+            openers=openers,
         )
         log.info("installation %s (%s)", identity.enrollment_id, identity.storage)
-        if device_policy.error is not None:
-            log.warning("device actions are disabled: %s", device_policy.error)
-        elif not device_policy.loaded:
-            log.info("no device-action policy at %s; this computer will open nothing",
-                     policy_path(data_dir))
+        if openers.error is not None:
+            log.warning("the openers file was not read: %s", openers.error)
+        elif not openers.loaded:
+            log.info("no openers at %s; documents open with this desktop's own handler",
+                     openers_path(data_dir))
 
     Backend = make_backend_class()
     backend = Backend(controller, key_notice, reduced_motion, preview=preview,

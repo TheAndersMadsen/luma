@@ -142,11 +142,11 @@ TASK_CLOSE_NOTE = "Closing hides this window. The task keeps running."
 # Why a command was refused here, and what the owner can do about it. Never a
 # reason about another device, and never a reason about privacy.
 REFUSAL_NO_HANDLER = "This computer has no application set up to open that."
-REFUSAL_NO_HANDLER_REMEDY = "Add an opener to device-actions.json in the Cosmos data folder, then ask again."
+REFUSAL_NO_HANDLER_REMEDY = "Add an opener to openers.json in the Cosmos data folder, then ask again."
 REFUSAL_NOT_PERMITTED = "This computer is not allowed to open that."
-REFUSAL_NOT_PERMITTED_REMEDY = "Add it to device-actions.json in the Cosmos data folder, then ask again."
+REFUSAL_NOT_PERMITTED_REMEDY = "Allow it for this computer in Center, then ask again."
 REFUSAL_UNRESOLVABLE = "That document is not in the folder this computer knows by that name."
-REFUSAL_UNRESOLVABLE_REMEDY = "Check the folder in device-actions.json, then ask again."
+REFUSAL_UNRESOLVABLE_REMEDY = "Check that folder in Center, then ask again."
 REFUSAL_VERSION_CHANGED = "That document changed since it was read. It was not opened."
 REFUSAL_VERSION_CHANGED_REMEDY = "Ask again to open the version this computer has."
 # The three operations this platform does not offer at all.
@@ -155,10 +155,17 @@ UNSUPPORTED_ROUTE = "This computer does not start navigation."
 UNSUPPORTED_PLAY = "This computer does not play media."
 UNSUPPORTED_OTHER = "This computer cannot do that."
 UNSUPPORTED_REMEDY = "Ask for it on a device that can."
-POLICY_MISSING = "This computer is not set up to open anything yet."
-POLICY_MISSING_REMEDY = "Write device-actions.json in the Cosmos data folder to allow a site or a folder."
-POLICY_INVALID = "This computer could not read what it is allowed to open, so it will open nothing."
-POLICY_INVALID_REMEDY = "Fix device-actions.json in the Cosmos data folder, then restart Cosmos."
+# What Cosmos has allowed this computer, and what this computer knows locally.
+# The permission comes from Center; the openers file only says how a document
+# is opened here once it is allowed.
+POLICY_NONE = "Cosmos has not given this computer permission to open anything."
+POLICY_NONE_REMEDY = "Allow it for this computer in Center. Until then it opens nothing."
+POLICY_REFUSED = "Cosmos sent permission this computer could not verify, so it will open nothing."
+POLICY_REFUSED_REMEDY = "Update Cosmos on this computer, then reconnect."
+OPENERS_MISSING = "Documents open here with this desktop's own handler."
+OPENERS_MISSING_REMEDY = "Add openers.json to the Cosmos data folder to open them at a line or a page."
+OPENERS_INVALID = "This computer could not read openers.json, so it will use the desktop's own handler."
+OPENERS_INVALID_REMEDY = "Fix openers.json in the Cosmos data folder, then restart Cosmos."
 
 # The ceremony. The runtime composed these words from the owner's own label;
 # this file only frames them.

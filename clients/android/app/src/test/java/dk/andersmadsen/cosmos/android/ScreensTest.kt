@@ -312,6 +312,20 @@ class ScreensTest {
         assertEquals("Working", running.copy(task = command.copy(privacy = "private")).taskCard(15_000, DevicePolicy.PHONE)?.state)
         assertEquals("this TV", deviceWord(DevicePolicy.TV))
         assertEquals("this phone", deviceWord(DevicePolicy.PHONE))
+        // A device that holds nothing did not refuse this one thing: it has
+        // been given nothing at all, and it says that instead.
+        val nothingHeld = running.copy(taskReport = ActionOutcome.refused(DeclineReason.NOT_PERMITTED))
+        assertEquals("Not done", nothingHeld.taskCard(15_000, DevicePolicy.PHONE)?.state)
+        assertEquals(
+            "Cosmos has not given this phone anything it may do yet.",
+            nothingHeld.taskCard(15_000, DevicePolicy.PHONE)?.sentence,
+        )
+        assertEquals("Allow it in Center → Devices, then ask again.", nothingHeld.taskCard(15_000, DevicePolicy.PHONE)?.next)
+        // Holding a copy that simply does not cover this is a different sentence.
+        val holding = nothingHeld.copy(permission = DevicePolicy(route = true))
+        assertEquals("This phone has not been allowed to do that.", holding.taskCard(15_000, DevicePolicy.PHONE)?.sentence)
+        // A television still explains nothing at all, permission or not.
+        assertNull(nothingHeld.taskCard(15_000, DevicePolicy.TV))
         // A ceremony on screen is the first thing the card is about.
         val confirmation = Confirmation(
             grantId = UUID.fromString("77777777-7777-4777-8777-777777777777"), actionId = command.actionId,
@@ -325,6 +339,25 @@ class ScreensTest {
         // Dismissed with Back, the sheet is gone and the command is still running.
         val dismissed = asking.copy(ceremony = asking.ceremony!!.on(CeremonyEvent.Back))
         assertEquals("Working", dismissed.taskCard(15_000, DevicePolicy.PHONE)?.state)
+    }
+
+    @Test
+    fun aStaleReportSaysTheCommandMovedOnAndIsNeverStyledAsAFailure() {
+        // A report names the command it is about. One for a command Cosmos
+        // already replaced closed nothing and claimed nothing, so it is said
+        // plainly, offers no retry, and is not an error.
+        assertEquals("Cosmos replaced that command before this phone could say what happened.", explain("stale_task"))
+        assertFalse(isFailure("stale_task"))
+        assertTrue(isFailure("no_task"))
+        assertTrue(isFailure("invalid_signature"))
+        // One sentence on what happened, one on what to do, nothing technical.
+        assertEquals("This phone is not approved yet. Approve it in Center, then connect.", explain("denied"))
+        assertEquals("Cosmos could not confirm that. Try again in a moment.", explain("something_new"))
+        // It is said once, quietly, where the panel keeps what it has to say;
+        // a report that landed says nothing at all.
+        val stale = SurfaceState(phase = Phase.CONNECTED, operation = "report", message = explain("stale_task"))
+        assertEquals(explain("stale_task"), stale.notice())
+        assertNull(stale.copy(message = "").notice())
     }
 
     @Test

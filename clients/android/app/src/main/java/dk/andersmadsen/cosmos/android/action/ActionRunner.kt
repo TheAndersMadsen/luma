@@ -11,45 +11,18 @@ import android.media.session.PlaybackState
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
-import java.io.File
 
 /**
- * The platform half of a device action: the owner's own copy of the policy,
- * the intents this device sends, and the two things it can honestly observe —
- * that an application took the screen, and, on a television with the owner's
- * notification-listener grant, that a media session is playing.
+ * The platform half of a device action: the intents this device sends, and the
+ * two things it can honestly observe — that an application took the screen,
+ * and, on a television with the owner's notification-listener grant, that a
+ * media session is playing.
  *
  * Every decision lives in the pure files beside this one. Nothing here builds
  * a command from a string: an intent carries values the runtime minted and
- * [DevicePolicy] re-verified, and nothing else.
+ * the delivered [DevicePolicy] re-verified, and nothing else.
  */
 class ActionRunner(private val application: Context, val platform: String) {
-    private var loadedAtMs = 0L
-    private var loaded = DevicePolicy()
-
-    init {
-        // The directory has to exist before the owner can put the copy in it.
-        runCatching { application.getExternalFilesDir(null) }
-    }
-
-    /**
-     * The owner keeps this device's copy in the application's own files
-     * directory as `device-actions.json`. A missing file is not an error: it
-     * means this device may do nothing, which is the safe default.
-     */
-    fun policyFile(): File = File(application.getExternalFilesDir(null) ?: application.filesDir, DevicePolicy.FILE_NAME)
-
-    fun policy(): DevicePolicy {
-        val file = policyFile()
-        val stamp = runCatching { if (file.isFile) file.lastModified() else 0L }.getOrDefault(0L)
-        if (stamp != loadedAtMs) {
-            loadedAtMs = stamp
-            loaded = if (stamp == 0L) DevicePolicy()
-            else DevicePolicy.decode(runCatching { file.readBytes() }.getOrDefault(ByteArray(0)))
-        }
-        return loaded
-    }
-
     /** The application that would handle this, or null when nothing here would. */
     fun resolve(plan: PlannedAction): String? {
         val intent = intent(plan) ?: return null

@@ -3,6 +3,7 @@ package dk.andersmadsen.cosmos.android
 import dk.andersmadsen.cosmos.android.action.ActionWire
 import dk.andersmadsen.cosmos.android.action.Confirmation
 import dk.andersmadsen.cosmos.android.action.DeviceTask
+import dk.andersmadsen.cosmos.android.action.HeldPolicy
 import dk.andersmadsen.cosmos.android.action.Revoked
 import org.json.JSONArray
 import org.json.JSONObject
@@ -85,6 +86,11 @@ data class NativeEvent(
     val confirmation: Confirmation? = null,
     /** The command Cosmos retired, and why. */
     val revoked: Revoked? = null,
+    /**
+     * The copy of the owner's permission this installation holds, named but not
+     * repeated. Null means it holds none, and then it carries nothing out.
+     */
+    val policy: HeldPolicy? = null,
 ) {
     val ok: Boolean get() = error == null
 
@@ -93,7 +99,7 @@ data class NativeEvent(
         private val OPERATIONS = setOf("prepare", "connect", "send_text", "send_text_to", "send_text_with_context",
             "retry_pending", "cancel", "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task",
             "report", "progress", "grant", "display", "speech", "invitation", "status", "task", "confirmation",
-            "disconnect", "heartbeat")
+            "policy", "disconnect", "heartbeat")
         private val DISPLAY_CLASSES = setOf("public", "shared_room", "near_user", "private")
         private val STATUS_STATES = setOf("working", "waiting", "confirming", "acting", "shown", "spoken",
             "done", "refused", "nowhere", "unknown")
@@ -244,6 +250,9 @@ data class NativeEvent(
                 task = if (connected) ActionWire.task(value.optJSONObject("task")) else null,
                 confirmation = if (connected) ActionWire.confirmation(value.optJSONObject("confirmation")) else null,
                 revoked = if (connected) ActionWire.revoked(value.optJSONObject("revoked")) else null,
+                // The owner's permission is a statement about a live connection.
+                // A dropped room holds none, which is doing nothing at all.
+                policy = if (connected) ActionWire.policy(value.optJSONObject("policy")) else null,
             )
         }
     }

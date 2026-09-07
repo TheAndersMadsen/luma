@@ -70,8 +70,10 @@ class SourcesTest(unittest.TestCase):
         # A preview is a state the controller would accept: its words bind.
         self.assertTrue(controller.Controller._words_bind(app.preview_state("ceremony").confirmation))
         self.assertFalse(viewstate.ceremony(app.preview_state("ceremony-locked").confirmation, 21).can_confirm)
-        # The example the CLI prints is a policy this client would act on.
-        self.assertTrue(policy.parse(json.loads(policy.example_document())).loaded)
+        # The example the CLI prints is an openers file this client would read.
+        self.assertTrue(policy.parse_openers(json.loads(policy.example_document())).loaded)
+        # The permission itself is not a file: it arrives on the connection.
+        self.assertEqual(app.policy_notice(app.preview_state("task")), "")
 
 
 if __name__ == "__main__":

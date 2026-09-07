@@ -46,6 +46,27 @@ fun deviceName(platform: String?): String? = when (platform) {
 /** Said under "Cannot confirm"; the request is never replayed on the owner's behalf. */
 const val CANNOT_CONFIRM_DETAIL = "I can't confirm whether that request was handled. It was not sent again."
 
+/** One sentence on what happened, one on what to do; nothing technical and no identifiers. */
+fun explain(code: String): String = when (code) {
+    "pending_operation" -> "The last request has an unknown outcome. Retry it before asking again."
+    "persistence", "invalid_journal" -> "This phone could not save its session. Retry the last request before asking again."
+    "invalid_signature" -> "This phone could not use its own key. Set it up again."
+    "invalid_config" -> "That server address cannot be used. Enter an address that starts with https:// and nothing after it."
+    "invalid_input" -> "That question is too long. Shorten it and send it again."
+    "denied" -> "This phone is not approved yet. Approve it in Center, then connect."
+    "busy" -> "Cosmos is still on the last request. Wait a moment and try again."
+    "no_display" -> "There is no reply on screen."
+    "no_speech" -> "There is no spoken reply right now."
+    // Not a failed effect: the command that report was about is no longer the
+    // current one, so nothing was closed and there is nothing to do about it.
+    "stale_task" -> "Cosmos replaced that command before this phone could say what happened."
+    "not_in_this_build" -> "Cosmos on this phone cannot use screen text or another device yet. Nothing was sent — choose This phone, remove the screen chip and ask again."
+    else -> "Cosmos could not confirm that. Try again in a moment."
+}
+
+/** Whether a code is worth an error style. A task that went stale is not a failure. */
+fun isFailure(code: String): Boolean = code != "stale_task"
+
 /** The one-line status vocabulary: exact words, never an error style. */
 fun TurnStatus.line(): String {
     val device = deviceName(surfacePlatform)
@@ -278,11 +299,20 @@ fun SurfaceState.taskCard(nowMs: Long, platform: String): TaskCard? {
     // A television renders nothing above the shared class, command or card.
     if (platform == DevicePolicy.TV && task?.private == true) return null
     val stage = taskStage(nowMs) ?: return null
-    return TaskCards.card(stage, deviceWord(platform), explain = platform != DevicePolicy.TV)
+    return TaskCards.card(
+        stage, deviceWord(platform),
+        explain = platform != DevicePolicy.TV,
+        holdsPermission = permission != null,
+    )
 }
 
-/** Snapshots whose message is worth a quiet notice; the pill and waveform already convey the steady states. */
-private val NOTICED_OPERATIONS = setOf("send_text", "cancel", "retry_pending", "disconnect")
+/**
+ * Snapshots whose message is worth a quiet notice; the pill and waveform
+ * already convey the steady states. A report is here for the one thing it can
+ * say — that the command it named had already been replaced — and says nothing
+ * at all when it lands.
+ */
+private val NOTICED_OPERATIONS = setOf("send_text", "cancel", "retry_pending", "disconnect", "report")
 
 fun SurfaceState.notice(): String? = when {
     alert || phase == Phase.BLOCKED || (hasPending && !pendingOpen) -> message
