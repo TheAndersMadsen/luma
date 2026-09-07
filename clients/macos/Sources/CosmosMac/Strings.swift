@@ -38,6 +38,8 @@ public enum Words {
     public static let appName = "Cosmos"
     public static let openCosmos = "Open Cosmos"
     public static let quit = "Quit Cosmos"
+    /// The owner's own switch for a reply that shows itself. On by default.
+    public static let showRepliesAutomatically = "Show replies automatically"
 
     // MARK: Set up this Mac
 

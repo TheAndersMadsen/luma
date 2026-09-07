@@ -190,10 +190,21 @@ public final class ClientModel: ObservableObject {
     }
     /// A choice list on this Mac that the owner has not answered yet.
     public var awaitingChoice: Bool { choiceCount != nil }
+    /// A reply landed on this Mac, the panel is not on screen, and this Mac has
+    /// not shown or played it yet. It is waiting for the owner as surely as a
+    /// question is. A reply already rendered here is not waiting for anyone.
+    public var unshownReply: Bool {
+        guard !panelVisible else { return false }
+        if let card = snapshot.display, acknowledged != card.actionID { return true }
+        if let reply = snapshot.speech, spoken != reply.actionID { return true }
+        return false
+    }
     /// What the menu-bar glyph shows without the panel being open. A ceremony or
-    /// a task ready for this Mac is exactly what "waiting for you" means.
+    /// a task ready for this Mac is exactly what "waiting for you" means, and so
+    /// is a reply that arrived while the panel was closed.
     public var presence: MenuPresence {
         let waitingHere = awaitingChoice || snapshot.confirmation != nil || activity == .ready
+            || unshownReply
             || (snapshot.status?.state == .waiting && snapshot.status?.surfacePlatform == "macos")
         return PanelState.presence(phase: waveformPhase, waitingHere: waitingHere)
     }
