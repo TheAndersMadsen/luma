@@ -2,16 +2,26 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+// Quiet presence: the panel, the prompt, the destination and context chips.
+// Enter sends, Esc closes the window without touching the task, "Cancel task"
+// is its own explicit action, digits pick from a choice list.
 Item {
     id: root
     property var s: backend.state
     property string sentText: ""
+    property bool choicesShown: s.display != null && s.display.kind === "choices"
 
-    function focusPrimary() { prompt.forceActiveFocus() }
+    function focusPrimary() { prompt.forceActiveFocus(); prompt.selectAll() }
 
     function send() {
         if (!s.canSend || prompt.text.trim().length === 0) return
         if (backend.send(prompt.text)) sentText = prompt.text
+    }
+    function sendFromAnywhere() { send() }
+    function sendExample(text) {
+        if (!s.canSend) return
+        prompt.text = text
+        send()
     }
 
     Connections {
@@ -19,25 +29,69 @@ Item {
         function onSent(ok) {
             if (ok && prompt.text === root.sentText) prompt.text = ""
             root.sentText = ""
+            if (ok) prompt.forceActiveFocus()
         }
     }
+    onChoicesShownChanged: if (choicesShown && prompt.text.length === 0) panel.focusChoices()
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 12
+        spacing: 10
 
         CosmosPanel {
+            id: panel
             Layout.fillWidth: true
             Layout.fillHeight: true
-            phase: s.waveformPhase
             card: s.display
             speech: s.speech
             speaking: s.speaking
+            sentText: s.sentText
             motionEnabled: window.motionEnabled
-            placeholder: s.connected
-                ? (s.visible ? "Ask Cosmos. Replies may appear here or on another approved display."
-                             : "Ask Cosmos. Replies appear on your approved displays; this window joins them while it is visible and active.")
-                : s.statusText
+            onChoicePicked: function(index) { backend.selectChoice(index) }
+            onExamplePicked: function(text) { root.sendExample(text) }
+        }
+
+        // Chips: where the reply should go and what is attached. Reserved height.
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.minimumHeight: 32
+            spacing: 8
+            DestinationPicker { visible: s.features.targets; enabled: s.canSend }
+            Chip {
+                visible: s.hasScreenContext && s.context == null
+                text: s.contextBusy ? S.CAPTURING_SELECTION : S.USE_SELECTION
+                enabled: s.canSend && !s.contextBusy
+                onClicked: backend.useSelection()
+            }
+            Chip {
+                visible: s.context != null
+                active: true
+                closable: true
+                closeName: S.DROP_CONTEXT
+                text: s.context ? s.context.label : ""
+                onClicked: backend.dropContext()
+                onClosed: backend.dropContext()
+            }
+            Item { Layout.fillWidth: true }
+            // Close and Cancel task sit side by side so the difference is visible:
+            // closing hides the window and the turn keeps running.
+            CosmosButton {
+                text: S.CLOSE
+                implicitHeight: 30
+                onClicked: backend.hideWindow()
+            }
+            CosmosButton {
+                text: S.CANCEL_TASK
+                implicitHeight: 30
+                visible: s.canCancel && (s.turnOpen || s.sentText.length > 0)
+                onClicked: backend.cancel()
+            }
+            CosmosButton {
+                text: S.RETRY
+                implicitHeight: 30
+                visible: s.canRetry
+                onClicked: backend.retryPending()
+            }
         }
 
         RowLayout {
@@ -45,64 +99,94 @@ Item {
             TextField {
                 id: prompt
                 Layout.fillWidth: true
-                Layout.preferredHeight: 42
-                color: "#F2F7F8"
-                placeholderText: s.canSend ? "Ask Cosmos (public text)…" : "Waiting for the connection…"
-                placeholderTextColor: "#A4B7BE"
+                Layout.preferredHeight: 44
+                color: theme.primary
+                font.pixelSize: 15
+                placeholderText: s.canSend ? S.PROMPT_PLACEHOLDER : (s.sending ? S.WORKING : S.PROMPT_WAITING)
+                placeholderTextColor: theme.secondary
                 selectByMouse: true
                 enabled: s.canSend
                 maximumLength: 4000
-                Accessible.name: "Public request"
+                Accessible.name: S.PROMPT_PLACEHOLDER
                 onAccepted: root.send()
+                Keys.onPressed: function(event) {
+                    // A digit with an empty prompt picks from the choice list; otherwise it types.
+                    if (root.choicesShown && text.length === 0 && event.key >= Qt.Key_1 && event.key <= Qt.Key_8) {
+                        const index = event.key - Qt.Key_1
+                        if (index < s.display.items.length) { backend.selectChoice(index); event.accepted = true }
+                    } else if (root.choicesShown && text.length === 0 && event.key === Qt.Key_Down) {
+                        panel.focusChoices(); event.accepted = true
+                    }
+                }
                 background: Rectangle {
-                    color: "#111B20"; radius: 6
-                    border.color: prompt.activeFocus ? "#27E6DF" : "#33464D"
+                    color: theme.surface; radius: 8
+                    border.color: prompt.activeFocus ? theme.accent : theme.border
                     border.width: prompt.activeFocus ? 2 : 1
+                    Behavior on border.color { ColorAnimation { duration: window.motionMs } }
                 }
             }
             CosmosButton {
-                text: "Send"
+                primary: true
+                text: S.SEND
                 enabled: s.canSend && prompt.text.trim().length > 0
                 onClicked: root.send()
             }
         }
 
-        Label {
-            visible: s.invitation === true
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            color: "#F2F7F8"; font.pixelSize: 13
-            text: "A private reply is waiting for this computer. Keep this window in front to receive it."
-        }
-
+        // Notice: one sentence on what happened, one on what to do. Reserved height.
         RowLayout {
+            Layout.fillWidth: true
+            Layout.minimumHeight: 22
             spacing: 10
-            CosmosButton { text: "Cancel request"; visible: s.canCancel; onClicked: backend.cancel() }
-            CosmosButton { text: "Retry pending"; visible: s.canRetry; onClicked: backend.retryPending() }
             Label {
-                visible: s.hasPending || s.unknownOutcome
                 Layout.fillWidth: true
+                Layout.maximumWidth: theme.maxLineWidth
                 wrapMode: Text.Wrap
-                color: "#A4B7BE"; font.pixelSize: 12
-                text: s.hasPending
-                    ? "An outcome is uncertain. New requests are paused until the exact pending operation is resolved."
-                    : "A previous request has an unknown outcome. It will not be replayed automatically."
+                color: s.phase === "blocked" || s.screenContextOff ? theme.error : theme.secondary
+                font.pixelSize: 13
+                text: s.hasPending ? S.NOTICE_PENDING : (s.unknownOutcome && s.message.length === 0 ? S.NOTICE_UNKNOWN_OUTCOME : s.message)
+                Accessible.name: "Notice"
+                Accessible.role: Accessible.StaticText
             }
-            Item { Layout.fillWidth: true; visible: !(s.hasPending || s.unknownOutcome) }
             CosmosButton {
-                text: s.canDisconnect ? "Disconnect" : "Connect"
-                enabled: s.canDisconnect || s.canConnect
-                onClicked: s.canDisconnect ? backend.disconnect() : backend.connect()
+                visible: s.screenContextOff
+                text: S.OPEN_CENTER_DEVICES
+                implicitHeight: 28
+                onClicked: backend.openCenterDevices()
             }
         }
 
-        Label {
+        Disclosure {
             Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            color: "#58F4F1"
-            font.pixelSize: 13
-            text: s.message
-            Accessible.name: "Operation status"
+            RowLayout {
+                spacing: 10
+                Label { text: S.SERVER_LABEL + ": " + s.serverHost; color: theme.secondary; font.pixelSize: 13 }
+                Label { text: "·"; color: theme.secondary }
+                Label { text: s.statusText; color: theme.secondary; font.pixelSize: 13 }
+                Item { Layout.fillWidth: true }
+                CosmosButton {
+                    text: s.canDisconnect ? S.DISCONNECT : S.CONNECT
+                    implicitHeight: 28
+                    enabled: s.canDisconnect || s.canConnect
+                    onClicked: s.canDisconnect ? backend.disconnect() : backend.connect()
+                }
+                CosmosButton { text: S.QUIT; implicitHeight: 28; onClicked: backend.quit() }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: S.FINGERPRINT_LABEL + ": " + s.fingerprint
+                color: theme.secondary
+                font.family: "monospace"
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: s.keyNotice
+                color: theme.secondary
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
         }
     }
 

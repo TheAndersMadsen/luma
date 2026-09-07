@@ -43,6 +43,130 @@ def library_path():
 LIBRARY = library_path()
 
 
+class FakeFunction:
+    """A C entry point the fake library exports; records every call."""
+
+    def __init__(self, name, calls, result=native.OK):
+        self.name = name
+        self.calls = calls
+        self.result = result
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *arguments):
+        self.calls.append((self.name, arguments))
+        if self.name == "cosmos_surface_create":
+            arguments[3]._obj.value = 0x1234
+        return self.result
+
+
+class FakeHandle:
+    """What ctypes.CDLL hands back: only the exported names resolve."""
+
+    REQUIRED = (
+        "cosmos_surface_create", "cosmos_surface_connect", "cosmos_surface_send_text", "cosmos_surface_retry_pending",
+        "cosmos_surface_cancel", "cosmos_surface_set_visible", "cosmos_surface_acknowledge",
+        "cosmos_surface_acknowledge_speech", "cosmos_surface_speech_audio", "cosmos_surface_disconnect",
+        "cosmos_surface_poll", "cosmos_surface_destroy",
+    )
+
+    def __init__(self, optional=()):
+        self.calls = []
+        self.exported = set(self.REQUIRED) | set(optional)
+        self.functions = {}
+
+    def __getattr__(self, name):
+        if name.startswith("_") or name not in self.exported:
+            raise AttributeError(name)
+        if name not in self.functions:
+            self.functions[name] = FakeFunction(name, self.calls)
+        return self.functions[name]
+
+
+class NullBindings:
+    def public_key_sec1(self):
+        return GENERATOR_SEC1
+
+    def sign_sha256(self, message):
+        return b"\x30\x06\x02\x01\x01\x02\x01\x01"
+
+    def read_journal(self):
+        return None
+
+    def write_journal_atomically(self, data):
+        pass
+
+
+class OptionalSymbolTest(unittest.TestCase):
+    """The newer calls are resolved by name; a library without them hides the feature
+    and the plain call is never substituted."""
+
+    def load(self, optional):
+        handle = FakeHandle(optional)
+        original = native.ctypes.CDLL
+        native.ctypes.CDLL = lambda path: handle
+        try:
+            library = native.load_library(Path(__file__))
+        finally:
+            native.ctypes.CDLL = original
+        return handle, library
+
+    @staticmethod
+    def argument_bytes(arguments, index):
+        buffer, length = arguments[index], arguments[index + 1]
+        return bytes(buffer)[:length] if buffer is not None else None
+
+    def test_older_library_reports_no_features_and_refuses_the_richer_calls(self):
+        handle, library = self.load(())
+        self.assertEqual(library.features, native.Features(targets=False, context=False))
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        self.assertEqual(surface.send_text_to("hello", "macos"), native.UNAVAILABLE)
+        self.assertEqual(surface.send_text_with_context("hello", "Mail", "body", None), native.UNAVAILABLE)
+        self.assertEqual([name for name, _ in handle.calls], ["cosmos_surface_create"])
+        self.assertEqual(surface.send_text("hello"), native.OK)
+        self.assertEqual(handle.calls[-1][0], "cosmos_surface_send_text")
+        self.assertEqual(self.argument_bytes(handle.calls[-1][1], 1), b"hello")
+        surface.destroy()
+
+    def test_newer_library_binds_send_text_to_and_with_context(self):
+        handle, library = self.load(("cosmos_surface_send_text_to", "cosmos_surface_send_text_with_context"))
+        self.assertEqual(library.features, native.Features(targets=True, context=True))
+        self.assertEqual(len(handle.functions["cosmos_surface_send_text_to"].argtypes), 5)
+        self.assertEqual(len(handle.functions["cosmos_surface_send_text_with_context"].argtypes), 9)
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        self.assertEqual(surface.send_text_to("hello", "android_tv"), native.OK)
+        name, arguments = handle.calls[-1]
+        self.assertEqual(name, "cosmos_surface_send_text_to")
+        self.assertEqual(self.argument_bytes(arguments, 1), b"hello")
+        self.assertEqual(self.argument_bytes(arguments, 3), b"android_tv")
+        self.assertEqual(surface.send_text_to("hello", None), native.OK)
+        name, arguments = handle.calls[-1]
+        self.assertIsNone(arguments[3], "no destination is NULL with length 0")
+        self.assertEqual(arguments[4], 0)
+        self.assertEqual(surface.send_text_with_context("hello", "Mail", "Lunch?", "macos"), native.OK)
+        name, arguments = handle.calls[-1]
+        self.assertEqual(name, "cosmos_surface_send_text_with_context")
+        self.assertEqual(self.argument_bytes(arguments, 1), b"hello")
+        self.assertEqual(self.argument_bytes(arguments, 3), b"Mail")
+        self.assertEqual(self.argument_bytes(arguments, 5), b"Lunch?")
+        self.assertEqual(self.argument_bytes(arguments, 7), b"macos")
+        surface.destroy()
+
+    def test_bounds_are_checked_before_the_library_sees_them(self):
+        handle, library = self.load(("cosmos_surface_send_text_to", "cosmos_surface_send_text_with_context"))
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        before = len(handle.calls)
+        self.assertEqual(surface.send_text_to("   ", "macos"), native.INVALID_ARGUMENT)
+        self.assertEqual(surface.send_text_to("x" * 4001, "macos"), native.INVALID_ARGUMENT)
+        self.assertEqual(surface.send_text_to("hello", "x" * 17), native.INVALID_ARGUMENT)
+        self.assertEqual(surface.send_text_with_context("hello", "", "body", None), native.INVALID_ARGUMENT)
+        self.assertEqual(surface.send_text_with_context("hello", "a" * 65, "body", None), native.INVALID_ARGUMENT)
+        self.assertEqual(surface.send_text_with_context("hello", "Mail", "b" * 8001, None), native.INVALID_ARGUMENT)
+        self.assertEqual(surface.send_text_with_context("hello", "Mail", "b\0", None), native.INVALID_ARGUMENT)
+        self.assertEqual(len(handle.calls), before, "nothing reached the library")
+        surface.destroy()
+
+
 class Bindings:
     def __init__(self):
         self.journal = None
@@ -106,6 +230,12 @@ class NativeSmokeTest(unittest.TestCase):
                 surface.speech_audio(0)
             self.assertEqual(surface.set_visible(True), native.OK)
             self.assertEqual(surface.send_text("   "), native.INVALID_ARGUMENT)
+            self.assertIsInstance(self.library.features, native.Features)
+            if self.library.features.targets:
+                self.assertEqual(surface.send_text_to("   ", "macos"), native.INVALID_ARGUMENT)
+                self.assertEqual(surface.send_text_to("hello", "plan9"), native.INVALID_ARGUMENT)
+            else:
+                self.assertEqual(surface.send_text_to("hello", "macos"), native.UNAVAILABLE)
         finally:
             self.assertEqual(surface.destroy(), native.OK)
             self.assertEqual(surface.destroy(), native.OK)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from typing import Optional
@@ -19,11 +20,20 @@ APPROVAL_PROFILE = "native-shared-speech-v3"
 PLATFORM = "linux"
 OPERATIONS = frozenset({
     "prepare", "connect", "send_text", "retry_pending", "cancel", "set_visible", "acknowledge",
-    "acknowledge_speech", "display", "speech", "invitation", "disconnect", "heartbeat",
+    "acknowledge_speech", "display", "speech", "invitation", "status", "disconnect", "heartbeat",
 })
 PRIVACY_LEVELS = ("public", "shared_room", "near_user", "private")
 PRIVATE_LEVELS = frozenset({"near_user", "private"})
+# A status is expressed at the turn's class capped by this origin's ceiling.
+STATUS_PRIVACY_LEVELS = frozenset({"public", "shared_room", "near_user", "private", "sensitive"})
+TURN_STATES = frozenset({"working", "waiting", "shown", "spoken", "nowhere", "unknown"})
 ORIGINS = frozenset({"pin", "browser", "macos", "linux", "android", "android_tv"})
+SURFACE_PLATFORMS = frozenset({"browser", "macos", "linux", "android", "android_tv"})
+MIN_CHOICES = 2
+MAX_CHOICES = 8
+MAX_CHOICE_TITLE_BYTES = 120
+MAX_CHOICE_ITEM_TITLE_BYTES = 80
+MAX_CHOICE_DETAIL_BYTES = 200
 PENDING_KINDS = frozenset({"text", "heartbeat", "cancel", "state", "acknowledge"})
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -73,6 +83,15 @@ class PlaceItem:
 
 
 @dataclass(frozen=True)
+class ChoiceItem:
+    """One numbered option; selecting it sends the title as a new text turn."""
+
+    id: str
+    title: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class DisplayCard:
     action_id: str
     turn_id: str
@@ -82,6 +101,7 @@ class DisplayCard:
     kind: str
     text: str = ""
     query: str = ""
+    title: str = ""
     items: tuple = ()
     credits: tuple = ()
     # Above shared_room the card is private: shown in this window only, never in a
@@ -91,6 +111,18 @@ class DisplayCard:
     @property
     def private(self) -> bool:
         return self.privacy in PRIVATE_LEVELS
+
+
+@dataclass(frozen=True)
+class TurnStatus:
+    """The committed state of this installation's own turn: what happened, on what
+    kind of device, never why. ``surface_platform`` is None when no device is named."""
+
+    turn_id: str
+    generation: int
+    state: str
+    surface_platform: Optional[str]
+    privacy: str
 
 
 @dataclass(frozen=True)
@@ -131,6 +163,7 @@ class NativeEvent:
     speech: Optional[SpeechReply]
     events_skipped: int
     invitation: Optional[Invitation] = None
+    status: Optional[TurnStatus] = None
 
     @property
     def ok(self) -> bool:
@@ -284,7 +317,59 @@ def _display(value) -> Optional[DisplayCard]:
         parts = tuple(tuple(_credit(part) for part in _list(line, "credit line")) for line in credits)
         return DisplayCard(kind="places", query=query, items=tuple(_place(item) for item in items),
                            credits=parts, **identity)
+    if kind == "choices":
+        if credits or set(content) - {"kind", "title", "items"}:
+            raise InvalidEvent("choices card with extra fields")
+        title = _string(content, "title")
+        items = _list(content.get("items"), "choices")
+        if not _choice_text(title, MAX_CHOICE_TITLE_BYTES) or not MIN_CHOICES <= len(items) <= MAX_CHOICES:
+            raise InvalidEvent("choices card bounds")
+        return DisplayCard(kind="choices", title=title,
+                           items=tuple(_choice(item, index) for index, item in enumerate(items)), **identity)
     raise InvalidEvent("unsupported card")
+
+
+def _control(value: str) -> bool:
+    return any(unicodedata.category(character) == "Cc" for character in value)
+
+
+def _choice_text(value: str, maximum: int) -> bool:
+    """The runtime's own rule for a choice string: visible, bounded, no control characters."""
+    return bool(value.strip()) and len(value.encode("utf-8")) <= maximum and not _control(value)
+
+
+def _choice(value, index: int) -> ChoiceItem:
+    """One option. ``id`` is the list position, so "number two" always names item two."""
+    record = _record(value, "choice")
+    if set(record) - {"id", "title", "detail"}:
+        raise InvalidEvent("choice with extra fields")
+    detail = record.get("detail", "")
+    if not isinstance(detail, str):
+        raise InvalidEvent("choice detail is not a string")
+    item = ChoiceItem(_string(record, "id"), _string(record, "title"), detail)
+    if item.id != str(index + 1):
+        raise InvalidEvent("choice ids must number the list from one")
+    if not _choice_text(item.title, MAX_CHOICE_ITEM_TITLE_BYTES):
+        raise InvalidEvent("incomplete choice")
+    if len(detail.encode("utf-8")) > MAX_CHOICE_DETAIL_BYTES or _control(detail):
+        raise InvalidEvent("choice detail bounds")
+    return item
+
+
+def _status(value) -> Optional[TurnStatus]:
+    if value is None:
+        return None
+    record = _record(value, "status")
+    platform = record.get("surfacePlatform")
+    if platform is not None and not isinstance(platform, str):
+        raise InvalidEvent("surfacePlatform is not a string")
+    status = TurnStatus(_uuid(record, "turnId"), _integer(record, "generation"), _string(record, "state"),
+                        platform, _string(record, "privacy"))
+    if status.state not in TURN_STATES or status.privacy not in STATUS_PRIVACY_LEVELS:
+        raise InvalidEvent("invalid status")
+    if status.surface_platform is not None and status.surface_platform not in ORIGINS:
+        raise InvalidEvent("unknown status surface")
+    return status
 
 
 def _list(value, label: str) -> list:
@@ -348,4 +433,5 @@ def decode(raw: bytes) -> NativeEvent:
         speech=_speech(record.get("speech")) if connected else None,
         events_skipped=_integer(record, "eventsSkipped", 0),
         invitation=_invitation(record.get("invitation")) if connected else None,
+        status=_status(record.get("status")) if connected else None,
     )

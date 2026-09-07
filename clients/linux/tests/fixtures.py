@@ -9,7 +9,7 @@ from typing import Callable, Optional
 
 from cosmos_linux.endpoint import base64url
 from cosmos_linux.events import APPROVAL_PROFILE, PLATFORM
-from cosmos_linux.native import OK, NativeError
+from cosmos_linux.native import OK, UNAVAILABLE, Features, NativeError
 
 ENROLLMENT_ID = "6f0f4c6a-6d4d-4a1e-9f7c-1d2a3b4c5d6e"
 BOOT_EPOCH = "0b1e2d3c-4a5f-4e6d-8c7b-9a0f1e2d3c4b"
@@ -46,6 +46,19 @@ def encode(value: dict) -> bytes:
 def text_card(action_id: str = ACTION_ID, text: str = "Hello from Cosmos") -> dict:
     return {"actionId": action_id, "turnId": TURN_ID, "generation": 2, "contentDigest": DIGEST,
             "expiresAtMs": 1_900_000_000_000, "content": {"kind": "text", "text": text}, "credits": []}
+
+
+def choices_card(action_id: str = ACTION_ID, count: int = 3) -> dict:
+    items = [{"id": str(index + 1), "title": f"Option {index + 1}", "detail": "" if index else "Best match"}
+             for index in range(count)]
+    return {"actionId": action_id, "turnId": TURN_ID, "generation": 2, "contentDigest": DIGEST,
+            "expiresAtMs": 1_900_000_000_000,
+            "content": {"kind": "choices", "title": "Which one?", "items": items}, "credits": []}
+
+
+def status(state: str = "working", platform=None, turn_id: str = TURN_ID) -> dict:
+    return {"turnId": turn_id, "generation": 2, "state": state, "surfacePlatform": platform,
+            "privacy": "shared_room"}
 
 
 def places_card(action_id: str = ACTION_ID) -> dict:
@@ -95,6 +108,7 @@ class FakeSurface:
     """Records commands and hands out queued snapshots like the C worker would."""
 
     instances: list = []
+    features = Features(targets=True, context=True)
 
     def __init__(self, config: bytes, platform) -> None:
         self.config = json.loads(config.decode("utf-8"))
@@ -123,6 +137,16 @@ class FakeSurface:
 
     def send_text(self, text: str) -> int:
         return self._command("send_text", text)
+
+    def send_text_to(self, text: str, target) -> int:
+        if not self.features.targets:
+            return UNAVAILABLE
+        return self._command("send_text_to", text, target)
+
+    def send_text_with_context(self, text: str, app: str, context: str, target) -> int:
+        if not self.features.context:
+            return UNAVAILABLE
+        return self._command("send_text_with_context", text, app, context, target)
 
     def retry_pending(self) -> int:
         return self._command("retry_pending")

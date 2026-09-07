@@ -16,14 +16,20 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Deque, Optional, Protocol
 
+from . import strings as S
+from .context import ScreenContext
 from .endpoint import (
     DEFAULT_SERVER_ORIGIN, InvalidServer, canonical_origin, fingerprint, fingerprint_of_encoded,
     valid_text,
 )
 from .events import (
-    PLATFORM, Admission, Descriptor, DisplayCard, InvalidEvent, Invitation, NativeEvent, SpeechReply, decode,
+    PLATFORM, Admission, Descriptor, DisplayCard, InvalidEvent, Invitation, NativeEvent, SpeechReply, TurnStatus,
+    decode,
 )
-from .native import INVALID_ARGUMENT, OK, QUEUE_FULL, NativeError, PlatformBindings, Surface
+from .native import (
+    INVALID_ARGUMENT, OK, QUEUE_FULL, UNAVAILABLE, Features, NativeError, PlatformBindings, Surface,
+)
+from .viewstate import EMPTY_LINE, TARGETS, Line, status_line
 
 RECONNECT_DELAYS = (1.5, 3.0, 6.0, 12.0, 30.0)
 COMMAND_DEADLINE = 90.0
@@ -31,9 +37,8 @@ PREPARE_DEADLINE = 30.0
 CREATE_RETRY_DELAY = 0.3
 CREATE_RETRY_LIMIT = 30
 POLL_BUDGET = 16
-INITIAL_MESSAGE = "Prepare this computer, then approve its public descriptor in Center."
-CONNECTED_MESSAGE = ("Cosmos confirmed the connection. Cards and spoken replies may arrive here "
-                     "while this window is visible.")
+INITIAL_MESSAGE = ""
+CONNECTED_MESSAGE = S.NOTICE_CONNECTED
 log = logging.getLogger("cosmos")
 
 
@@ -50,17 +55,18 @@ class Phase(str, Enum):
 class Failure(str, Enum):
     """Fixed user-facing messages; raw transport or storage errors are never shown."""
 
-    INVALID_SERVER = "Enter an HTTPS server address with no path, credentials, or query."
-    INVALID_TEXT = "Enter public text of at most 4,000 UTF-8 bytes."
-    INVALID_RESPONSE = "Cosmos returned a response this client could not verify."
-    IDENTITY_UNAVAILABLE = ("The installation identity could not be opened. Check the keyring or the key "
-                            "file in the Cosmos data directory, or reset the installation to enroll again.")
-    STORAGE_UNAVAILABLE = "Protected storage is unavailable. Check the Cosmos data directory and try again."
-    STORAGE_BLOCKED = "A protected journal update failed. Retry the pending request before connecting or sending."
-    APPROVAL_REQUIRED = "Approve this installation in Center before connecting."
-    CONNECTION_UNAVAILABLE = "The Cosmos connection could not be confirmed."
-    UNCERTAIN_REQUEST = "The request outcome is unknown. Retry the exact pending request before sending another."
-    BUSY = "Wait for the current operation to finish."
+    INVALID_SERVER = S.FAIL_INVALID_SERVER
+    INVALID_TEXT = S.FAIL_INVALID_TEXT
+    INVALID_RESPONSE = S.FAIL_INVALID_RESPONSE
+    IDENTITY_UNAVAILABLE = S.FAIL_IDENTITY_UNAVAILABLE
+    STORAGE_UNAVAILABLE = S.FAIL_STORAGE_UNAVAILABLE
+    STORAGE_BLOCKED = S.FAIL_STORAGE_BLOCKED
+    APPROVAL_REQUIRED = S.FAIL_APPROVAL_REQUIRED
+    CONNECTION_UNAVAILABLE = S.FAIL_CONNECTION_UNAVAILABLE
+    UNCERTAIN_REQUEST = S.FAIL_UNCERTAIN_REQUEST
+    BUSY = S.FAIL_BUSY
+    FEATURE_UNAVAILABLE = S.FAIL_FEATURE_UNAVAILABLE
+    SCREEN_CONTEXT_OFF = S.FAIL_SCREEN_CONTEXT_OFF
 
     @property
     def message(self) -> str:
@@ -115,6 +121,53 @@ class State:
     wants_connection: bool = False
     reconnect_armed: bool = False
     session_seen: bool = False
+    # The runtime's committed status for this installation's own turn, and its words.
+    status: Optional[TurnStatus] = None
+    status_line: Line = EMPTY_LINE
+    # The "Now" line: what was sent, shown the instant it is enqueued.
+    sent_text: str = ""
+    sending: bool = False
+    # True from admission until Cosmos reports the turn finished somewhere.
+    turn_open: bool = False
+    # The explicit destination for the session (None: this screen) and attached screen text.
+    target: Optional[str] = None
+    context: Optional[ScreenContext] = None
+    context_busy: bool = False
+    features: Features = Features()
+
+    @property
+    def presence(self) -> Line:
+        """The headline from the state vocabulary and the sentence under it."""
+        if self.phase == Phase.BLOCKED:
+            return Line(S.DISCONNECTED)
+        if self.disconnecting or self.phase == Phase.DISCONNECTING:
+            return Line(S.DISCONNECTED, S.DISCONNECTING)
+        if self.phase == Phase.PREPARING:
+            return Line(S.DISCONNECTED, S.SETTING_UP)
+        if self.phase == Phase.CONNECTING:
+            return Line(S.DISCONNECTED, S.RECONNECTING if self.session_seen else S.CONNECTING)
+        if self.phase != Phase.CONNECTED:
+            reconnecting = self.wants_connection and self.reconnect_armed
+            return Line(S.DISCONNECTED, S.RECONNECTING if reconnecting else "")
+        if self.has_pending:
+            return Line(S.CANNOT_CONFIRM, S.NOTICE_PENDING)
+        if self.sending:
+            return Line(S.WORKING)
+        if self.speaking:
+            return Line(S.WORKING, S.SPEAKING_HERE)
+        if self.invitation is not None:
+            return Line(S.WAITING_FOR_YOU, S.WAITING_HERE)
+        if self.status_line.title:
+            return self.status_line
+        if self.display is not None:
+            return Line(S.COMPLETED)
+        if self.turn_open:
+            return Line(S.WORKING)
+        return Line("", S.CONNECTED)
+
+    @property
+    def status_text(self) -> str:
+        return self.presence.text
 
     @property
     def can_prepare(self) -> bool:
@@ -149,32 +202,6 @@ class State:
     @property
     def can_edit_server(self) -> bool:
         return self.can_prepare
-
-    @property
-    def status_text(self) -> str:
-        if self.disconnecting:
-            return "Disconnecting…"
-        if self.has_pending:
-            return Failure.UNCERTAIN_REQUEST.message
-        if self.phase == Phase.DISCONNECTED:
-            return "Disconnected"
-        if self.phase == Phase.PREPARING:
-            return "Opening installation identity…"
-        if self.phase == Phase.PREPARED:
-            if self.wants_connection and self.failure == Failure.APPROVAL_REQUIRED:
-                return "Waiting for approval in Center · retrying automatically"
-            if self.wants_connection and self.reconnect_armed:
-                return "Reconnecting…"
-            return "Installation prepared. Center approval is required."
-        if self.phase == Phase.CONNECTING:
-            return "Connecting to Cosmos…"
-        if self.phase == Phase.CONNECTED:
-            if self.speaking:
-                return "Connected · speaking"
-            return "Connected · visible shared display" if self.visible else "Connected for public text"
-        if self.phase == Phase.DISCONNECTING:
-            return "Disconnecting…"
-        return "Connection stopped. Resolve the reported error before continuing."
 
 
 class Scheduler(Protocol):
@@ -309,8 +336,10 @@ class Controller:
             phase=Phase.PREPARING, server_origin=origin, descriptor=None, has_pending=False,
             pending_open=False, needs_reconnect=False, can_retry=False, has_unknown_outcome=False,
             admission=None, visible=False, display=None, speech=None, speaking=False, failure=None,
-            message="Opening installation identity…", busy=True, disconnecting=False,
+            message="", busy=True, disconnecting=False,
             wants_connection=False, reconnect_armed=False, session_seen=False,
+            status=None, status_line=EMPTY_LINE, sent_text="", sending=False, turn_open=False,
+            context=None, context_busy=False,
         )
         self._create_attempts = 0
         self._try_create()
@@ -343,6 +372,7 @@ class Controller:
                          message=Failure.CONNECTION_UNAVAILABLE.message)
             return
         self._surface = surface
+        self._update(features=getattr(surface, "features", Features()))
         self._await("prepare", PREPARE_DEADLINE, self._prepare_settled)
 
     def _prepare_settled(self, event: NativeEvent, ok: bool) -> None:
@@ -362,8 +392,7 @@ class Controller:
         self._wants_connection = True
         self._reconnect_attempt = 0
         self._cancel_reconnect()
-        self._update(phase=Phase.CONNECTING, failure=None, message="Connecting to Cosmos…",
-                     wants_connection=True)
+        self._update(phase=Phase.CONNECTING, failure=None, message="", wants_connection=True)
         return self._command("connect", self._surface.connect, self._connect_settled)
 
     def _connect_settled(self, event: NativeEvent, ok: bool) -> None:
@@ -374,22 +403,85 @@ class Controller:
             if self._wanted_visible and not self._state.visible and self._surface is not None:
                 self._defer("set_visible", lambda: self._surface.set_visible(True), replace_same=True)
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, target: Optional[str] = None, context: Optional[ScreenContext] = None) -> bool:
+        """One request. The session's destination and any attached selection apply unless
+        overridden; the plain call stays the default path and richer calls are never narrowed."""
         if not self._state.can_send or self._surface is None:
             return False
         if not valid_text(text):
             self._update(failure=Failure.INVALID_TEXT, message=Failure.INVALID_TEXT.message)
             return False
-        return self._command("send_text", lambda: self._surface.send_text(text), self._send_settled)
+        target = self._state.target if target is None else target
+        context = self._state.context if context is None else context
+        features = self._state.features
+        surface = self._surface
+        if context is not None:
+            if not features.context:
+                self._update(failure=Failure.FEATURE_UNAVAILABLE, message=Failure.FEATURE_UNAVAILABLE.message)
+                return False
+            invoke = lambda: surface.send_text_with_context(text, context.app, context.text, target)
+        elif target is not None:
+            if not features.targets:
+                self._update(failure=Failure.FEATURE_UNAVAILABLE, message=Failure.FEATURE_UNAVAILABLE.message)
+                return False
+            invoke = lambda: surface.send_text_to(text, target)
+        else:
+            invoke = lambda: surface.send_text(text)
+        if not self._command("send_text", invoke, self._send_settled):
+            return False
+        # Acknowledged at once: the Now line and "Working" appear before Cosmos answers.
+        self._update(sent_text=text, sending=True, status=None, status_line=EMPTY_LINE, turn_open=False,
+                     failure=None, message="")
+        return True
 
     def _send_settled(self, event: NativeEvent, ok: bool) -> None:
+        admitted = ok and event.admission is not None
+        self._update(sending=False, turn_open=admitted, context=None if admitted else self._state.context,
+                     sent_text=self._state.sent_text if admitted else "")
         if self.on_sent is not None:
-            self.on_sent(ok and event.admission is not None)
+            self.on_sent(admitted)
+
+    def select_choice(self, index: int) -> bool:
+        """A numbered option from the current choices card; its title becomes a new turn."""
+        card = self._state.display
+        if card is None or card.kind != "choices" or not 0 <= index < len(card.items):
+            return False
+        return self.send(card.items[index].title)
+
+    def set_target(self, target: Optional[str]) -> bool:
+        """The explicit destination for this session only; None means this screen."""
+        if target is not None and target not in TARGETS:
+            return False
+        if target is not None and not self._state.features.targets:
+            return False
+        self._update(target=target)
+        return True
+
+    def begin_context_capture(self) -> bool:
+        if self._state.context_busy or not self._state.features.context:
+            return False
+        self._update(context_busy=True, message="")
+        return True
+
+    def context_captured(self, context: Optional[ScreenContext]) -> None:
+        """The host read the selection (or found none) off the UI thread."""
+        if not self._state.context_busy:
+            return
+        self._update(context_busy=False, context=context,
+                     message=S.NO_SELECTION if context is None else self._state.message)
+
+    def drop_context(self) -> None:
+        if self._state.context is not None or self._state.context_busy:
+            self._update(context=None, context_busy=False)
 
     def cancel(self) -> bool:
         if not self._state.can_cancel or self._surface is None:
             return False
-        return self._command("cancel", self._surface.cancel)
+        return self._command("cancel", self._surface.cancel, self._cancel_settled)
+
+    def _cancel_settled(self, event: NativeEvent, ok: bool) -> None:
+        if ok:
+            self._update(sent_text="", turn_open=False, status_line=EMPTY_LINE)
 
     def retry_pending(self) -> bool:
         if not self._state.can_retry_pending or self._surface is None:
@@ -401,8 +493,8 @@ class Controller:
             return False
         self._wants_connection = False
         self._cancel_reconnect()
-        self._update(disconnecting=True, phase=Phase.DISCONNECTING, failure=None,
-                     message="Disconnecting the native session…", wants_connection=False)
+        self._update(disconnecting=True, phase=Phase.DISCONNECTING, failure=None, message="",
+                     wants_connection=False)
         if self._expected is not None:
             # A running command settles first; the explicit disconnect follows it.
             self._deferred.appendleft(_Deferred("disconnect", self._surface.disconnect,
@@ -415,9 +507,9 @@ class Controller:
             Phase.PREPARED if self._state.descriptor else Phase.DISCONNECTED)
         message = self._state.message
         if ok and self._state.failure is None:
-            message = ("Session disconnected. Owner approval remains in Center."
-                       if not self._state.has_pending else Failure.UNCERTAIN_REQUEST.message)
-        self._update(disconnecting=False, phase=phase, message=message)
+            message = S.NOTICE_DISCONNECTED if not self._state.has_pending else Failure.UNCERTAIN_REQUEST.message
+        self._update(disconnecting=False, phase=phase, message=message, sent_text="", turn_open=False,
+                     status=None, status_line=EMPTY_LINE)
 
     def set_visible(self, visible: bool) -> None:
         """The window's own foreground report: availability only, never occupancy or identity."""
@@ -452,7 +544,8 @@ class Controller:
         self._on_settled = None
         self._destroy_surface()
         self._update(phase=Phase.DISCONNECTED, busy=False, disconnecting=False, wants_connection=False,
-                     reconnect_armed=False, visible=False, display=None, speech=None, speaking=False)
+                     reconnect_armed=False, visible=False, display=None, speech=None, speaking=False,
+                     sending=False, turn_open=False, status=None, status_line=EMPTY_LINE, context_busy=False)
 
     def _destroy_surface(self) -> None:
         surface, self._surface = self._surface, None
@@ -471,7 +564,6 @@ class Controller:
     def _command(self, name: str, invoke: Callable[[], int],
                  on_settled: Optional[Callable[[NativeEvent, bool], None]] = None) -> bool:
         if self._surface is None:
-            self._update(message="Prepare this computer first.")
             return False
         if self._expected is not None:
             return False
@@ -481,7 +573,14 @@ class Controller:
             code = error.code
         if code != OK:
             log.warning("native %s refused with status %s", name, code)
-            failure = Failure.BUSY if code == QUEUE_FULL else Failure.CONNECTION_UNAVAILABLE
+            if code == QUEUE_FULL:
+                failure = Failure.BUSY
+            elif name == "send_text" and code == UNAVAILABLE:
+                failure = Failure.FEATURE_UNAVAILABLE
+            elif name == "send_text" and code == INVALID_ARGUMENT:
+                failure = Failure.INVALID_TEXT
+            else:
+                failure = Failure.CONNECTION_UNAVAILABLE
             self._update(failure=failure, message=failure.message)
             return False
         self._await(name, COMMAND_DEADLINE, on_settled)
@@ -543,7 +642,7 @@ class Controller:
             return
         self._update(busy=False, has_pending=True, needs_reconnect=True, can_retry=False,
                      failure=Failure.UNCERTAIN_REQUEST, message=Failure.UNCERTAIN_REQUEST.message,
-                     disconnecting=False)
+                     disconnecting=False, sending=False)
 
     def _descriptor_matches(self, descriptor: Descriptor) -> bool:
         try:
@@ -571,6 +670,10 @@ class Controller:
         has_pending = event.pending is not None or event.pending_open or storage_blocked
         if failure == Failure.CONNECTION_UNAVAILABLE and has_pending:
             failure = Failure.UNCERTAIN_REQUEST
+        if (failure == Failure.APPROVAL_REQUIRED and event.operation == "send_text" and event.connected
+                and previous.context is not None):
+            # An approved installation refused only for its screen text: the permission is off.
+            failure = Failure.SCREEN_CONTEXT_OFF
         descriptor = previous.descriptor
         if event.descriptor is not None:
             if self._descriptor_matches(event.descriptor):
@@ -596,13 +699,19 @@ class Controller:
         if failure is not None:
             message = failure.message
         elif dropped:
-            message = "The Cosmos connection dropped. Reconnecting…"
+            message = S.NOTICE_DROPPED
         else:
             message = self._message_for(event, previous.message)
         if event.operation == "prepare" and event.ok and (event.pending_open or event.needs_reconnect):
             # A retained signed connection means the owner connected on purpose;
             # rejoin it after a relaunch or a dropped room without another click.
             self._wants_connection = True
+        line = status_line(event.status, previous.status_line) if event.connected else EMPTY_LINE
+        turn_open = previous.turn_open and event.connected and line.title not in (S.COMPLETED, S.CANNOT_CONFIRM)
+        if turn_open and event.admission is not None:
+            for reply in (event.display, event.speech):
+                if reply is not None and reply.turn_id == event.admission.turn_id:
+                    turn_open = False
         self._update(
             phase=phase, descriptor=descriptor, has_pending=has_pending, pending_open=event.pending_open,
             needs_reconnect=event.needs_reconnect,
@@ -612,7 +721,7 @@ class Controller:
             visible=event.visible, display=event.display, speech=event.speech,
             speaking=event.speech is not None and self._playing == event.speech.action_id,
             invitation=event.invitation, failure=failure, message=message,
-            wants_connection=self._wants_connection,
+            wants_connection=self._wants_connection, status=event.status, status_line=line, turn_open=turn_open,
         )
         if event.operation == self._expected:
             self._settle(event, event.ok and failure is None)
@@ -620,26 +729,27 @@ class Controller:
 
     @staticmethod
     def _message_for(event: NativeEvent, previous: str) -> str:
+        """Plain sentences for the notice line; the presence line carries the state itself."""
         if event.operation == "prepare":
-            return "Approve this public descriptor in Center, then connect."
+            return S.NOTICE_PREPARED
         if event.operation == "connect":
             return CONNECTED_MESSAGE
         if event.operation == "send_text":
-            return "Request admitted by Cosmos. The response appears on the approved display it selects."
+            return S.NOTICE_SENT
         if event.operation == "cancel":
-            return "Cancellation admitted by Cosmos."
+            return S.NOTICE_CANCELLED
         if event.operation == "disconnect":
-            return "Session disconnected. Owner approval remains in Center."
+            return S.NOTICE_DISCONNECTED
         if event.operation == "retry_pending":
-            return "Cosmos confirmed the pending operation with its exact request."
+            return S.NOTICE_RETRIED
         if event.operation == "speech" and event.speech is not None:
-            return "Cosmos is speaking the reply on this computer."
+            return S.NOTICE_SPEAKING
         if event.operation == "display" and event.display is not None:
-            if event.display.private:
-                return "Cosmos delivered a private card to this window. It stays only while this window is in front."
-            return "Cosmos delivered a card to this window."
+            return S.NOTICE_PRIVATE_CARD if event.display.private else S.NOTICE_CARD
         if event.operation == "invitation" and event.invitation is not None:
-            return "A private reply is waiting for this computer. Keep this window in front to receive it."
+            return S.NOTICE_INVITATION
+        if event.operation == "status" and event.status is not None:
+            return ""
         return previous
 
     def _settle(self, event: NativeEvent, ok: bool) -> None:

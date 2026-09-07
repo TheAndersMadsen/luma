@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "origin": "Shared geometry and texture from the earlier Cosmos Android kit. Estimates, not original app source.",
+  "colors": {
+    "background": "#080E12",
+    "surface": "#111B20",
+    "panel": "#030809",
+    "accent": "#27E6DF",
+    "response": "#58F4F1",
+    "primary": "#F2F7F8",
+    "secondary": "#A4B7BE",
+    "border": "#33464D",
+    "error": "#FFAC9C",
+    "success": "#88E4BE"
+  },
+  "profile": {
+    "units": "Qt device-independent pixels",
+    "panelWidth": 640,
+    "panelRadius": 12,
+    "panelPadding": 22,
+    "body": 17,
+    "lineHeight": 25,
+    "controlHeight": 40,
+    "nebulaOpacity": 0.3,
+    "waveformWidth": 48,
+    "shell": "Qt Quick; regular Wayland window with optional Hyprland rules"
+  },
+  "motion": {
+    "cycleMs": 1200,
+    "maxPreviewFps": 30,
+    "idleStatic": true,
+    "reduceMotion": true,
+    "audioLevel": "optional finite scalar in [0,1], not an FFT"
+  },
+  "rasterInsets": {
+    "logicalOuterPadding": 20,
+    "capInsetsEachEdge": 34,
+    "assetScale": "@1x or @2x; never stretch corners"
+  },
+  "fonts": "Platform system fonts. No font binaries included."
+}

@@ -2235,16 +2235,34 @@ On first run, "Set up this computer" prepares the installation against
 `center.andersmadsen.dk` (Change selects another HTTPS origin). "Approve in
 Center" then shows the public-key fingerprint in four-character groups and a
 QR code of the approval link rendered locally; "Open in browser" uses
-`xdg-open`, and Advanced copies the descriptor or the link. The window
-connects by itself once the owner approves in Center and rejoins a dropped
-room with the same 1.5/3/6/12/30 s backoff as the other clients. Connected,
-it sends public text, renders one shared card verbatim, plays
-Cosmos-synthesized spoken replies through QtMultimedia, acknowledges each
-card after it is painted and each reply only after playback ends, and reports
-itself visible only while the window is shown and active. Ctrl+L focuses the
-ask field, Enter sends, Escape hides the window (running `cosmos` again brings
-it back), Ctrl+Q quits, and "Reduce motion" or `--reduced-motion` stops the
-waveform.
+`xdg-open`, and one "Details" disclosure holds the fingerprint, the copy
+actions and the raw descriptor. The window connects by itself once the owner
+approves in Center and rejoins a dropped room with the same 1.5/3/6/12/30 s
+backoff as the other clients. Connected, it sends public text, renders one
+shared card verbatim, plays Cosmos-synthesized spoken replies through
+QtMultimedia, acknowledges each card after it is painted and each reply only
+after playback ends, and reports itself visible only while the window is shown
+and active.
+
+The connected window carries the shared state vocabulary. What was sent
+appears as the "Now" line the instant it is enqueued; the header reads
+Working, Waiting for you, Waiting for a device, Completed (with "Shown on your
+MacBook" when the runtime placed the reply elsewhere), Cannot confirm or
+Disconnected, and an `unknown` status keeps the previous line rather than
+inventing one. A choice-list card is numbered 1–8; digits, the arrow keys with
+Enter, or a click send that item's title as the next request. The destination
+chip reads "→ This screen" and its menu names the other devices, sending
+through `cosmos_surface_send_text_to` for the session only. "Use selection"
+reads the Wayland selection with `wl-paste` and names the app with `hyprctl`
+when both exist, off the UI thread and bounded to 64 and 8000 UTF-8 bytes; it
+is attached only on that click, shows as "Using: Chrome selection" with a
+remove control, and goes out through `cosmos_surface_send_text_with_context`.
+A library without those two symbols hides both features instead of falling
+back to a plain request. Ctrl+L focuses the ask field, Enter sends, Ctrl+Return
+sends from anywhere, digits pick a choice, "Close" and Escape hide the window
+without cancelling the turn ("Cancel task" is the separate explicit action, and
+running `cosmos` again brings the window back), Ctrl+Q quits, and "Reduce
+motion" or `--reduced-motion` stops the waveform and the transitions.
 
 The installation key is a software P-256 key: it lives in the Secret Service
 keyring when one is reachable and otherwise in a 0600 file under

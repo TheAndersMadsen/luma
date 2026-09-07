@@ -2,7 +2,10 @@ import unittest
 
 from cosmos_linux.events import InvalidEvent, decode
 
-from .fixtures import ACTION_ID, admission, descriptor, encode, places_card, snapshot, speech_reply, text_card
+from .fixtures import (
+    ACTION_ID, TURN_ID, admission, choices_card, descriptor, encode, places_card, snapshot, speech_reply, status,
+    text_card,
+)
 
 
 class EventDecodingTest(unittest.TestCase):
@@ -120,6 +123,73 @@ class EventDecodingTest(unittest.TestCase):
         self.assertTrue(event.pending.can_retry)
         self.assertEqual(event.last_unknown.kind, "cancel")
         self.assertEqual(event.events_skipped, 4)
+
+
+    def test_choices_card_decodes_with_two_to_eight_items(self):
+        event = decode(encode(snapshot("display", connected=True, display=choices_card())))
+        card = event.display
+        self.assertEqual(card.kind, "choices")
+        self.assertEqual(card.title, "Which one?")
+        self.assertEqual([item.id for item in card.items], ["1", "2", "3"])
+        self.assertEqual(card.items[0].detail, "Best match")
+        self.assertEqual(card.items[1].detail, "")
+        self.assertEqual(len(decode(encode(snapshot("display", connected=True, display=choices_card(count=8)))).display.items), 8)
+        for change in (
+            lambda card: card["content"]["items"].pop(),
+            lambda card: card["content"]["items"].pop(),
+            lambda card: card["content"]["items"].extend(card["content"]["items"][:6]),
+            lambda card: card["content"].__setitem__("title", "   "),
+            lambda card: card["content"].__setitem__("query", "x"),
+            lambda card: card["content"]["items"][0].__setitem__("title", " "),
+            lambda card: card["content"]["items"][0].__setitem__("id", ""),
+            lambda card: card["content"]["items"][0].__setitem__("href", "https://x"),
+            lambda card: card["content"]["items"][0].__setitem__("detail", 3),
+            lambda card: card.__setitem__("credits", [[{"kind": "text", "text": "x"}]]),
+            # The runtime's own bounds: ids number the list, and the strings are
+            # visible, bounded and free of control characters.
+            lambda card: card["content"]["items"][1].__setitem__("id", "3"),
+            lambda card: card["content"]["items"].reverse(),
+            lambda card: card["content"].__setitem__("title", "t" * 121),
+            lambda card: card["content"].__setitem__("title", "Which\none?"),
+            lambda card: card["content"]["items"][0].__setitem__("title", "o" * 81),
+            lambda card: card["content"]["items"][0].__setitem__("title", "Op\ttion"),
+            lambda card: card["content"]["items"][0].__setitem__("detail", "d" * 201),
+            lambda card: card["content"]["items"][0].__setitem__("detail", "de\ttail"),
+        ):
+            broken = choices_card(count=2)
+            change(broken)
+            with self.assertRaises(InvalidEvent, msg=str(broken["content"])):
+                decode(encode(snapshot("display", connected=True, display=broken)))
+
+    def test_choices_accept_the_runtime_maximums_exactly(self):
+        card = choices_card(count=2)
+        card["content"]["title"] = "t" * 120
+        card["content"]["items"][0]["title"] = "o" * 80
+        card["content"]["items"][0]["detail"] = "d" * 200
+        decoded = decode(encode(snapshot("display", connected=True, display=card))).display
+        self.assertEqual(len(decoded.title), 120)
+        self.assertEqual(len(decoded.items[0].detail), 200)
+        # Bounds are UTF-8 bytes, not characters, exactly as the runtime counts them.
+        card["content"]["items"][0]["detail"] = "é" * 101
+        with self.assertRaises(InvalidEvent):
+            decode(encode(snapshot("display", connected=True, display=card)))
+
+    def test_status_decodes_only_while_connected(self):
+        event = decode(encode(snapshot("status", connected=True, status=status("shown", "macos"))))
+        self.assertEqual(event.operation, "status")
+        self.assertEqual(event.status.state, "shown")
+        self.assertEqual(event.status.surface_platform, "macos")
+        self.assertEqual(event.status.turn_id, TURN_ID)
+        self.assertEqual(event.status.privacy, "shared_room")
+        self.assertIsNone(decode(encode(snapshot("status", connected=True, status=None))).status)
+        self.assertIsNone(decode(encode(snapshot("status", connected=False, status=status()))).status)
+        self.assertIsNone(decode(encode(snapshot("heartbeat", connected=True))).status, "absent means none")
+        private = decode(encode(snapshot("status", connected=True, status={**status(), "privacy": "sensitive"})))
+        self.assertEqual(private.status.privacy, "sensitive")
+        for change in ({"state": "teleported"}, {"surfacePlatform": "watch"}, {"surfacePlatform": 3},
+                       {"privacy": "secret"}, {"generation": 0}, {"turnId": "nope"}):
+            with self.assertRaises(InvalidEvent, msg=str(change)):
+                decode(encode(snapshot("status", connected=True, status={**status(), **change})))
 
 
 if __name__ == "__main__":

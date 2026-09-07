@@ -10,6 +10,7 @@ import ctypes
 import os
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
@@ -24,6 +25,9 @@ UNAVAILABLE = -5
 CALLBACK_NOT_FOUND = 1
 MAX_CONFIG_BYTES = 2048
 MAX_TEXT_BYTES = 4000
+MAX_CONTEXT_APP_BYTES = 64
+MAX_CONTEXT_BYTES = 8000
+MAX_TARGET_BYTES = 16
 MAX_JOURNAL_BYTES = 32768
 MAX_EVENT_BYTES = 16384
 MAX_SPEECH_BYTES = 1_048_576
@@ -105,6 +109,24 @@ class CosmosSurfaceCallbacks(ctypes.Structure):
     ]
 
 
+@dataclass(frozen=True)
+class Features:
+    """Which of the newer library calls this build offers. A missing call hides the
+    matching feature; the plain text call is never substituted for a richer request."""
+
+    targets: bool = False  # cosmos_surface_send_text_to
+    context: bool = False  # cosmos_surface_send_text_with_context
+
+
+_BYTES = ctypes.POINTER(ctypes.c_uint8)
+# Resolved by name after load; an older library simply lacks them.
+OPTIONAL_SIGNATURES = {
+    "cosmos_surface_send_text_to": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
+    "cosmos_surface_send_text_with_context": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t,
+                                              _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
+}
+
+
 class Library:
     """One loaded copy of the shared client. Keep it loaded for the process lifetime."""
 
@@ -134,6 +156,19 @@ class Library:
             function.argtypes = argtypes
             function.restype = ctypes.c_int32
         self._handle = handle
+        self.features = Features(
+            targets=self._bind_optional("cosmos_surface_send_text_to"),
+            context=self._bind_optional("cosmos_surface_send_text_with_context"),
+        )
+
+    def _bind_optional(self, name: str) -> bool:
+        try:
+            function = getattr(self._handle, name)
+        except AttributeError:
+            return False
+        function.argtypes = OPTIONAL_SIGNATURES[name]
+        function.restype = ctypes.c_int32
+        return True
 
     def __getattr__(self, name: str):
         return getattr(self._handle, name)
@@ -264,12 +299,60 @@ class Surface:
     def connect(self) -> int:
         return self._library.cosmos_surface_connect(self._require())
 
-    def send_text(self, text: str) -> int:
+    @property
+    def features(self) -> Features:
+        return self._library.features
+
+    @staticmethod
+    def _encoded(text: str, maximum: int) -> Optional[bytes]:
         encoded = text.encode("utf-8")
-        if not encoded or len(encoded) > MAX_TEXT_BYTES or "\0" in text or not text.strip():
+        if not encoded or len(encoded) > maximum or "\0" in text or not text.strip():
+            return None
+        return encoded
+
+    @staticmethod
+    def _buffer(encoded: bytes):
+        return (ctypes.c_uint8 * len(encoded)).from_buffer_copy(encoded)
+
+    def send_text(self, text: str) -> int:
+        encoded = self._encoded(text, MAX_TEXT_BYTES)
+        if encoded is None:
             return INVALID_ARGUMENT
-        buffer = (ctypes.c_uint8 * len(encoded)).from_buffer_copy(encoded)
-        return self._library.cosmos_surface_send_text(self._require(), buffer, len(encoded))
+        return self._library.cosmos_surface_send_text(self._require(), self._buffer(encoded), len(encoded))
+
+    def send_text_to(self, text: str, target: Optional[str]) -> int:
+        """Text with an explicit destination kind; needs the newer library call."""
+        handle = self._require()
+        if not self.features.targets:
+            return UNAVAILABLE
+        encoded = self._encoded(text, MAX_TEXT_BYTES)
+        if encoded is None:
+            return INVALID_ARGUMENT
+        destination = (target or "").encode("utf-8")
+        if len(destination) > MAX_TARGET_BYTES:
+            return INVALID_ARGUMENT
+        # An empty target is passed as NULL with length 0: no explicit destination.
+        target_buffer = self._buffer(destination) if destination else None
+        return self._library.cosmos_surface_send_text_to(handle, self._buffer(encoded), len(encoded),
+                                                         target_buffer, len(destination))
+
+    def send_text_with_context(self, text: str, app: str, context: str, target: Optional[str]) -> int:
+        """Text with bounded screen text from this installation; needs the newer library call."""
+        handle = self._require()
+        if not self.features.context:
+            return UNAVAILABLE
+        encoded = self._encoded(text, MAX_TEXT_BYTES)
+        app_bytes = self._encoded(app, MAX_CONTEXT_APP_BYTES)
+        context_bytes = self._encoded(context, MAX_CONTEXT_BYTES)
+        if encoded is None or app_bytes is None or context_bytes is None:
+            return INVALID_ARGUMENT
+        destination = (target or "").encode("utf-8")
+        if len(destination) > MAX_TARGET_BYTES:
+            return INVALID_ARGUMENT
+        target_buffer = self._buffer(destination) if destination else None
+        return self._library.cosmos_surface_send_text_with_context(
+            handle, self._buffer(encoded), len(encoded), self._buffer(app_bytes), len(app_bytes),
+            self._buffer(context_bytes), len(context_bytes), target_buffer, len(destination))
 
     def retry_pending(self) -> int:
         return self._library.cosmos_surface_retry_pending(self._require())

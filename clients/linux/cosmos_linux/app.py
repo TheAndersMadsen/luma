@@ -7,35 +7,84 @@ Escape. Launching the command again brings the running window back.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from html import escape
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import context as screen_context
+from . import strings as S
+from . import viewstate
 from .controller import CONNECTED_MESSAGE, Controller, Failure, Phase, State
 from .endpoint import (
     DEFAULT_SERVER_ORIGIN, InvalidServer, approval_url, canonical_origin, descriptor_json, display_host,
     fingerprint_of_encoded, group_fingerprint,
 )
-from .events import APPROVAL_PROFILE, PLATFORM, CreditPart, Descriptor, DisplayCard, PlaceItem, SpeechReply
+from .events import (
+    APPROVAL_PROFILE, PLATFORM, ChoiceItem, CreditPart, Descriptor, DisplayCard, PlaceItem, SpeechReply, TurnStatus,
+)
 from .identity import APP_ID, IdentityError, InstallationStore, default_data_dir, open_identity
 from .journal import AlreadyRunning, InstallationLease, JournalStore
-from .native import Surface, load_library
+from .native import Features, Surface, load_library
 from .qr import approval_qr_data_url
+from .viewstate import Line
 
-APP_NAME = "Cosmos"
+APP_NAME = S.APP_NAME
 PACKAGE_DIR = Path(__file__).resolve().parent
 POLL_INTERVAL_MS = 200
 SCREENSHOT_DELAY_MS = 900
-VIEWS = ("setup", "approval", "connected")
+VIEWS = ("setup", "approval", "connected", "empty", "working", "choices", "reconnecting")
+CENTER_DEVICES_PATH = "/settings/account/surfaces"
+# The kit's graphite palette; the light variant keeps the same roles for a light desktop.
+LIGHT_COLORS = {
+    "background": "#EEF2F3", "surface": "#FFFFFF", "panel": "#F7FAFA", "accent": "#0E8F8A",
+    "response": "#0B5F5C", "primary": "#101A1E", "secondary": "#4C5E65", "border": "#C5D0D4",
+    "error": "#A83A24", "success": "#1F7A55",
+}
 log = logging.getLogger("cosmos.app")
+
+
+def theme_tokens(dark: bool = True) -> dict:
+    """Colour and size tokens for QML: the kit's design-tokens.json, or its light counterpart."""
+    with open(PACKAGE_DIR / "assets" / "design-tokens.json", encoding="utf-8") as handle:
+        tokens = json.load(handle)
+    colors = dict(tokens["colors"]) if dark else dict(LIGHT_COLORS)
+    profile = tokens.get("profile", {})
+    return {
+        **colors,
+        "dark": dark,
+        "body": int(profile.get("body", 17)),
+        "lineHeight": int(profile.get("lineHeight", 25)),
+        "controlHeight": int(profile.get("controlHeight", 40)),
+        "panelRadius": int(profile.get("panelRadius", 12)),
+        "panelPadding": int(profile.get("panelPadding", 22)),
+        "nebulaOpacity": float(profile.get("nebulaOpacity", 0.3)),
+        "motionMs": 200,
+        "maxLineWidth": 620,
+    }
+
+
+def system_prefers_dark() -> bool:
+    """The desktop's colour scheme; the kit's dark look when the platform does not say."""
+    override = os.environ.get("COSMOS_THEME")
+    if override in ("dark", "light"):
+        return override == "dark"
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        scheme = QGuiApplication.styleHints().colorScheme()
+        return scheme != Qt.ColorScheme.Light
+    except Exception:
+        return True
 
 
 def boot_epoch() -> str:
@@ -145,12 +194,37 @@ def preview_state(kind: str) -> State:
         public_key="BBVfhxmwx6C1s9Vo8Xgk5A4Fn3p8eLzBqcOX5v4kU0XxDGq1wKk3yTr6bMzq3o1bJPRO2s7AYgbQxcEuJ9jUhCA",
         platform=PLATFORM, approval=APPROVAL_PROFILE,
     )
+    features = Features(targets=True, context=True)
     if kind == "setup":
         return State()
     if kind == "approval":
         return State(phase=Phase.PREPARED, descriptor=descriptor, wants_connection=True,
                      failure=Failure.APPROVAL_REQUIRED, message=Failure.APPROVAL_REQUIRED.message,
                      reconnect_armed=True)
+    if kind == "empty":
+        return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, message=CONNECTED_MESSAGE,
+                     wants_connection=True, session_seen=True, features=features)
+    if kind == "reconnecting":
+        return State(phase=Phase.PREPARED, descriptor=descriptor, wants_connection=True, reconnect_armed=True,
+                     message=S.NOTICE_DROPPED, session_seen=True, features=features,
+                     sent_text="Find cafés near me", turn_open=True)
+    if kind == "working":
+        return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
+                     session_seen=True, features=features, sent_text="Find cafés near me", sending=True,
+                     context=screen_context.ScreenContext(app="Chrome", text="Copenhagen coffee guide"))
+    if kind == "choices":
+        choices = DisplayCard(
+            action_id="0d3b5f2e-8a4c-4f1a-9b6d-2e7c8a9f0b1c", turn_id="1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            generation=3, content_digest="a" * 64, expires_at_ms=1, kind="choices", title="Which notes?",
+            items=(ChoiceItem("1", "Kitchen renovation", "Updated yesterday"),
+                   ChoiceItem("2", "Kitchen shopping list", "12 items"),
+                   ChoiceItem("3", "Kitchen garden", "Planted in April")),
+        )
+        status = TurnStatus(turn_id=choices.turn_id, generation=3, state="waiting", surface_platform=PLATFORM,
+                            privacy="shared_room")
+        return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, display=choices, status=status,
+                     status_line=viewstate.status_line(status, Line()), wants_connection=True, session_seen=True,
+                     features=features, sent_text="Show my notes about the kitchen")
     card = DisplayCard(
         action_id="0d3b5f2e-8a4c-4f1a-9b6d-2e7c8a9f0b1c", turn_id="1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
         generation=3, content_digest="a" * 64, expires_at_ms=1, kind="places", query="Coffee near the office",
@@ -165,8 +239,12 @@ def preview_state(kind: str) -> State:
         text="There are two well-reviewed coffee bars within a ten-minute walk. Prolog Coffee Bar is the closest.",
         format="audio/mpeg", byte_length=1,
     )
+    status = TurnStatus(turn_id=card.turn_id, generation=3, state="shown", surface_platform=PLATFORM,
+                        privacy="shared_room")
     return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, display=card, speech=speech,
-                 speaking=True, message=CONNECTED_MESSAGE, wants_connection=True, session_seen=True)
+                 speaking=False, message=CONNECTED_MESSAGE, wants_connection=True, session_seen=True,
+                 status=status, status_line=viewstate.status_line(status, Line()), features=features,
+                 sent_text="Find cafés near me", target="macos")
 
 
 def make_backend_class():
@@ -179,9 +257,12 @@ def make_backend_class():
         showRequested = Signal()
         quitRequested = Signal()
         hideRequested = Signal()
+        # Emitted from the capture thread; the queued connection lands it on the UI thread.
+        _captured = Signal(object)
 
         def __init__(self, controller: Optional[Controller], key_notice: str, reduced_motion: bool,
                      preview: Optional[State] = None, on_reduced_motion: Optional[Callable[[bool], None]] = None,
+                     has_screen_context: bool = False, capture: Callable[[], object] = screen_context.capture,
                      parent: Optional[QObject] = None) -> None:
             super().__init__(parent)
             self._controller = controller
@@ -189,11 +270,14 @@ def make_backend_class():
             self._reduced_motion = reduced_motion
             self._on_reduced_motion = on_reduced_motion
             self._preview = preview
+            self._has_screen_context = has_screen_context
+            self._capture = capture
             self._editing_server = False
             self._qr_link = ""
             self._qr_data = ""
             self._pending_render: Optional[str] = None
             self._snapshot: dict = {}
+            self._captured.connect(self._on_captured)
             if controller is not None:
                 controller.subscribe(lambda _state: self._refresh())
                 controller.on_sent = self._sent
@@ -227,18 +311,42 @@ def make_backend_class():
             if link != self._qr_link:
                 self._qr_link = link
                 self._qr_data = approval_qr_data_url(link) if link else ""
+            presence = state.presence
             if state.speaking:
                 waveform = "speaking"
-            elif state.busy or state.phase in (Phase.CONNECTING, Phase.PREPARING, Phase.DISCONNECTING):
+            elif presence.title == S.WORKING or state.busy or state.phase in (
+                    Phase.CONNECTING, Phase.PREPARING, Phase.DISCONNECTING):
                 waveform = "thinking"
-            elif state.phase == Phase.BLOCKED:
+            elif state.phase == Phase.BLOCKED or presence.title == S.CANNOT_CONFIRM:
                 waveform = "error"
+            elif presence.title in (S.WAITING_FOR_YOU, S.WAITING_FOR_DEVICE):
+                waveform = "listening"
             else:
                 waveform = "idle"
+            destination = viewstate.destination_for(state.target)
+            context = state.context
             return {
                 "view": view_for(state, has_surface, self._editing_server),
                 "phase": state.phase.value,
                 "statusText": state.status_text,
+                "presenceTitle": presence.title,
+                "presenceDetail": presence.detail,
+                "sentText": state.sent_text,
+                "sending": state.sending,
+                "turnOpen": state.turn_open,
+                "features": {"targets": state.features.targets, "context": state.features.context},
+                "target": state.target or "",
+                "destinationChip": destination.chip,
+                "destinations": [{"target": entry.target or "", "name": entry.name, "online": entry.online,
+                                  "current": entry.target == state.target}
+                                 for entry in viewstate.destinations()],
+                "context": ({"label": viewstate.context_label(context.app), "app": context.app,
+                             "truncated": context.truncated} if context is not None else None),
+                "contextBusy": state.context_busy,
+                "hasScreenContext": self._has_screen_context and state.features.context,
+                "examplePrompts": list(viewstate.example_prompts(self._has_screen_context and state.features.context)),
+                "centerDevicesUrl": state.server_origin + CENTER_DEVICES_PATH,
+                "screenContextOff": state.failure == Failure.SCREEN_CONTEXT_OFF,
                 "message": state.message,
                 "serverOrigin": state.server_origin,
                 "serverHost": display_host(state.server_origin),
@@ -254,6 +362,7 @@ def make_backend_class():
                 "canCancel": state.can_cancel,
                 "canDisconnect": state.can_disconnect,
                 "canRetry": state.can_retry_pending,
+                "reconnectArmed": state.reconnect_armed,
                 "busy": state.busy,
                 "visible": state.visible,
                 "speaking": state.speaking,
@@ -273,14 +382,20 @@ def make_backend_class():
         def _display(card: Optional[DisplayCard]) -> Optional[dict]:
             if card is None:
                 return None
+            if card.kind == "choices":
+                items = [{"id": item.id, "title": item.title, "detail": item.detail, "number": index + 1}
+                         for index, item in enumerate(card.items)]
+            else:
+                items = [{"placeId": item.place_id, "name": item.name, "address": item.address,
+                          "sourceUrl": item.source_url or ""} for item in card.items]
             return {
                 "actionId": card.action_id,
                 "kind": card.kind,
                 "private": card.private,
                 "text": card.text,
                 "query": card.query,
-                "items": [{"placeId": item.place_id, "name": item.name, "address": item.address,
-                           "sourceUrl": item.source_url or ""} for item in card.items],
+                "title": card.title,
+                "items": items,
                 "creditLines": [credit_line_html(parts) for parts in card.credits],
             }
 
@@ -330,6 +445,52 @@ def make_backend_class():
 
         def _sent(self, ok: bool) -> None:
             self.sent.emit(ok)
+
+        @Slot(int, result=bool)
+        def selectChoice(self, index: int) -> bool:
+            controller = self._live()
+            return controller.select_choice(int(index)) if controller is not None else False
+
+        @Slot(str, result=bool)
+        def setTarget(self, target: str) -> bool:
+            controller = self._live()
+            return controller.set_target(target or None) if controller is not None else False
+
+        @Slot(result=bool)
+        def useSelection(self) -> bool:
+            """Read the selection off the UI thread; attach it only when it holds text."""
+            controller = self._live()
+            if controller is None or not controller.begin_context_capture():
+                return False
+            capture = self._capture
+            emit = self._captured.emit
+
+            def work() -> None:
+                try:
+                    result = capture()
+                except Exception:
+                    log.exception("selection capture failed")
+                    result = None
+                emit(result)
+
+            threading.Thread(target=work, name="cosmos-selection", daemon=True).start()
+            return True
+
+        @Slot(object)
+        def _on_captured(self, result: object) -> None:
+            controller = self._live()
+            if controller is not None:
+                controller.context_captured(result if isinstance(result, screen_context.ScreenContext) else None)
+
+        @Slot()
+        def dropContext(self) -> None:
+            controller = self._live()
+            if controller is not None:
+                controller.drop_context()
+
+        @Slot(result=bool)
+        def openCenterDevices(self) -> bool:
+            return open_in_browser(self._snapshot.get("centerDevicesUrl", ""))
 
         @Slot(result=bool)
         def cancel(self) -> bool:
@@ -496,9 +657,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     Backend = make_backend_class()
     backend = Backend(controller, key_notice, reduced_motion, preview=preview,
                       on_reduced_motion=(lambda value: store.set("reducedMotion", "true" if value else "false"))
-                      if store is not None else None)
+                      if store is not None else None,
+                      has_screen_context=screen_context.available() or preview is not None)
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("backend", backend)
+    engine.rootContext().setContextProperty("theme", theme_tokens(system_prefers_dark()))
+    engine.rootContext().setContextProperty("S", S.as_map())
     engine.load(QUrl.fromLocalFile(str(PACKAGE_DIR / "qml" / "Main.qml")))
     roots = engine.rootObjects()
     if not roots:
@@ -562,7 +726,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     show_window()
     report_visibility()
-    return application.exec()
+    code = application.exec()
+    # The engine goes first: its bindings still read the backend during teardown.
+    del window
+    del engine
+    return code
 
 
 def _player(holder: dict):

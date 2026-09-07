@@ -1,5 +1,7 @@
 import QtQuick
 
+// The kit's seven-bar presence mark. Static when idle or under reduced motion;
+// it animates only while the window is active and Cosmos is doing something.
 Canvas {
     id: root
     property string phase: "idle"
@@ -8,6 +10,7 @@ Canvas {
     property real tick: 0
     implicitWidth: 48
     implicitHeight: 36
+    Accessible.ignored: true
     onPhaseChanged: requestPaint()
     onAudioLevelChanged: requestPaint()
     onMotionEnabledChanged: requestPaint()
@@ -22,7 +25,7 @@ Canvas {
     onPaint: {
         const ctx = getContext("2d")
         ctx.clearRect(0, 0, width, height)
-        ctx.fillStyle = phase === "error" ? "#FFAC9C" : (phase === "idle" ? "#FFFFFF" : "#58F4F1")
+        ctx.fillStyle = phase === "error" ? theme.error : (phase === "idle" ? theme.primary : theme.response)
         const heights = [0.22, 0.56, 0.82, 1.0, 0.82, 0.56, 0.22]
         for (let i = 0; i < 7; i++) {
             let energy = 0.82
