@@ -1,40 +1,23 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { StatusChip } from "@/components/Status";
 import { NATIVE_PLATFORMS, type NativePlatform, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
-import { SPEECH_REGION } from "@/lib/contracts/speechDisclosure";
-import type { LookupProvider, LookupService, LookupState } from "@/lib/contracts/lookupDisclosure";
+import type { LookupService } from "@/lib/contracts/lookupDisclosure";
 import settings from "../../settings.module.css";
 import styles from "./surfaces.module.css";
 import { fingerprintLines } from "./fingerprint";
 import { PermissionSwitch } from "./PermissionSwitch";
+import { LOOKUP, LookupSwitch, SpeechSwitch, useSpeechRegion } from "./SurfaceSwitches";
 import { activeLookupProvider, lookupPermission, lookupPolicy, PRIVATE_POLICY, privatePermission, SCREEN_CONTEXT_POLICY, screenContextPermission, speechPermission, speechPolicy, usePermission, type Outcome } from "./permissions";
 
 /** The owner's own words for a kind of device — the same names the Mac, Linux, phone and TV clients use. */
 export const DEVICE_LABELS = { android: "Phone", android_tv: "TV", macos: "Mac", linux: "Linux PC" } as const satisfies Record<NativePlatform, string>;
 /** A device is connected only while the runtime holds a signed connection for it; approval alone is not a connection. */
 export const deviceStatus = (row: NativeSurface) => row.connected ? row.visible ? "Connected" : "Connected · in the background" : "Offline";
-const PROVIDERS = { searxng: "SearXNG", serp_api: "SerpApi", google_places: "Google Maps" } as const satisfies Record<LookupProvider["provider"], string>;
-const LOOKUP = {
-  web: {
-    title: "Look things up on the web", name: "web lookup",
-    description: "Sends the words of your request to your search provider and shows what comes back.",
-    privacy: "Your search provider sees the request text. Nothing else about you is sent.",
-    missing: "No search provider is set up in Services.",
-  },
-  places: {
-    title: "Find places", name: "place lookup",
-    description: "Sends a named place to Google Maps and shows an address list.",
-    privacy: "Google Maps sees the place name, never this device’s location.",
-    missing: "No place provider is set up in Services.",
-  },
-} as const satisfies Record<LookupService, { title: string; name: string; description: string; privacy: string; missing: string }>;
 const SCREEN_CONTEXT = "When you ask about what is on this device’s screen, Cosmos reads the visible text once and sends it to the assistant model.";
 const SCREEN_CONTEXT_PRIVACY = "The reply stays private to this device. It is never spoken and never shown on a shared screen.";
 const TRUST = "Approved for shared text requests, one shared reply card and one spoken reply while its app is in front. It cannot use the microphone, read media context or private memories, or act on other devices. Approval is not proof of a connection or of delivery: a card or spoken reply counts only after the app acknowledges it, and Cosmos cannot tell who is in the room.";
-const providerKey = (provider: LookupProvider) => `${provider.provider}:${provider.configurationDigest}`;
 const describe = (outcome: Outcome) => outcome.result === "confirmed" ? "On." : outcome.result === "skipped" ? outcome.reason
   : outcome.failure === "unconfirmed" ? "Not confirmed. Check its switch below." : outcome.failure === "changed" ? "This device’s approval changed. Refresh devices." : "Could not be read. Check its switch below.";
 
@@ -67,14 +50,10 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
   const [open, setOpen] = useState(offerSetup);
   const [details, setDetails] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [region, setRegion] = useState(lastRegion);
   const [choice, setChoice] = useState<Record<LookupService, string>>({ web: "", places: "" });
   const [setup, setSetup] = useState<{ running: boolean; steps: Step[] } | null>(null);
-  useEffect(() => { setRegion(current => current || lastRegion); }, [lastRegion]);
-  const recordedRegion = speech.snapshot?.policy?.provider.region ?? null;
-  useEffect(() => { if (recordedRegion) onRegionUsed(recordedRegion); }, [recordedRegion, onRegionUsed]);
-
-  const speaks = speech.snapshot?.policy?.synthesis === true;
+  const region = useSpeechRegion(speech, servicesRegion, lastRegion, onRegionUsed);
+  const { speaks, speechRegion } = region;
   const lookups = { web, places } as const;
   const providers = { web: activeLookupProvider(web.snapshot), places: activeLookupProvider(places.snapshot) } as const;
   const privateOn = priv.snapshot !== undefined ? priv.snapshot?.policy != null : row.privateDisplay;
@@ -84,25 +63,7 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
   const unreadable = states.some(state => state.failure !== null);
   const capabilities = ["Shows shared replies", ...(speaks ? ["Speaks replies"] : []), ...(providers.web ? ["Looks things up"] : []),
     ...(providers.places ? ["Finds places"] : []), ...(privateOn && !tv ? ["Shows private replies"] : []), ...(screenOn && !tv ? ["Uses what's on the screen"] : [])];
-  const speechRegion = recordedRegion ?? servicesRegion ?? (SPEECH_REGION.test(region) ? region : null);
 
-  async function toggleSpeech(next: boolean) {
-    if (!next) { await speech.commit(() => ({ policy: null }), "Cosmos confirmed spoken replies off."); return; }
-    if (!speechRegion) return;
-    const outcome = await speech.commit(() => ({ policy: speechPolicy(speechRegion) }), "Cosmos confirmed spoken replies on this device.");
-    if (outcome.result === "confirmed") onRegionUsed(speechRegion);
-  }
-  function chosenProvider(state: LookupState | undefined, service: LookupService): LookupProvider | null {
-    if (!state) return null;
-    return state.providers.length === 1 ? state.providers[0] : state.providers.find(provider => providerKey(provider) === choice[service]) ?? null;
-  }
-  async function toggleLookup(service: LookupService, next: boolean) {
-    const state = lookups[service];
-    if (!next) { await state.commit(() => ({ policy: null }), `Cosmos confirmed ${LOOKUP[service].name} off.`); return; }
-    const provider = chosenProvider(state.snapshot, service);
-    if (!provider) return;
-    await state.commit(() => ({ policy: lookupPolicy(provider) }), `Cosmos confirmed ${LOOKUP[service].name} for this device.`);
-  }
   async function togglePrivate(next: boolean) {
     await priv.commit(() => ({ policy: next ? PRIVATE_POLICY : null }),
       next ? "Cosmos confirmed private replies may appear here after you continue on this device." : "Cosmos confirmed private replies off for this device.");
@@ -163,41 +124,11 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
           {setup.running ? <li role="status">Working…</li> : null}
         </ul>}
       </div> : null}
-      <PermissionSwitch title="Speak replies" checked={speaks} disabled={!row.speech || !speechRegion} busy={speech.busy}
-        reading={speech.snapshot === undefined && speech.failure === null} failure={speech.failure} message={speech.message}
-        onChange={next => void toggleSpeech(next)} onRetry={speech.failure === "changed" ? onRefreshDevices : () => void speech.load()}
-        description={<>Cosmos reads shared replies aloud on this device with Azure Speech.
-          {recordedRegion ? ` Region: ${recordedRegion}.` : servicesRegion ? ` Uses the ${servicesRegion} region from Services.` : ""}</>}
-        privacy="Only replies that are safe to say out loud in a room are ever spoken.">
-        {!row.speech ? <span className={styles.switchState}>Approve this device again to allow spoken replies; its approval predates them.</span>
-          : !recordedRegion && !servicesRegion ? <label className={styles.field}>Azure Speech region
-            <input value={region} maxLength={32} autoComplete="off" spellCheck={false} placeholder="westeurope" disabled={speech.busy}
-              onChange={event => setRegion(event.target.value.trim().toLowerCase())} />
-          </label> : null}
-      </PermissionSwitch>
-      {(["web", "places"] as const).map(service => {
-        const state = lookups[service];
-        const active = providers[service];
-        const recorded = state.snapshot?.approval?.policy?.provider;
-        const configured = state.snapshot?.providers ?? [];
-        const checked = active !== null;
-        return <PermissionSwitch key={service} title={LOOKUP[service].title} checked={checked} busy={state.busy}
-          disabled={!state.snapshot || !chosenProvider(state.snapshot, service)}
-          reading={state.snapshot === undefined && state.failure === null} failure={state.failure} message={state.message}
-          onChange={next => void toggleLookup(service, next)} onRetry={state.failure === "changed" ? onRefreshDevices : () => void state.load()}
-          description={<>{LOOKUP[service].description}
-            {active ? <> Uses {PROVIDERS[active.provider]} at <span className={styles.endpoint}>{active.endpoint}</span>.</> : null}</>}
-          privacy={LOOKUP[service].privacy}>
-          {state.snapshot && recorded && !active ? <span className={styles.switchState} role="status">The provider set-up changed, so this permission currently authorizes nothing. Turn it on again to use the current provider.</span> : null}
-          {state.snapshot && configured.length === 0 ? <span className={styles.switchState}>{LOOKUP[service].missing} Open <Link href="/settings/account/services">Services</Link>, then check again.</span> : null}
-          {!checked && configured.length > 1 ? <label className={styles.field}>Provider
-            <select value={choice[service]} disabled={state.busy} onChange={event => setChoice({ ...choice, [service]: event.target.value })}>
-              <option value="">Choose a provider</option>
-              {configured.map(provider => <option key={providerKey(provider)} value={providerKey(provider)}>{PROVIDERS[provider.provider]} · {provider.endpoint}</option>)}
-            </select>
-          </label> : null}
-        </PermissionSwitch>;
-      })}
+      <SpeechSwitch state={speech} speech={region} servicesRegion={servicesRegion} allowed={row.speech}
+        blocked="Approve this device again to allow spoken replies; its approval predates them."
+        onRegionUsed={onRegionUsed} onRefreshDevices={onRefreshDevices} />
+      {(["web", "places"] as const).map(service => <LookupSwitch key={service} service={service} state={lookups[service]}
+        choice={choice[service]} onChoice={value => setChoice({ ...choice, [service]: value })} onRefreshDevices={onRefreshDevices} />)}
       {!tv ? <PermissionSwitch title="Show private replies here" checked={priv.snapshot !== undefined && privateOn} busy={priv.busy}
         reading={priv.snapshot === undefined && priv.failure === null} failure={priv.failure} message={priv.message}
         onChange={next => void togglePrivate(next)} onRetry={priv.failure === "changed" ? onRefreshDevices : () => void priv.load()}

@@ -8,7 +8,6 @@ import styles from "./devices.module.css";
 import { EmptyState, SectionSkeleton } from "@/components/States";
 import { StatusChip, StatusMessage } from "@/components/Status";
 import { ListRow } from "@/components/Page";
-import { PinRuntimeApproval } from "./PinRuntimeApproval";
 import {
   buildDeviceOverview,
   parseDeviceStatusResponse,
@@ -315,7 +314,6 @@ export default function Page() {
           void statusQuery.refetch();
         }}
       />
-      <PinRuntimeApproval />
     </>
   );
 }
@@ -485,6 +483,23 @@ function PinSetupSection({
         </span>
         <Link className={settings.additionLink} href="/settings/pin/setup">
           Open guided setup
+        </Link>
+      </div>
+
+      {/*
+        Approval and every Pin permission live on Devices, beside the phone, the
+        Mac, the Linux PC and the TV, in the same words. This row is the way
+        back to them, not a second place to grant them.
+      */}
+      <div className={settings.additionRow}>
+        <span className={settings.additionRowText}>
+          <span className={settings.additionRowTitle}>Approval and permissions</span>
+          <span className={settings.additionRowDesc}>
+            Approve this Pin and choose what it may do, with your other devices.
+          </span>
+        </span>
+        <Link className={settings.additionLink} href="/settings/account/surfaces">
+          Open Devices
         </Link>
       </div>
 

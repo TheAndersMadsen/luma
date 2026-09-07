@@ -4,6 +4,7 @@ import { SPEECH_DISCLOSURE_APPROVAL, parseSpeechApproval, type SpeechApproval, t
 import { LOOKUP_SERVICES, parseLookupState, type LookupPolicy, type LookupProvider, type LookupService, type LookupState } from "@/lib/contracts/lookupDisclosure";
 import { PRIVATE_DISPLAY_APPROVAL, parsePrivateDisplayApproval, type PrivateDisplayApproval, type PrivateDisplayPolicy } from "@/lib/contracts/privateDisplay";
 import { SCREEN_CONTEXT_APPROVAL, parseScreenContextApproval, type ScreenContextApproval, type ScreenContextPolicy } from "@/lib/contracts/screenContext";
+import { LOCAL_VOICE_APPROVAL, parseLocalVoiceApproval, type LocalVoiceApproval, type LocalVoicePolicy } from "@/lib/contracts/localVoice";
 
 const TIMEOUT = 10000;
 
@@ -85,6 +86,27 @@ export function screenContextPermission(surfaceId: string, approvalRevision: num
     async write(snapshot, policy, signal) {
       const expectedRevision = snapshot?.revision ?? 0;
       const saved = parseScreenContextApproval(await post(path, { approval: SCREEN_CONTEXT_APPROVAL, approvalRevision, expectedRevision, policy }, signal));
+      if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
+      return saved;
+    },
+  };
+}
+
+/** Voice heard by the Pin is recognized on the owner's own server, so the floor it may carry is shared-room speech. */
+export const LOCAL_VOICE_POLICY: LocalVoicePolicy = { sourceFloor: "shared_room" };
+
+/** Spoken requests taken on one Pin. Separate from the cloud speech provider permission and from pairing. */
+export function localVoicePermission(surfaceId: string, approvalRevision: number): Permission<LocalVoiceApproval | null, LocalVoicePolicy> {
+  const path = `/api/devices/runtime/${surfaceId}/local-voice`;
+  return {
+    async read(signal) {
+      const saved = parseLocalVoiceApproval(await get(path, signal));
+      if (saved && saved.approvalRevision !== approvalRevision) throw new Error("approval_changed");
+      return saved;
+    },
+    async write(snapshot, policy, signal) {
+      const expectedRevision = snapshot?.revision ?? 0;
+      const saved = parseLocalVoiceApproval(await post(path, { approval: LOCAL_VOICE_APPROVAL, approvalRevision, expectedRevision, policy }, signal));
       if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
       return saved;
     },

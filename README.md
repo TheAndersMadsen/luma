@@ -707,9 +707,10 @@ same current connection without renewing its deadlines. Enrollment and current
 connection evidence remain separate from actor identity and physical privacy.
 
 On this branch, **Settings → Devices** is the owner's everyday view: one card
-per approved phone, TV or computer plus this browser. Each card is titled the
-way the owner would say it (Phone, TV, Mac, Linux PC, This browser — the same
-names the native clients use) and shows a plain status read from the runtime's
+for the Ai Pin, one per approved phone, TV or computer, and one for this
+browser. Each card is titled the
+way the owner would say it (Ai Pin, Phone, TV, Mac, Linux PC, This browser — the
+same names the clients use) and shows a plain status read from the runtime's
 own connection state (Connected, Connected · in the background, Offline), one
 line naming what the device may do, and a **Manage** panel with plain switches:
 Speak replies, Look things up on the web, Find places, Show private replies here
@@ -730,6 +731,21 @@ writing, and a missing write response requires a fresh read before another
 change. Approval is never proof of a connection or of delivery, and the native
 profile still grants no microphone, screen/media context, private memory or
 device actions.
+
+The **Ai Pin** card is the same card for the wearable. It says whether a Pin is
+paired (Not set up · Waiting for approval · Approved · Not paired · Status
+unread) and offers the permissions the Pin actually holds: Speak replies, Take
+spoken requests, Look things up on the web and Find places, each with the same
+sentence on what it allows and the same quieter one on privacy as every other
+device. A paired Pin that has no approval yet is one calm sentence and one
+action, **Approve this Pin**; it is not an error. Approval is a separate owner
+gesture that pairing never implies, and revoking it leaves pairing untouched. A
+Pin whose pairing is gone or unreadable can only have permissions taken away,
+and an approval list Cosmos could not read says so instead of reading as "no
+Pin". The device ID, the approval revision and **Remove this approval** sit
+behind the same Details disclosure the other cards use. Trust stays where the
+[wire contract](contracts/pin-surface.json) puts it: shared speech only, no
+occupancy or actor identity, no private-memory clearance and no autonomy.
 
 The **Ask Cosmos** panel in Center's own chrome follows the same words as the
 native clients. One switch makes this tab a shared display for an hour; until
@@ -1016,24 +1032,25 @@ evidence that those dependencies exist.
    latency target also remain open; isolated adapter timings are not production
    latency.
 
-   In **Settings → My Ai Pin → Ambiance runtime approval**, open **Local voice
-   permission** to allow shared local voice requests or revoke the permission.
-   This is separate from cloud speech permission, pairing and provider settings.
+   In **Settings → Devices**, the Ai Pin card's **Take spoken requests** switch
+   allows shared local voice requests, and turning it off revokes them. This is
+   separate from cloud speech permission, pairing and provider settings.
    Center verifies the committed approval and policy revision; an uncertain
    write requires a fresh read. Revocation remains possible after pairing loss,
-   and reapproving the Pin invalidates the old grant. This prepares permission
-   for native intake; it does not activate a disconnected microphone or establish
-   speaker identity, physical privacy, cloud disclosure authority or playback.
+   and reapproving the Pin invalidates the old grant. This permits native intake;
+   it does not itself establish speaker identity, physical privacy, cloud
+   disclosure authority or playback.
 
-   In **Settings → My Ai Pin → Ambiance runtime approval**, open **Speech provider
-   permission** for an approved Pin, enter the configured Azure Speech region,
-   and explicitly allow shared reply text or revoke permission. Center verifies
-   the exact committed approval and policy revision; an uncertain write requires
-   a fresh read. Revocation remains available after pairing loss, and reapproving
-   the Pin invalidates its old speech policy. This control grants synthesis only;
-   it does not authorize microphone upload, enable native voice capture or change
-   the existing stock speech service. Cosmos's bounded owner API keeps those
-   permissions separate from provider configuration and device pairing.
+   In **Settings → Devices**, the Ai Pin card's **Speak replies** switch allows
+   shared reply text for an approved Pin, using the Azure Speech region recorded
+   in Services or entered on the switch; turning it off revokes it. Center
+   verifies the exact committed approval and policy revision; an uncertain write
+   requires a fresh read. Revocation remains available after pairing loss, and
+   reapproving the Pin invalidates its old speech policy. This control grants
+   synthesis only; it does not authorize microphone upload, enable native voice
+   capture or change the existing stock speech service. Cosmos's bounded owner
+   API keeps those permissions separate from provider configuration and device
+   pairing.
 4. **Cosmos services and policy.** Rebuild completion, child agents, composition,
    translation, vision/food, music and native actions through typed services.
    Require exact single-use action/epoch grants, provenance-scoped retrieval,

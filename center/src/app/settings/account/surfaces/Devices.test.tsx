@@ -43,6 +43,9 @@ function upstream(rows: NativeSurface[] = [], existing: NativeSurface | null = n
     if (target === path) return Response.json({ native: rows });
     if (target === `${path}/enrollments/${descriptor.enrollmentId}`) return existing ? Response.json({ native: existing }) : new Response(null, { status: 404 });
     if (target === "/api/admin/integrations") return Response.json({ error: "Operator access required." }, { status: 403 });
+    // This account has no Pin; PinCard.test.tsx owns the Pin's own states.
+    if (target === "/api/devices/runtime") return Response.json({ pins: [] });
+    if (target === "/api/devices/pair") return Response.json({ devices: [] });
     const permission = PERMISSION.exec(target);
     if (!permission) throw new Error(`Unexpected request: ${url}`);
     const custom = answer(permission[1], permission[2]);
@@ -116,8 +119,9 @@ function importFile(file: File) {
 it("shows this browser and a calm empty state, then requires review and a separate owner confirmation of the key", async () => {
   const mock = upstream(); render(<Devices />); await ready();
   expect(calls(mock, path)[0][1]?.cache).toBe("no-store");
-  expect(screen.getByText("Cosmos shows replies on the devices you approve here.")).toBeVisible();
+  expect(screen.getByText("Cosmos answers on the devices you approve here.")).toBeVisible();
   expect(screen.getByRole("region", { name: "This browser" })).toBeVisible();
+  expect(within(screen.getByRole("region", { name: "Ai Pin" })).getByText("No Pin is paired with this account yet.")).toBeVisible();
   expect(screen.getByText(empty)).toBeVisible();
   expect(screen.queryByLabelText("Public installation descriptor")).not.toBeInTheDocument();
   openAdd();

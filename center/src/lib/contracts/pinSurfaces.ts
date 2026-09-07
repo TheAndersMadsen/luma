@@ -36,6 +36,16 @@ export function parsePinSurface(value: unknown, allowUnknownPairing = false): Pi
     || typeof pin.currentPaired !== "boolean" && !(allowUnknownPairing && pin.currentPaired === null)) throw new Error("invalid_pin");
   return { ...PIN_SURFACE_POSTURE, surfaceId: pin.surfaceId, deviceId: pin.deviceId, revision: pin.revision, revoked: pin.revoked, currentPaired: pin.currentPaired };
 }
+/** The pairing roster as owner management reads it: canonical device IDs only, never pairing times or credentials. */
+export function parsePairedPinDevices(value: unknown): string[] {
+  const { devices } = record(value);
+  if (!Array.isArray(devices) || devices.length > 256) throw new Error("invalid_roster");
+  return [...new Set(devices.map(entry => {
+    const { deviceId } = record(entry);
+    if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId)) throw new Error("invalid_device");
+    return deviceId.toLowerCase();
+  }))];
+}
 export function parsePinSurfaces(value: unknown): PinSurface[] {
   const { pins } = record(value);
   if (!Array.isArray(pins) || pins.length > 16) throw new Error("invalid_pin_list");
