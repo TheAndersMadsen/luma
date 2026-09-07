@@ -1,6 +1,8 @@
-import { PRIVACY_CLASSES, type PrivacyClass } from "./ambianceRuntime";
+import { PRIVACY_CLASSES, ROUTING_TARGETS, type PrivacyClass, type RoutingTarget } from "./ambianceRuntime";
 import { integer, record, UUID } from "./surfaces";
 import { CLASS, device, devices, privateClass, where } from "../turnOutcome";
+
+export type { RoutingTarget };
 
 /** How many ledger events one Activity read asks Cosmos for, newest last. */
 export const LEDGER_LIMIT = 300;
@@ -10,10 +12,19 @@ export const CHANNELS = ["visual.card", "audio.tts", "action.open", "action.rout
 export type Channel = typeof CHANNELS[number];
 /** Channels that change something about the world rather than showing or saying it. */
 const ACTION_CHANNELS: readonly Channel[] = ["action.open", "action.route", "action.play", "action.run"];
-export const BLOCKERS = ["privacy", "capability", "unavailable"] as const;
+/**
+ * Why a device was passed over. `unavailable` is "nothing could be sent there";
+ * `unattended` is "it was reachable, but its own app was not in front of
+ * anyone". They are not the same fact and never read as the same sentence.
+ */
+export const BLOCKERS = ["privacy", "capability", "unavailable", "unattended"] as const;
 export type Blocker = typeof BLOCKERS[number];
-export const ROUTING_TARGETS = ["browser", "macos", "linux", "android", "android_tv"] as const;
-export type RoutingTarget = typeof ROUTING_TARGETS[number];
+/**
+ * What the reply was, as a shape. The runtime binds one per turn and scores
+ * every device against it; it is absent on turns decided before it existed.
+ */
+export const SHAPES = ["utterance", "note", "passage", "roster", "place", "play", "route", "open", "run"] as const;
+export type Shape = typeof SHAPES[number];
 const ACTION_STATUSES = ["proposed", "awaiting_grant", "dispatched", "acknowledged", "running", "completed", "refused", "failed", "cancelled", "outcome_unknown"] as const;
 type ActionStatus = typeof ACTION_STATUSES[number];
 /** How a confirmation ceremony ended. */
@@ -32,7 +43,18 @@ type EvidenceKind = typeof EVIDENCE_KINDS[number];
 const REVOKE_REASONS = ["cancelled", "preempted", "superseded", "expired", "revalidation_failed"] as const;
 type RevokeReason = typeof REVOKE_REASONS[number];
 
-export interface Candidate { surfaceId: string; channel: Channel; blocker: Blocker | null }
+/**
+ * One device weighed for one reply. `fit` is how well the reply's shape suited
+ * the kind of screen that device declared; it orders the devices that were
+ * eligible and is never shown to the owner as a number.
+ */
+export interface Candidate {
+  surfaceId: string; channel: Channel; blocker: Blocker | null;
+  /** How well the reply's shape suited the kind of screen this device declared. It orders the eligible devices and is never shown as a number. */
+  fit: number;
+  /** True when the runtime ranked this device down because its own app was not in front. Absent on decisions logged before the term existed, and then never claimed. */
+  background: boolean;
+}
 /** One ceremony: the sentence a person was asked to answer at the device that would act. */
 interface Grant {
   grantId: string; actionId: string; venueSurfaceId: string; risk: Risk;
@@ -47,7 +69,7 @@ interface Action {
 /** One turn as the ledger tells it: content-free, so there is nothing here but routing. */
 export interface LedgerTurn {
   turnId: string; generation: number; startedAt: number; origin: string; privacy: PrivacyClass;
-  hint: RoutingTarget | null; expression: boolean; candidates: Candidate[];
+  hint: RoutingTarget | null; expression: boolean; shape: Shape | null; candidates: Candidate[];
   actions: Action[]; grants: Grant[];
   /** Six device actions in ten minutes, or one already in flight. */
   budget: { windowMs: number; limit: number } | null;
@@ -88,7 +110,7 @@ export function parseLedgerTurns(value: unknown): LedgerTurn[] {
         const id = key(data.turn_id, data.generation);
         if (!id || !uuid(data.origin) || !oneOf(PRIVACY_CLASSES, data.privacy)) throw new Error("invalid_turn");
         turns.set(id, { turnId: lower(data.turn_id as string), generation: data.generation as number, startedAt: event.receipt_ms, origin: lower(data.origin),
-          privacy: data.privacy, hint: null, expression: false, candidates: [], actions: [], grants: [], budget: null, preemptedBy: null, finished: false, cancelled: false });
+          privacy: data.privacy, hint: null, expression: false, shape: null, candidates: [], actions: [], grants: [], budget: null, preemptedBy: null, finished: false, cancelled: false });
         break;
       }
       case "decision": {
@@ -99,13 +121,22 @@ export function parseLedgerTurns(value: unknown): LedgerTurn[] {
           if (uuid(data.action_id)) expressions.add(data.action_id);
           break;
         }
-        if (data.hint !== undefined && !oneOf(ROUTING_TARGETS, data.hint) || !Array.isArray(data.candidates) || data.candidates.length > 64) throw new Error("invalid_decision");
+        if (data.hint !== undefined && !oneOf(ROUTING_TARGETS, data.hint) || data.shape !== undefined && !oneOf(SHAPES, data.shape)
+          || !Array.isArray(data.candidates) || data.candidates.length > 64) throw new Error("invalid_decision");
         turn.hint = data.hint === undefined ? null : data.hint;
+        turn.shape = data.shape === undefined ? null : data.shape;
+        // The runtime ranks before it logs, so the candidates arrive in the
+        // order it weighed them and the first unblocked one is the one it chose.
         turn.candidates = data.candidates.map(value => {
           const candidate = record(value);
+          // The busy-or-locked term is a penalty, so it is the one score that
+          // may be negative; it is absent on decisions older than the term.
           if (!uuid(candidate.surface_id) || !oneOf(CHANNELS, candidate.channel)
-            || candidate.blocker !== null && !oneOf(BLOCKERS, candidate.blocker)) throw new Error("invalid_candidate");
-          return { surfaceId: lower(candidate.surface_id), channel: candidate.channel, blocker: candidate.blocker };
+            || candidate.blocker !== null && !oneOf(BLOCKERS, candidate.blocker)
+            || !integer(candidate.shape_fit)
+            || candidate.attention !== undefined && !Number.isSafeInteger(candidate.attention)) throw new Error("invalid_candidate");
+          return { surfaceId: lower(candidate.surface_id), channel: candidate.channel, blocker: candidate.blocker,
+            fit: candidate.shape_fit, background: Number(candidate.attention ?? 0) < 0 };
         });
         break;
       }
@@ -199,6 +230,8 @@ export interface ActivityRow {
     /** What actually happened, in order: the ceremony, the device's own report, a stop, a limit. */
     events: string[];
     candidates: string[];
+    /** What kind of reply it was, which screen that kind belongs on, and which other screens would have done. */
+    choice: string[];
     hint: string | null;
     privacy: string;
     expression: boolean;
@@ -209,8 +242,15 @@ export interface ActivityRow {
 const BLOCKER: Record<Blocker, [string, string]> = {
   privacy: ["private content is not allowed there", "private content is not allowed there"],
   capability: ["it cannot show this", "they cannot show this"],
-  unavailable: ["its app was not in front", "their apps were not in front"],
+  unavailable: ["it was not connected", "they were not connected"],
+  unattended: ["its app was not in front", "their apps were not in front"],
 };
+/**
+ * Said once, when a device was passed over for being in the background. An
+ * owner reads "not in front" as "not connected" and goes looking for the
+ * device; only speech is lost that way, because a card simply waits.
+ */
+const BACKGROUND_IS_NOT_OFFLINE = "A device in the background is still connected. Only speech is lost, because speech cannot wait for it.";
 const CANNOT_SPEAK: [string, string] = ["it cannot speak this", "they cannot speak this"];
 const NOT_APPROVED: [string, string] = ["it is not approved for that", "they are not approved for that"];
 const HINT: Record<RoutingTarget, string> = { browser: "the browser", macos: "the Mac", linux: "the Linux PC", android: "the phone", android_tv: "the TV" };
@@ -219,6 +259,24 @@ const ACT: Record<Channel, string> = {
   "visual.card": "show a card", "audio.tts": "speak it", "action.open": "open it",
   "action.route": "show the way there", "action.play": "play it", "action.run": "run that task",
   "confirm.tap": "ask you to confirm",
+};
+/** The same, as the end of "X could have …". */
+const DONE: Record<Channel, string> = {
+  "visual.card": "shown a card", "audio.tts": "spoken it", "action.open": "opened it",
+  "action.route": "shown the way there", "action.play": "played it", "action.run": "run that task",
+  "confirm.tap": "asked you to confirm",
+};
+/** What the reply was, in the owner's words, as the middle of "This was …". */
+const ANSWER: Record<Shape, string> = {
+  utterance: "a short answer to say out loud",
+  note: "a short card to take in at a glance",
+  passage: "longer text to sit and read",
+  roster: "a list to choose from",
+  place: "one place and its address",
+  play: "something to play",
+  route: "directions to somewhere",
+  open: "something to open",
+  run: "a task to run",
 };
 const named = (kinds: SurfaceKinds, surfaceId: string) => kinds.has(surfaceId) ? device(kinds.get(surfaceId)) : "a removed device";
 const counted = (kinds: SurfaceKinds, surfaceId: string, count: number) =>
@@ -346,7 +404,7 @@ function candidateLines(turn: LedgerTurn, kinds: SurfaceKinds): string[] {
     if (found) found.count++;
     else groups.push({ channel: candidate.channel, blocker: candidate.blocker, kind, surfaceId: candidate.surfaceId, count: 1 });
   }
-  return groups.map(group => {
+  const lines = groups.map(group => {
     const act = ACT[group.channel];
     const name = capitalize(counted(kinds, group.surfaceId, group.count));
     if (!group.blocker) return `${name} could ${act}.`;
@@ -357,6 +415,52 @@ function candidateLines(turn: LedgerTurn, kinds: SurfaceKinds): string[] {
           : NOT_APPROVED[many];
     return `${name} could not ${act} — ${reason}.`;
   });
+  if (turn.candidates.some(candidate => candidate.blocker === "unattended")) lines.push(BACKGROUND_IS_NOT_OFFLINE);
+  return lines;
+}
+
+/**
+ * Which screen the reply belonged on, and which others would have done. The
+ * runtime now binds a shape for every reply and scores each device against the
+ * kind of screen its own manifest declares; this says that in the owner's
+ * words. It never shows a score, and it says nothing at all about a turn the
+ * runtime decided before it bound a shape.
+ */
+function choiceLines(turn: LedgerTurn, kinds: SurfaceKinds): string[] {
+  const eligible = turn.candidates.filter(candidate => candidate.blocker === null);
+  const chosen = eligible[0];
+  if (!turn.shape || !chosen) return [];
+  const answer = ANSWER[turn.shape];
+  const best = Math.max(...eligible.map(candidate => candidate.fit));
+  const suited = eligible.find(candidate => candidate.fit === best)!;
+  const lines = [chosen.fit === best
+    ? `This was ${answer}, and that belongs ${placed(kinds, chosen.surfaceId)}.`
+    // A destination the owner named outranks the fit, so the two facts are
+    // separate sentences: where it belonged, and why it went elsewhere.
+    : `This was ${answer}. It belongs ${placed(kinds, suited.surfaceId)}, and Cosmos sent it to ${named(kinds, chosen.surfaceId)} because you asked for that.`];
+  // Devices that suited it better are already named above; the rest read as
+  // "could have, but" or as an equal, folded by kind so two tabs are one line.
+  const groups: { kind: string; surfaceId: string; channel: Channel; equal: boolean; background: boolean; count: number }[] = [];
+  for (const candidate of eligible) {
+    if (candidate.surfaceId === chosen.surfaceId || candidate.fit > chosen.fit) continue;
+    const kind = kinds.get(candidate.surfaceId) ?? "";
+    const equal = candidate.fit === chosen.fit;
+    const found = groups.find(group => group.kind === kind && group.channel === candidate.channel
+      && group.equal === equal && group.background === candidate.background);
+    if (found) found.count++;
+    else groups.push({ kind, surfaceId: candidate.surfaceId, channel: candidate.channel, equal, background: candidate.background, count: 1 });
+  }
+  for (const group of groups) {
+    const name = capitalize(counted(kinds, group.surfaceId, group.count));
+    if (group.equal) {
+      lines.push(group.background
+        ? `${name} suited it just as well, but ${group.count === 1 ? "its app was" : "their apps were"} not in front.`
+        : `${name} suited it just as well.`);
+    } else {
+      lines.push(`${name} could have ${DONE[group.channel]}, but ${named(kinds, chosen.surfaceId)} suits this better.`);
+    }
+  }
+  return lines;
 }
 
 /** Plain words for the owner: where it was asked, what happened, and why each device was or was not chosen. */
@@ -369,6 +473,7 @@ export function activityRows(turns: LedgerTurn[], kinds: SurfaceKinds): Activity
     why: {
       events: eventLines(turn, kinds),
       candidates: candidateLines(turn, kinds),
+      choice: choiceLines(turn, kinds),
       hint: turn.hint ? `You asked for ${HINT[turn.hint]}` : null,
       privacy: CLASS[turn.privacy],
       expression: turn.expression,

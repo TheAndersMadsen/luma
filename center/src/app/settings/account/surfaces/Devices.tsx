@@ -25,6 +25,18 @@ const RESTORE_OUTCOME: Record<RestoreStep["outcome"], string> = {
   skipped: "Was not on.",
   failed: "Could not be granted again. Turn it on below.",
 };
+/**
+ * What approving an already-approved device again actually gains, read from
+ * what its current approval does not declare rather than from how old it is.
+ * An owner is told the one thing they get, and never told they are getting
+ * something this device already has.
+ */
+function reapprovalGain(existing: NativeSurface): string {
+  const screen = "lets Cosmos send each kind of reply to the screen that suits it";
+  return existing.actions.length
+    ? `This device has not said what kind of screen it is. Approving it again ${screen}, and its app reconnects.`
+    : `This device was approved before Cosmos could act on a device. Approving it again lets you choose what it may open, play or run, ${screen}, and its app reconnects.`;
+}
 const PATH = "/api/surfaces/native";
 const PIN_PATH = "/api/devices/runtime";
 const PAIR_PATH = "/api/devices/pair";
@@ -351,7 +363,7 @@ export function Devices() {
         <code className={styles.fingerprint}>{fingerprintLines(review.fingerprint).map((line, index) => <span key={index}>{line}</span>)}</code>
         {alreadyApproved ? <p className={styles.line}>This device is already approved.</p> : <>
           {review.existing?.revoked ? <p className={styles.line}>You removed this device earlier. Approving it again lets it show replies; its other permissions stay off until you turn them on.</p>
-            : review.existing ? <p className={styles.line}>This device was approved before Cosmos could act on a device. Approving it again lets you choose what it may open, play or run, and its app reconnects.</p>
+            : review.existing ? <p className={styles.line}>{reapprovalGain(review.existing)}</p>
               : <p className={styles.line}>This device is waiting for your approval.</p>}
           {/* A permission is granted against a posture. Approving again changes
               the posture, so Cosmos drops every one of them — said before the

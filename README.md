@@ -529,8 +529,17 @@ newest first and grouped by day: when and from which kind of device each was
 asked ("Asked from your phone"), what happened to the reply ("Shown on your
 Mac", "Spoken on your Ai Pin", "Private reply on your phone", "Nowhere to show
 it", "Cancelled", "Cannot confirm"), and a Why disclosure naming each candidate
-device in a sentence ("Your TV could not show a card — its app was not in
-front."), the routing hint and what the request's class meant. The ledger holds
+device in a sentence, the routing hint and what the request's class meant. A
+device that could not be reached at all ("it was not connected") reads
+differently from one that was reachable with its own app behind another window
+("its app was not in front"), and where the second happens the page says once
+that a device in the background is still connected and only speech is lost. The
+disclosure then says what kind of answer it was and which screen that kind
+belongs on ("This was a list to choose from, and that belongs on your TV."),
+which other screens would have done ("Your Mac could have shown a card, but
+your TV suits this better.", "Your phone suited it just as well.") and, when a
+named destination overruled the fit, both facts in one sentence. It is always
+words: no score, weight or table ever reaches the page. The ledger holds
 no request text or reply content, so the page shows none; an empty or unreadable
 ledger says so in plain words and offers the one thing to do next. The page is
 rendered on the server in UTC and reads without JavaScript; once it hydrates the
@@ -899,7 +908,13 @@ browser. Each card is titled the
 way the owner would say it (Ai Pin, Phone, TV, Mac, Linux PC, This browser — the
 same names the clients use) and shows a plain status read from the runtime's
 own connection state (Connected, Connected · in the background, Offline), one
-line naming what the device may do, and a **Manage** panel with plain switches:
+line naming what the device may do, and a **Manage** panel that opens with one
+read-only sentence saying what kind of screen this is — "Everyone in the room
+can see this one.", "This one travels with you.", "This is a screen you sit
+at." — taken from the `audience` its own approved manifest declares and never
+from its platform name; a device still on an earlier profile has declared none
+and is told that approving it again is what teaches Cosmos where each kind of
+reply belongs. Under it are the plain switches:
 Speak replies, Look things up on the web, Find places, Show private replies here
 and Use what's on the screen (a TV is a shared screen and never offers the last
 two). Each switch carries one sentence on what it allows and one, quieter, on
@@ -945,7 +960,12 @@ the turn stands is one reserved two-part line in the shared state vocabulary
 Cannot confirm, Disconnected), so no status arriving moves the card under it. A
 choice list is numbered 1–8 and answered by clicking a row, pressing Enter on
 it, walking it with the arrow keys, or typing its number into an empty prompt;
-the client sends the item's exact title. Closing the panel hides it and does not
+the client sends the item's exact title. The panel names no destination: Cosmos
+reads what the answer is and sends it to the screen that suits it, so the
+control reads "Cosmos chooses the device" and the request carries no `target`
+at all. Naming one ("Prefer your TV") is an override for the session, sent as
+the room input's `target`, and it says under itself that Cosmos still moves the
+reply if that device cannot take it. Closing the panel hides it and does not
 cancel a running turn — **Cancel task** is its own explicit action, offered only
 while a turn is open.
 
@@ -2398,8 +2418,11 @@ this phone. Removing the chip sends the request bare; a locked screen or absent
 assist data gets one calm line instead of a chip; the fallback activity says the
 role is needed and offers it. No screenshots are read and no audio is captured;
 the recognition service the role requires refuses every request. Beside the ask
-field, **Continue on** offers This phone (no target), Mac, Linux PC, TV or
-Browser as plain labels; Cosmos decides eligibility. Above it, the status line
+field, **Continue on** opens on Wherever it fits — no target at all, the
+default, because Cosmos chooses the screen from what the answer is — and then
+Mac, Linux PC, TV or Browser as plain labels; naming one is an override, this
+phone is never an entry because naming the asking device earns nothing, and
+until one is named the pill is a chevron with nothing to read. Above it, the status line
 follows the turn in fixed words: Working, Waiting for a device (or for your Mac
 when the platform is known), Shown on / Spoken on your Mac, Linux PC, phone, TV,
 browser or Ai Pin, Nowhere to show it, and Cannot confirm, which adds that the
@@ -2461,10 +2484,13 @@ Settings and never opens that pane or prompts on its own. "Use clipboard" is
 the only path that reads the pasteboard. Either shows a removable chip,
 "Using: Selected text · 1.2 KB", capped at 8,000 UTF-8 bytes; sending with it
 uses `cosmos_surface_send_text_with_context` with the source app's name, and
-the panel says the reply stays private to this Mac. "Continue on" offers This
-Mac (the default, no target), Phone, Linux PC, TV and Browser as plain kinds
-of device; a choice other than This Mac is sent as the request's `target`
-through `cosmos_surface_send_text_to` and resets after the send. The response
+the panel says the reply stays private to this Mac. "Send to" opens on
+Wherever it fits — no target at all, the default, because Cosmos chooses the
+screen from what the answer is — and then Phone, Linux PC, TV and Browser as
+plain kinds of device; this Mac is never an entry because naming the asking
+device earns nothing. Until one is named the chip is a chevron with nothing to
+read; a named one is sent as the request's `target` through
+`cosmos_surface_send_text_to` and resets after the send. The response
 card repeats Cosmos's `status` report in fixed words (Working; Waiting for
 your phone / your TV / your Linux PC / your browser / your Ai Pin / this Mac;
 Shown on…; Spoken on…; Nowhere to show it; Cannot confirm, with "I can't
@@ -2609,8 +2635,11 @@ MacBook" when the runtime placed the reply elsewhere), Cannot confirm or
 Disconnected, and an `unknown` status keeps the previous line rather than
 inventing one. A choice-list card is numbered 1–8; digits, the arrow keys with
 Enter, or a click send that item's title as the next request. The destination
-chip reads "→ This screen" and its menu names the other devices, sending
-through `cosmos_surface_send_text_to` for the session only. "Use selection"
+chip says nothing until a destination is named: it reads "Send to" and its menu
+opens on Wherever it fits, then the other devices — never this computer, whose
+nomination earns nothing — and a named one reads "→ Shield TV", clears from the
+chip's own ×, and goes through `cosmos_surface_send_text_to` for the session
+only. "Use selection"
 reads the Wayland selection with `wl-paste` and names the app with `hyprctl`
 when both exist, off the UI thread and bounded to 64 and 8000 UTF-8 bytes; it
 is attached only on that click, shows as "Using: Chrome selection" with a

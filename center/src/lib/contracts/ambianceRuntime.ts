@@ -31,6 +31,13 @@ export const PRIVACY_CLASSES = ["public", "shared_room", "near_user", "private",
 export type PrivacyClass = typeof PRIVACY_CLASSES[number];
 export const TURN_STATES = ["working", "waiting", "confirming", "acting", "shown", "spoken", "done", "refused", "nowhere", "unknown"] as const;
 export type TurnState = typeof TURN_STATES[number];
+/**
+ * A kind of approved surface one request named for itself. It is weighed among
+ * the surfaces that could already take the reply: it never makes a blocked one
+ * eligible, and Cosmos still moves the reply when that kind cannot take it.
+ */
+export const ROUTING_TARGETS = ["browser", "macos", "linux", "android", "android_tv"] as const;
+export type RoutingTarget = typeof ROUTING_TARGETS[number];
 /** Where one turn stands, content-free: the runtime names a kind of device, never text or a device ID. */
 export interface TurnStatus {
   version: 1; turnId: string; generation: number; state: TurnState;

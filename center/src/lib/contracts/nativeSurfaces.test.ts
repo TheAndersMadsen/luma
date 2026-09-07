@@ -13,6 +13,7 @@ import {
   parseNativeRevokeInput,
   parseNativeSurface,
   parseNativeSurfaces,
+  type NativeManifest,
 } from "./nativeSurfaces";
 
 // SEC 2's P-256 generator, encoded as the uncompressed SEC1 public point.
@@ -31,32 +32,44 @@ const DESCRIPTOR = {
   enrollmentId: ENROLLMENT_ID,
   publicKey: PUBLIC_KEY,
   platform: "macos",
-  approval: "native-device-action-v4",
+  approval: "native-audience-v6",
 };
 const CARD = { maxClass: "shared_room", shared: true };
 const ACKNOWLEDGED = ["acknowledged", "degraded"];
 const BASE_CONSTRAINTS = ["actor_unknown", "occupancy_unknown", "render_unverified", "playback_unverified", "visible_foreground_only", "no_background_output"];
 const ACTION_CONSTRAINTS = [...BASE_CONSTRAINTS, "effect_unverified"];
+/** A microphone the runtime cannot open: the person starts every capture and the client must show it while one is open. */
+const VOICE_CONSTRAINTS = ["push_to_talk_only", "no_background_capture", "capture_indicator_required"];
+const VOICE_INPUT = "voice.push_to_talk";
 const OPEN = { maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 10000 };
+/*
+ * Who each output channel reaches. Written next to every channel rather than
+ * once per platform, because the word is what the runtime routes on: a Mac
+ * that shipped "room" would be a television as far as Cosmos is concerned.
+ */
+const room = (declaration: Record<string, unknown>) => ({ ...declaration, audience: "room" });
+const handheld = (declaration: Record<string, unknown>) => ({ ...declaration, audience: "handheld" });
+const desk = (declaration: Record<string, unknown>) => ({ ...declaration, audience: "desk" });
 
 /*
- * The four manifests Cosmos publishes, written out rather than derived, so a
- * drift in `surface_registry::native_manifest` fails here instead of quietly
- * making every approved installation unreadable. What a device may be asked to
- * do differs by what its operating system can honestly report.
+ * The four manifests Cosmos publishes at the current profile, written out
+ * rather than derived, so a drift in `surface_registry::native_manifest` fails
+ * here instead of quietly making every approved installation unreadable. What a
+ * device may be asked to do differs by what its operating system can honestly
+ * report; who its output reaches differs by what kind of screen it is.
  */
-const MANIFESTS: Record<string, unknown> = {
+const MANIFESTS: Record<string, NativeManifest> = {
   macos: {
     class: "native",
     capabilities: {
-      input: ["text.public", "state.visibility", "context.screen", "action.report"],
+      input: ["text.public", "state.visibility", "context.screen", "action.report", VOICE_INPUT],
       output: {
-        "visual.card": CARD, "audio.tts": CARD, "action.open": OPEN,
-        "action.run": { maxClass: "shared_room", shared: true, risk: "high", idempotent: false, reportBudgetMs: 900000 },
-        "confirm.tap": { ...CARD, attestation: ["foreground_tap", "device_owner_auth"] },
+        "visual.card": desk(CARD), "audio.tts": desk(CARD), "action.open": desk(OPEN),
+        "action.run": desk({ maxClass: "shared_room", shared: true, risk: "high", idempotent: false, reportBudgetMs: 900000 }),
+        "confirm.tap": desk({ ...CARD, attestation: ["foreground_tap", "device_owner_auth"] }),
       },
     },
-    constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation"],
+    constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation", ...VOICE_CONSTRAINTS],
     expression: {
       "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
       "action.run": ["thinking", "acknowledged", "degraded"], "confirm.tap": ["confirming", "awaiting_permission"],
@@ -67,10 +80,11 @@ const MANIFESTS: Record<string, unknown> = {
   linux: {
     class: "native",
     capabilities: {
-      input: ["text.public", "state.visibility", "context.screen", "action.report"],
-      output: { "visual.card": CARD, "audio.tts": CARD, "action.open": OPEN, "confirm.tap": { ...CARD, attestation: ["foreground_tap"] } },
+      input: ["text.public", "state.visibility", "context.screen", "action.report", VOICE_INPUT],
+      output: { "visual.card": desk(CARD), "audio.tts": desk(CARD), "action.open": desk(OPEN),
+        "confirm.tap": desk({ ...CARD, attestation: ["foreground_tap"] }) },
     },
-    constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation"],
+    constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation", ...VOICE_CONSTRAINTS],
     expression: {
       "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
       "confirm.tap": ["confirming", "awaiting_permission"],
@@ -81,14 +95,14 @@ const MANIFESTS: Record<string, unknown> = {
   android: {
     class: "native",
     capabilities: {
-      input: ["text.public", "state.visibility", "context.screen", "action.report"],
+      input: ["text.public", "state.visibility", "context.screen", "action.report", VOICE_INPUT],
       output: {
-        "visual.card": CARD, "audio.tts": CARD, "action.open": OPEN,
-        "action.route": { maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 20000 },
-        "confirm.tap": { ...CARD, attestation: ["foreground_tap"] },
+        "visual.card": handheld(CARD), "audio.tts": handheld(CARD), "action.open": handheld(OPEN),
+        "action.route": handheld({ maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 20000 }),
+        "confirm.tap": handheld({ ...CARD, attestation: ["foreground_tap"] }),
       },
     },
-    constraints: [...ACTION_CONSTRAINTS, "foreground_or_assistant_session_only"],
+    constraints: [...ACTION_CONSTRAINTS, "foreground_or_assistant_session_only", ...VOICE_CONSTRAINTS],
     expression: {
       "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
       "action.route": ACKNOWLEDGED, "confirm.tap": ["confirming", "awaiting_permission"],
@@ -97,22 +111,39 @@ const MANIFESTS: Record<string, unknown> = {
     authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
   },
   // A television is bystander-perceivable by construction: no ceremony venue,
-  // no screen context and no command.
+  // no screen context and no command. Everything it shows, the room receives.
   android_tv: {
     class: "native",
     capabilities: {
-      input: ["text.public", "state.visibility", "action.report"],
+      input: ["text.public", "state.visibility", "action.report", VOICE_INPUT],
       output: {
-        "visual.card": CARD, "audio.tts": CARD,
-        "action.play": { maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 30000 },
+        "visual.card": room(CARD), "audio.tts": room(CARD),
+        "action.play": room({ maxClass: "shared_room", shared: true, risk: "low", idempotent: true, reportBudgetMs: 30000 }),
       },
     },
-    constraints: ACTION_CONSTRAINTS,
+    constraints: [...ACTION_CONSTRAINTS, ...VOICE_CONSTRAINTS],
     expression: { "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.play": ACKNOWLEDGED },
     cognition: { declaredClass: 0, models: [] },
     authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
   },
 };
+/*
+ * The two rungs below the current profile, taken out of the literals above
+ * rather than built up the way the module builds them: the voice profile is
+ * this manifest with no audience word anywhere, and the action profile is that
+ * one with the microphone taken back out.
+ */
+const withoutAudience = (manifest: NativeManifest): NativeManifest => ({ ...manifest,
+  capabilities: { ...manifest.capabilities, output: Object.fromEntries(Object.entries(manifest.capabilities.output)
+    .map(([channel, declaration]) => [channel, Object.fromEntries(Object.entries(declaration).filter(([key]) => key !== "audience"))])) } });
+const withoutVoice = (manifest: NativeManifest): NativeManifest => ({ ...manifest,
+  capabilities: { ...manifest.capabilities, input: manifest.capabilities.input.filter(name => name !== VOICE_INPUT) },
+  constraints: manifest.constraints.filter(name => !VOICE_CONSTRAINTS.includes(name)) });
+const VOICE_MANIFESTS: Record<string, NativeManifest> =
+  Object.fromEntries(Object.entries(MANIFESTS).map(([platform, manifest]) => [platform, withoutAudience(manifest)]));
+const ACTION_MANIFESTS: Record<string, NativeManifest> =
+  Object.fromEntries(Object.entries(VOICE_MANIFESTS).map(([platform, manifest]) => [platform, withoutVoice(manifest)]));
+
 const POSTURE_FIELDS = {
   name: "Native device",
   trustLevel: 0,
@@ -121,7 +152,9 @@ const POSTURE_FIELDS = {
   renderVerified: false,
   playbackVerified: false,
 };
-const APPROVED_POSTURE = { ...POSTURE_FIELDS, approval: "native-device-action-v4", manifest: MANIFESTS.macos };
+const APPROVED_POSTURE = { ...POSTURE_FIELDS, approval: "native-audience-v6", manifest: MANIFESTS.macos };
+const LEGACY_VOICE_POSTURE = { ...POSTURE_FIELDS, approval: "native-voice-input-v5", manifest: VOICE_MANIFESTS.macos };
+const LEGACY_ACTION_POSTURE = { ...POSTURE_FIELDS, approval: "native-device-action-v4", manifest: ACTION_MANIFESTS.macos };
 const LEGACY_SPEECH_POSTURE = {
   ...POSTURE_FIELDS,
   approval: "native-shared-speech-v3",
@@ -152,6 +185,7 @@ const SURFACE = {
   speech: true,
   actions: ["action.open", "action.run"],
   confirms: true,
+  audience: "desk",
   surfaceId: SURFACE_ID,
   enrollmentId: ENROLLMENT_ID,
   platform: "macos",
@@ -164,7 +198,7 @@ const SURFACE = {
 };
 
 it("accepts the four explicit native platforms and normalizes enrollment UUID case", () => {
-  expect(NATIVE_APPROVAL).toBe("native-device-action-v4");
+  expect(NATIVE_APPROVAL).toBe("native-audience-v6");
   for (const platform of ["macos", "linux", "android", "android_tv"]) {
     expect(parseNativeDescriptor({ ...DESCRIPTOR, enrollmentId: ENROLLMENT_ID.toUpperCase(), platform }))
       .toEqual({ ...DESCRIPTOR, platform });
@@ -275,21 +309,66 @@ it("matches Cosmos per platform: exactly the channels that platform declares, an
   expect(surface("android_tv").actions).toEqual(["action.play"]);
   expect(surface("android_tv").confirms).toBe(false);
   for (const platform of ["macos", "linux", "android"]) expect(surface(platform).confirms).toBe(true);
+  // Each platform says who its output reaches, and Center reads that word out
+  // of the manifest the owner approved rather than off the platform name.
+  expect(surface("macos").audience).toBe("desk");
+  expect(surface("linux").audience).toBe("desk");
+  expect(surface("android").audience).toBe("handheld");
+  expect(surface("android_tv").audience).toBe("room");
   // A manifest is bound to the record's OWN platform: an Android manifest on a
   // Mac record is unknown, not "some known manifest".
   expect(() => parseNativeSurface({ ...SURFACE, platform: "macos", manifest: MANIFESTS.android })).toThrow("unsupported_native_posture");
   expect(() => parseNativeSurface({ ...SURFACE, platform: "android_tv", manifest: MANIFESTS.macos })).toThrow("unsupported_native_posture");
+  // A word Cosmos never published, or the wrong one for that platform, is not
+  // a declaration at all: the manifest is simply not one Cosmos published.
+  for (const audience of ["room", "handheld", "everywhere", "", null]) {
+    const output = MANIFESTS.macos.capabilities.output;
+    const altered = { ...MANIFESTS.macos, capabilities: { ...MANIFESTS.macos.capabilities,
+      output: { ...output, "visual.card": { ...output["visual.card"], audience } } } };
+    expect(() => parseNativeSurface({ ...SURFACE, manifest: altered }), String(audience)).toThrow("unsupported_native_posture");
+  }
+});
+
+/*
+ * The profiles below the current one. Each still parses, because an owner who
+ * has not approved a device again should not find it unreadable; each declares
+ * strictly less, and the audience word is the newest thing any of them lacks.
+ */
+it("still reads every earlier profile, and says which of them has yet to declare what kind of screen it is", () => {
+  const { display: _display, speech: _speech, actions: _actions, confirms: _confirms, audience: _audience, ...bare } = SURFACE;
+  const rung = (posture: { approval: string; manifest: unknown }) => parseNativeSurface({ ...bare, ...posture });
+  expect(rung(APPROVED_POSTURE)).toEqual(SURFACE);
+  // The voice profile listens and acts; it has not said which screen it is.
+  expect(rung(LEGACY_VOICE_POSTURE)).toEqual({ ...bare, ...LEGACY_VOICE_POSTURE, display: true, speech: true,
+    actions: ["action.open", "action.run"], confirms: true, audience: null });
+  // The action profile acts, and declares no microphone at all.
+  expect(rung(LEGACY_ACTION_POSTURE)).toEqual({ ...bare, ...LEGACY_ACTION_POSTURE, display: true, speech: true,
+    actions: ["action.open", "action.run"], confirms: true, audience: null });
+  expect(rung(LEGACY_SPEECH_POSTURE)).toEqual({ ...bare, ...LEGACY_SPEECH_POSTURE, display: true, speech: true,
+    actions: [], confirms: false, audience: null });
+  expect(rung(LEGACY_POSTURE)).toEqual({ ...bare, ...LEGACY_POSTURE, display: true, speech: false,
+    actions: [], confirms: false, audience: null });
+  // Every rung is bound to the record's own platform, and to its own approval
+  // name: a manifest from one rung under another rung's name is unknown.
+  for (const platform of ["macos", "linux", "android", "android_tv"]) {
+    expect(parseNativeSurface({ ...bare, platform, approval: LEGACY_VOICE_POSTURE.approval, manifest: VOICE_MANIFESTS[platform] }).audience).toBeNull();
+    expect(parseNativeSurface({ ...bare, platform, approval: LEGACY_ACTION_POSTURE.approval, manifest: ACTION_MANIFESTS[platform] }).audience).toBeNull();
+    expect(() => parseNativeSurface({ ...bare, platform, approval: LEGACY_VOICE_POSTURE.approval, manifest: ACTION_MANIFESTS[platform] }))
+      .toThrow("unsupported_native_posture");
+    expect(() => parseNativeSurface({ ...bare, platform, approval: NATIVE_APPROVAL, manifest: VOICE_MANIFESTS[platform] }))
+      .toThrow("unsupported_native_posture");
+  }
 });
 
 it("keeps the fixed posture at shared text input, one shared visual card and one spoken reply with no inferred actor or autonomy", () => {
   expect(parseNativeSurface(SURFACE)).toEqual(SURFACE);
   // Earlier approvals still render and speak, and declare no action channel
   // until the owner approves the installation again.
-  const { display: _display, speech: _speech, actions: _actions, confirms: _confirms, ...withoutOutputs } = SURFACE;
+  const { display: _display, speech: _speech, actions: _actions, confirms: _confirms, audience: _audience, ...withoutOutputs } = SURFACE;
   const speechOnly = { ...withoutOutputs, ...LEGACY_SPEECH_POSTURE };
-  expect(parseNativeSurface(speechOnly)).toEqual({ ...speechOnly, display: true, speech: true, actions: [], confirms: false });
+  expect(parseNativeSurface(speechOnly)).toEqual({ ...speechOnly, display: true, speech: true, actions: [], confirms: false, audience: null });
   const legacy = { ...withoutOutputs, ...LEGACY_POSTURE };
-  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: true, speech: false, actions: [], confirms: false });
+  expect(parseNativeSurface(legacy)).toEqual({ ...legacy, display: true, speech: false, actions: [], confirms: false, audience: null });
   expect(() => parseNativeSurface({ ...legacy, manifest: APPROVED_POSTURE.manifest })).toThrow("unsupported_native_posture");
   expect(() => parseNativeSurface({ ...SURFACE, approval: LEGACY_POSTURE.approval })).toThrow("unsupported_native_posture");
   for (const key of Object.keys(APPROVED_POSTURE)) {

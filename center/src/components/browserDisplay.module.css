@@ -227,7 +227,20 @@
   padding: 4px 10px;
   border: 1px solid var(--hu-divider);
   border-radius: 100px;
+  background: transparent;
+  font: inherit;
   font-size: 12px;
+  color: var(--hu-colors-crater-base);
+  transition: color var(--transition-duration) ease-out;
+}
+.destination:hover { color: var(--hu-colors-white); }
+.destination option { color: var(--hu-colors-eclipse-base); }
+
+/* Only while a destination is named, so the panel stays quiet until then. */
+.override {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--hu-colors-crater-base);
 }
 
@@ -243,6 +256,7 @@
 .composer input:focus-visible,
 .send:focus-visible,
 .example:focus-visible,
+.destination:focus-visible,
 .trayAction:focus-visible { outline: 2px solid var(--hu-colors-beam-base); outline-offset: 2px; }
 
 @keyframes cardIn {

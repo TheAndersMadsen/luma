@@ -66,6 +66,8 @@ export function ActivityList({ activity }: { activity: Activity }) {
                       {row.why.events.length ? <ul>{row.why.events.map((line, position) => <li key={position}>{line}</li>)}</ul> : null}
                       {row.why.candidates.length ? <ul>{row.why.candidates.map((line, position) => <li key={position}>{line}</li>)}</ul>
                         : <p>Cosmos recorded no device choice for this turn.</p>}
+                      {/* What kind of reply it was, and which screen that kind belongs on. */}
+                      {row.why.choice.length ? <ul>{row.why.choice.map((line, position) => <li key={position}>{line}</li>)}</ul> : null}
                       {row.why.hint ? <p>{row.why.hint}</p> : null}
                       <p>{row.why.privacy}</p>
                       {row.why.expression ? <p>Cosmos also said something shared-safe in its own words.</p> : null}

@@ -486,3 +486,62 @@ it("says the tab must be in front while replies are on but this tab is behind an
   await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
   expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "Ask Cosmos…");
 });
+
+/*
+ * Cosmos reads what an answer is and sends it to the screen that suits it, so
+ * the panel does not ask the owner where a reply should go. Naming a device is
+ * an override for the request being sent, and it is a preference among the
+ * devices that could already take the reply, never a promise.
+ */
+const inputs = () => room.messages().filter(message => message.kind === "input");
+
+it("names no destination by default, and sends one only when the owner overrides it", async () => {
+  render(<BrowserDisplay />); await approve(false);
+  const destination = screen.getByRole("combobox", { name: "Where the reply goes" });
+  expect(destination).toHaveValue("");
+  expect(within(destination).getByRole("option", { selected: true })).toHaveTextContent("Cosmos chooses the device");
+  // Nothing to read about it until the owner has said something about it.
+  expect(screen.queryByText("Cosmos still moves the reply if that device cannot take it.")).toBeNull();
+  expect(screen.queryByText(/This screen/u)).toBeNull();
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Where is my package?" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); }); await flush();
+  // The plain request carries no destination at all, so its digest stays plain.
+  expect(inputs()).toHaveLength(1);
+  expect(inputs()[0].target).toBeUndefined();
+  expect(Object.keys(inputs()[0]).sort()).toEqual(["kind", "stamp", "text"]);
+
+  // Naming one is the override, and it says out loud that it is not a promise.
+  fireEvent.change(destination, { target: { value: "android_tv" } });
+  expect(screen.getByText("Cosmos still moves the reply if that device cannot take it.")).toBeVisible();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Play the album" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); }); await flush();
+  expect(inputs()).toHaveLength(2);
+  expect(inputs()[1].target).toBe("android_tv");
+  expect(inputs()[1].text).toBe("Play the album");
+
+  // Every kind of approved surface can be named, and taking the override off
+  // returns the panel to saying nothing.
+  expect(Array.from(destination.querySelectorAll("option")).map(option => [option.getAttribute("value"), option.textContent])).toEqual([
+    ["", "Cosmos chooses the device"], ["browser", "Prefer this browser"], ["macos", "Prefer your Mac"],
+    ["linux", "Prefer your Linux PC"], ["android", "Prefer your phone"], ["android_tv", "Prefer your TV"],
+  ]);
+  fireEvent.change(destination, { target: { value: "" } });
+  expect(screen.queryByText("Cosmos still moves the reply if that device cannot take it.")).toBeNull();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "And now?" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); }); await flush();
+  expect(inputs()[2].target).toBeUndefined();
+});
+
+it("forgets a named destination when replies are turned off in this browser", async () => {
+  render(<BrowserDisplay />); await approve(false);
+  fireEvent.change(screen.getByRole("combobox", { name: "Where the reply goes" }), { target: { value: "macos" } });
+  expect(screen.getByRole("combobox", { name: "Where the reply goes" })).toHaveValue("macos");
+  fireEvent.click(screen.getByRole("switch", { name: "Show replies in this browser" }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toBeDisabled());
+  expect(screen.queryByRole("combobox", { name: "Where the reply goes" })).toBeNull();
+  fireEvent.click(screen.getByRole("switch", { name: "Show replies in this browser" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Turn on" })); });
+  await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
+  expect(screen.getByRole("combobox", { name: "Where the reply goes" })).toHaveValue("");
+});

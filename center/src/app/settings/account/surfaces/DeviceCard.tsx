@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { StatusChip } from "@/components/Status";
-import { NATIVE_PLATFORMS, type NativePlatform, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
+import { NATIVE_PLATFORMS, type Audience, type NativePlatform, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import type { LookupService } from "@/lib/contracts/lookupDisclosure";
 import settings from "../../settings.module.css";
 import styles from "./surfaces.module.css";
@@ -16,6 +16,18 @@ import { activeLookupProvider, deviceActionsPermission, deviceCommandsPermission
 export const DEVICE_LABELS = { android: "Phone", android_tv: "TV", macos: "Mac", linux: "Linux PC" } as const satisfies Record<NativePlatform, string>;
 /** A device is connected only while the runtime holds a signed connection for it; approval alone is not a connection. */
 export const deviceStatus = (row: NativeSurface) => row.connected ? row.visible ? "Connected" : "Connected · in the background" : "Offline";
+/**
+ * What kind of screen this is, in the owner's words. Cosmos sends a reply to
+ * the screen it suits, so the owner should be able to read which kind each
+ * device is — taken from what the device declared when it was approved, never
+ * from what operating system it happens to run.
+ */
+const AUDIENCE: Record<Audience, string> = {
+  room: "Everyone in the room can see this one.",
+  handheld: "This one travels with you.",
+  desk: "This is a screen you sit at.",
+};
+const AUDIENCE_UNDECLARED = "This device has not said what kind of screen it is. Approve it again and Cosmos can send each reply to the screen that suits it.";
 const SCREEN_CONTEXT = "When you ask about what is on this device’s screen, Cosmos reads the visible text once and sends it to the assistant model.";
 const SCREEN_CONTEXT_PRIVACY = "The reply stays private to this device. It is never spoken and never shown on a shared screen.";
 const TRUST = "Approved for shared text requests, one shared reply card and one spoken reply while its app is in front. It cannot use the microphone, read media context or private memories, or act on other devices. Approval is not proof of a connection or of delivery: a card or spoken reply counts only after the app acknowledges it, and Cosmos cannot tell who is in the room.";
@@ -129,6 +141,8 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
       <button type="button" className={styles.quiet} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Manage"}</button>
     </div>
     {open ? <div className={styles.manage}>
+      {/* Read-only: what kind of screen this is, from its own approved manifest. */}
+      <p className={styles.line}>{row.audience ? AUDIENCE[row.audience] : AUDIENCE_UNDECLARED}</p>
       {offerSetup ? <div className={styles.setup} role="group" aria-label="Set up the usual permissions">
         {setup === null ? <>
           <p className={styles.line}>Turn on spoken replies, web lookup{phone ? ", place lookup and what's on the screen" : " and place lookup"} in one go. Cosmos confirms each one separately.</p>

@@ -1,5 +1,5 @@
 import { parseAdmission, parseFrame, parseRoomConnection, publicText, renderContentPayload, ROOM_PAYLOAD_BYTES,
-  type BrowserControl, type RenderCommand, type RoomConnection, type Stamp } from "./contracts/ambianceRuntime";
+  type BrowserControl, type RenderCommand, type RoomConnection, type RoutingTarget, type Stamp } from "./contracts/ambianceRuntime";
 import type { SurfaceConnection } from "./contracts/surfaces";
 import { createBrowserRoom, type BrowserRoom } from "./browserRoom";
 import { describeTurn, NO_STATUS, statusLine, type StatusLine } from "./turnOutcome";
@@ -91,7 +91,7 @@ export class BrowserRuntime {
     if (incarnation) this.failureHandler?.(incarnation);
     this.status(line);
   }
-  private send(message: { kind: "input"; text: string } | { kind: "control"; control: BrowserControl }, instanceId = crypto.randomUUID()) {
+  private send(message: { kind: "input"; text: string; target?: RoutingTarget } | { kind: "control"; control: BrowserControl }, instanceId = crypto.randomUUID()) {
     const generation = this.generation; const room = this.room; const bootstrap = this.bootstrap;
     if (!room || !bootstrap || this.pending >= 16) return Promise.reject(new Error("busy_or_inactive"));
     const stamp: Stamp = { epoch: bootstrap.epoch, sequence: ++this.sequence, instanceId };
@@ -203,11 +203,16 @@ export class BrowserRuntime {
       if (generation === this.generation && this.current === command) this.fail(statusLine("Cannot confirm", "This browser could not confirm it showed the reply."));
     } finally { if (generation === this.generation) this.acknowledging.delete(command.actionId); }
   }
-  async input(text: string) {
+  /**
+   * One request. Cosmos decides where the reply goes; `target` is the owner's
+   * own override for this one request, and it is left out of the message
+   * entirely when there is none, so an ordinary request keeps its plain digest.
+   */
+  async input(text: string, target?: RoutingTarget) {
     if (!publicText(text)) { this.status(statusLine("", "That request is too long. Shorten it and send again.")); return; }
     const generation = this.generation; this.status(statusLine("Working"));
     try {
-      const result = await this.send({ kind: "input", text });
+      const result = await this.send(target ? { kind: "input", text, target } : { kind: "input", text });
       if (generation !== this.generation) return;
       this.turn = { turnId: result.turnId as string, generation: result.generation as number };
       this.status(statusLine("Waiting for a device"));

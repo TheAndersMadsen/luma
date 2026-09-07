@@ -1,7 +1,7 @@
 import { createHash, webcrypto } from "node:crypto";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { legacySpeechPosture, NATIVE_APPROVAL, nativePosture, type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
+import { legacySpeechPosture, legacyVoicePosture, NATIVE_APPROVAL, nativePosture, type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import { Devices } from "./Devices";
 import { fingerprintLines } from "./fingerprint";
 
@@ -16,9 +16,9 @@ const descriptor: NativeDescriptor = {
 const serialized = JSON.stringify(descriptor);
 const first: NativeSurface = { ...nativePosture("android_tv"), surfaceId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   enrollmentId: descriptor.enrollmentId, platform: descriptor.platform, revision: 1, publicKeyFingerprint: fingerprint, revoked: false,
-  display: true, speech: true, actions: ["action.play"], confirms: false, connected: false, visible: false, privateDisplay: false };
+  display: true, speech: true, actions: ["action.play"], confirms: false, audience: "room", connected: false, visible: false, privateDisplay: false };
 const second: NativeSurface = { ...first, ...nativePosture("linux"), surfaceId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-  enrollmentId: "22222222-2222-2222-2222-222222222222", platform: "linux", revision: 7, actions: ["action.open"], confirms: true };
+  enrollmentId: "22222222-2222-2222-2222-222222222222", platform: "linux", revision: 7, actions: ["action.open"], confirms: true, audience: "desk" };
 const path = "/api/surfaces/native";
 const approved = "Approved. Cosmos shows replies on this device while its app is in front.";
 const removed = "Removed. This device no longer shows replies.";
@@ -569,4 +569,21 @@ it("offers nothing to restore when the device held nothing, and never claims a p
   approve();
   await screen.findByText(approved);
   expect(screen.queryByRole("region", { name: "Restore permissions" })).not.toBeInTheDocument();
+});
+
+/*
+ * The review step tells the owner what approving an already-approved device
+ * again is for. It reads that off what the device's current approval does not
+ * declare, so it never offers back something the device already has.
+ */
+it("says what reapproving an earlier profile actually gains, and never offers back what the device already has", async () => {
+  const acting: NativeSurface = { ...first, ...legacyVoicePosture("android_tv"), revision: 4, actions: ["action.play"], confirms: false, audience: null };
+  upstream([], acting); render(<Devices />); await ready(); openAdd(); await review();
+  expect(screen.getByText("This device has not said what kind of screen it is. Approving it again lets Cosmos send each kind of reply to the screen that suits it, and its app reconnects.")).toBeVisible();
+  expect(screen.queryByText(/before Cosmos could act on a device/u)).toBeNull();
+  cleanup(); vi.unstubAllGlobals();
+  // A device from before device actions is told about both, in one sentence.
+  const older: NativeSurface = { ...first, ...legacySpeechPosture(), revision: 4, actions: [], confirms: false, audience: null };
+  upstream([], older); render(<Devices />); await ready(); openAdd(); await review();
+  expect(screen.getByText("This device was approved before Cosmos could act on a device. Approving it again lets you choose what it may open, play or run, lets Cosmos send each kind of reply to the screen that suits it, and its app reconnects.")).toBeVisible();
 });

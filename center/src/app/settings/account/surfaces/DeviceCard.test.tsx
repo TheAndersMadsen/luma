@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { nativePosture, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
+import { legacySpeechPosture, legacyVoicePosture, nativePosture, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import { SPEECH_DISCLOSURE_APPROVAL } from "@/lib/contracts/speechDisclosure";
 import { LOOKUP_SERVICES, type LookupProvider } from "@/lib/contracts/lookupDisclosure";
 import { PRIVATE_DISPLAY_APPROVAL } from "@/lib/contracts/privateDisplay";
@@ -12,7 +12,7 @@ import { fingerprintLines } from "./fingerprint";
 const fingerprint = createHash("sha256").update("device").digest("hex");
 const row: NativeSurface = { ...nativePosture("android"), surfaceId: "11111111-1111-4111-8111-111111111111", enrollmentId: "22222222-2222-4222-8222-222222222222",
   platform: "android", revision: 3, publicKeyFingerprint: fingerprint, revoked: false, display: true, speech: true,
-  actions: ["action.open", "action.route"], confirms: true, connected: true, visible: true, privateDisplay: false };
+  actions: ["action.open", "action.route"], confirms: true, audience: "handheld", connected: true, visible: true, privateDisplay: false };
 const searx: LookupProvider = { provider: "searxng", endpoint: "https://search.example.test/search", configurationDigest: "a".repeat(64) };
 const serp: LookupProvider = { provider: "serp_api", endpoint: "https://serpapi.com/search.json", configurationDigest: "b".repeat(64) };
 const google: LookupProvider = { provider: "google_places", endpoint: "https://places.googleapis.com/v1/places:searchText", configurationDigest: "c".repeat(64) };
@@ -333,9 +333,9 @@ it("Details shows identifiers on demand and Remove this device asks first, then 
  * never sent and the switch alone never grants anything.
  */
 const mac: NativeSurface = { ...nativePosture("macos"), ...row, platform: "macos", manifest: nativePosture("macos").manifest,
-  actions: ["action.open", "action.run"], confirms: true };
+  actions: ["action.open", "action.run"], confirms: true, audience: "desk" };
 const tv: NativeSurface = { ...nativePosture("android_tv"), ...row, platform: "android_tv", manifest: nativePosture("android_tv").manifest,
-  actions: ["action.play"], confirms: false };
+  actions: ["action.play"], confirms: false, audience: "room" };
 const add = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
 it("says once that these apply to this device only, and offers only the operations this device's manifest declares", async () => {
@@ -472,4 +472,41 @@ it("lets a phone be allowed only to show the way somewhere, without a list it ne
   fireEvent.click(screen.getByRole("button", { name: "Save what it may do" }));
   await screen.findByText("Cosmos confirmed what this device may do.");
   expect(JSON.parse(String(posts(mock)[0][1]?.body)).policy).toEqual({ maximumClass: "shared_room", route: { app: "google_maps" } });
+});
+
+/*
+ * Cosmos sends a reply to the screen that suits it, so the owner should be
+ * able to read which kind of screen each device is. It is what the device
+ * declared when it was approved, not what operating system it runs — and a
+ * device that has never declared one says exactly that.
+ */
+it("says in plain words what kind of screen the device is, from what it declared and not from its platform", async () => {
+  const cases: [NativeSurface, string][] = [
+    [row, "This one travels with you."],
+    [mac, "This is a screen you sit at."],
+    [tv, "Everyone in the room can see this one."],
+    [{ ...row, ...legacySpeechPosture(), audience: null, actions: [], confirms: false },
+      "This device has not said what kind of screen it is. Approve it again and Cosmos can send each reply to the screen that suits it."],
+  ];
+  for (const [device, expected] of cases) {
+    cosmos(); render(<DeviceCard {...props} row={device} />); await settled(); manage();
+    expect(screen.getByText(expected)).toBeVisible();
+    // It is a statement, never a control: nothing here changes it.
+    expect(screen.queryByRole("switch", { name: expected })).toBeNull();
+    // And it never names the operating system where the owner reads it.
+    for (const jargon of [/audience/iu, /handheld/iu, /manifest/iu, /profile/iu]) expect(screen.queryByText(jargon)).toBeNull();
+    cleanup(); vi.unstubAllGlobals();
+  }
+});
+
+/** A device still on an older profile is the reason the line exists; reapproving is the one thing to do. */
+it("tells a device that has not declared a screen apart from one that has", async () => {
+  const older: NativeSurface = { ...mac, ...legacyVoicePosture("macos"), audience: null };
+  cosmos(); render(<DeviceCard {...props} row={older} />); await settled(); manage();
+  expect(screen.getByText(/has not said what kind of screen it is/u)).toBeVisible();
+  expect(screen.queryByText("This is a screen you sit at.")).toBeNull();
+  cleanup(); vi.unstubAllGlobals();
+  cosmos(); render(<DeviceCard {...props} row={mac} />); await settled(); manage();
+  expect(screen.getByText("This is a screen you sit at.")).toBeVisible();
+  expect(screen.queryByText(/has not said what kind of screen it is/u)).toBeNull();
 });

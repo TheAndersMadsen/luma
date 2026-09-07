@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TabSwitch, useSurfaceTab } from "@/app/settings/account/surfaces/TabDisplay";
 import type { BrowserRuntime } from "@/lib/browserRuntime";
-import type { ChoicesContent, PlacesContent, RenderCommand } from "@/lib/contracts/ambianceRuntime";
+import { ROUTING_TARGETS, type ChoicesContent, type PlacesContent, type RenderCommand, type RoutingTarget } from "@/lib/contracts/ambianceRuntime";
 import { parsePlaceAttribution, type PlaceAttributionPart } from "@/lib/placeAttribution";
 import styles from "./browserDisplay.module.css";
 
@@ -170,6 +170,18 @@ export function CommittedCard({ command, runtime, onChoose }: {
 const EXAMPLES = ["Find cafés near me", "Show my notes about the kitchen", "What is the weather today?"] as const;
 /** While one of these is the state, the turn is still running and Cancel task is worth offering. */
 const OPEN_STATES: readonly string[] = ["Working", "Waiting for a device", "Waiting for you"];
+/**
+ * Cosmos reads what the answer is and sends it to the screen that suits it, so
+ * there is no destination to choose and the panel names none. Naming one is an
+ * override for the next request, and it is a preference among the devices that
+ * could already take the reply — never a promise that it goes there.
+ */
+const ANYWHERE = "Cosmos chooses the device";
+const DESTINATION: Record<RoutingTarget, string> = {
+  browser: "Prefer this browser", macos: "Prefer your Mac", linux: "Prefer your Linux PC",
+  android: "Prefer your phone", android_tv: "Prefer your TV",
+};
+const OVERRIDDEN = "Cosmos still moves the reply if that device cannot take it.";
 
 /**
  * The Ask Cosmos panel: what was just sent, where the turn stands, the card the
@@ -181,6 +193,8 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
   const [draft, setDraft] = useState("");
   const [sent, setSent] = useState("");
   const [sending, setSending] = useState(false);
+  /** No destination is the default, and an override is remembered for this session only. */
+  const [target, setTarget] = useState<RoutingTarget | "">("");
   const ready = active && tab.tabStatus === "visible";
   /*
    * The display is ON and this tab is simply behind another one. That is not
@@ -188,7 +202,7 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
    * a switch that was already on. It is one thing to do, and only one.
    */
   const backgrounded = active && tab.tabStatus === "hidden";
-  useEffect(() => { if (!ready) { setDraft(""); setSent(""); setSending(false); } }, [ready]);
+  useEffect(() => { if (!ready) { setDraft(""); setSent(""); setSending(false); setTarget(""); } }, [ready]);
   const status = tab.status;
   const turnOpen = OPEN_STATES.includes(status.title);
   const command = ready ? tab.command : null;
@@ -198,7 +212,7 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
   function send(text: string) {
     if (!ready || sending || !text.trim()) return;
     setSent(text.trim()); setDraft(""); setSending(true);
-    void tab.input(text.trim()).finally(() => setSending(false));
+    void tab.input(text.trim(), target || undefined).finally(() => setSending(false));
   }
   function promptKeys(event: React.KeyboardEvent<HTMLInputElement>) {
     if (draft.length || command?.content.kind !== "choices" || !/^[1-8]$/u.test(event.key)) return;
@@ -234,8 +248,14 @@ export function BrowserDisplay({ active = true }: { active?: boolean }) {
       <button type="submit" className={styles.send} disabled={!ready || sending || !draft.trim()}>Send</button>
     </form>
     <div className={styles.tray}>
-      {ready ? <span className={styles.destination} title="Cosmos may still answer on another device it thinks suits the reply better.">→ This screen</span> : <span />}
+      {/* Quiet by default: it reads as "Cosmos chooses", never as a question. */}
+      {ready ? <select className={styles.destination} aria-label="Where the reply goes" value={target}
+        onChange={event => setTarget(event.target.value as RoutingTarget | "")}>
+        <option value="">{ANYWHERE}</option>
+        {ROUTING_TARGETS.map(kind => <option key={kind} value={kind}>{DESTINATION[kind]}</option>)}
+      </select> : <span />}
       {turnOpen ? <button type="button" className={styles.trayAction} onClick={tab.cancel}>Cancel task</button> : null}
     </div>
+    {ready && target ? <p className={styles.override} role="status">{OVERRIDDEN}</p> : null}
   </div>;
 }

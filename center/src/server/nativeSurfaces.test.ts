@@ -22,7 +22,7 @@ const publicKey = keyBytes.toString("base64url");
 const publicKeyFingerprint = createHash("sha256").update(keyBytes).digest("hex");
 const approval = { enrollmentId, publicKey, platform: "macos", approval: NATIVE_APPROVAL, expectedRevision: 0 };
 const native = { ...nativePosture("macos"), surfaceId, enrollmentId, platform: "macos", revision: 1, publicKeyFingerprint, revoked: false, display: true, speech: true,
-  actions: ["action.open", "action.run"], confirms: true, connected: false, visible: false, privateDisplay: false };
+  actions: ["action.open", "action.run"], confirms: true, audience: "desk", connected: false, visible: false, privateDisplay: false };
 const surfaceContext = { params: Promise.resolve({ surfaceId }) };
 const enrollmentContext = { params: Promise.resolve({ enrollmentId }) };
 
@@ -179,7 +179,7 @@ it("owner lookup includes revoked metadata, canonicalizes the enrollment route a
 
 it("lists active native metadata only and rejects duplicate, oversized and elevated projections", async () => {
   const second = { ...native, ...nativePosture("android_tv"), surfaceId: otherId, enrollmentId: otherId, platform: "android_tv",
-    actions: ["action.play"], confirms: false };
+    actions: ["action.play"], confirms: false, audience: "room" };
   vi.mocked(fetch).mockResolvedValue(Response.json({ native: [{ ...native, token: "secret" }, second], secret: "not-owner-metadata" }));
   const result = await list();
   expect(result.status).toBe(200);

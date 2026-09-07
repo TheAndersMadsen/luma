@@ -14,8 +14,15 @@ const kinds = new Map([[phone, "android"], [mac, "macos"], [tv, "android_tv"], [
 let sequence = 0;
 const event = (data: Record<string, unknown>, receipt_ms = 1_757_000_000_000 + sequence * 1000) =>
   ({ version: 3, principal: "U:owner", sequence: ++sequence, previous_hash: "a".repeat(64), receipt_ms, data });
-const candidate = (surface_id: string, channel: string, blocker: string | null) =>
-  ({ surface_id, channel, blocker, score_version: 1, shape_fit: 10, origin_affinity: 0, hint: 0, preference: 0 });
+/**
+ * One weighed device, as the runtime logs it. `shape_fit` is zero for a device
+ * that was blocked and stands on the eligible floor otherwise; `attention` is
+ * the one term that may be negative, and it is what "not in front" looks like
+ * for a device that was still eligible.
+ */
+const candidate = (surface_id: string, channel: string, blocker: string | null,
+  shape_fit = blocker === null ? 1200 : 0, attention = 0) =>
+  ({ surface_id, channel, blocker, score_version: 3, shape_fit, origin_affinity: 0, hint: 0, attention, preference: 0 });
 const enrollment = { version: 2, principal: "U:owner", sequence: ++sequence, previous_hash: "", kind: "surface.approved", surface_id: phone, revision: 1, receipt_ms: 1, visible: false, approved_manifest: {}, binding_digest: "b".repeat(64) };
 
 function ledger() {
@@ -81,16 +88,16 @@ it("folds the ledger into newest-first turns and says in plain words where each 
     ["Asked from your phone", "Shown on your Mac"],
   ]);
   expect(rows[7].why).toEqual({ candidates: [
-    "Your Mac could show a card.", "Your phone could show a card.", "Your TV could not show a card — its app was not in front.",
+    "Your Mac could show a card.", "Your phone could show a card.", "Your TV could not show a card — it was not connected.",
     "Your phone could not speak it — it cannot speak this.",
-  ], events: [], hint: "You asked for the Mac", privacy: "This reply was safe to show on a screen other people can see.", expression: false });
+  ], events: [], choice: [], hint: "You asked for the Mac", privacy: "This reply was safe to show on a screen other people can see.", expression: false });
   expect(rows[6].why).toEqual({ candidates: [
     "Your phone could show a card.", "Your Mac could not show a card — private content is not allowed there.",
     "A browser could not show a card — private content is not allowed there.",
-  ], events: [], hint: null, privacy: "This reply was private to you.", expression: true });
+  ], events: [], choice: [], hint: null, privacy: "This reply was private to you.", expression: true });
   expect(rows[4].why.candidates).toEqual(["A browser could not show a card — private content is not allowed there.",
     "Your TV could not show a card — private content is not allowed there."]);
-  expect(rows[0].why).toEqual({ candidates: [], events: [], hint: null, privacy: "This reply was safe to show on a screen other people can see.", expression: false });
+  expect(rows[0].why).toEqual({ candidates: [], events: [], choice: [], hint: null, privacy: "This reply was safe to show on a screen other people can see.", expression: false });
   expect(rows.map(row => row.startedAt)).toEqual([...rows.map(row => row.startedAt)].sort((a, b) => b - a));
   const text = JSON.stringify(rows);
   for (const secret of ["c".repeat(64), "d".repeat(64), "e".repeat(64), gone, phone, "U:owner", "notes"]) expect(text).not.toContain(secret);
@@ -279,7 +286,115 @@ it("folds identical candidate sentences into one, counted, instead of saying the
   const mixed = event({ kind: "decision", turn_id: turn(40), generation: 1, action_id: action(40), privacy: "shared_room",
     candidates: [candidate(tabs[0], "visual.card", "unavailable"), candidate(tabs[1], "visual.card", "privacy")] });
   expect(activityRows(parseLedgerTurns({ events: [began, mixed] }), many)[0].why.candidates).toEqual([
-    "A browser could not show a card — its app was not in front.",
+    "A browser could not show a card — it was not connected.",
     "A browser could not show a card — private content is not allowed there.",
   ]);
+});
+
+/*
+ * The runtime now reads what an answer is and sends it to the screen that
+ * suits it. The owner should be able to read that back as a sentence: what
+ * kind of reply it was, which screen that kind belongs on, and which other
+ * screens would have done. No score and no weight ever reaches the page.
+ */
+const shaped = (shape: string | undefined, candidates: unknown[]) =>
+  event({ kind: "decision", turn_id: turn(50), generation: 1, action_id: action(50), privacy: "shared_room",
+    ...(shape === undefined ? {} : { shape }), candidates });
+
+it("says what kind of answer it was and which screen that kind belongs on", () => {
+  const began = event({ kind: "turn_began", turn_id: turn(50), generation: 1, origin: mac, request_digest: "c".repeat(64), privacy: "shared_room" });
+  const why = (decision: unknown) => activityRows(parseLedgerTurns({ events: [began, decision] }), kinds)[0].why;
+
+  // A list belongs on the screen everyone in the room can see.
+  expect(why(shaped("roster", [candidate(tv, "visual.card", null, 1200), candidate(mac, "visual.card", null, 1120)])).choice).toEqual([
+    "This was a list to choose from, and that belongs on your TV.",
+    "Your Mac could have shown a card, but your TV suits this better.",
+  ]);
+  // Something to sit and read belongs on the screen you are sitting at.
+  expect(why(shaped("passage", [candidate(mac, "visual.card", null, 1200), candidate(tv, "visual.card", null, 1040)])).choice).toEqual([
+    "This was longer text to sit and read, and that belongs on your Mac.",
+    "Your TV could have shown a card, but your Mac suits this better.",
+  ]);
+  // Two personal screens suit a glance equally; the page says so rather than
+  // inventing a reason for the one that happened to win.
+  expect(why(shaped("note", [candidate(mac, "visual.card", null, 1200), candidate(phone, "visual.card", null, 1200)])).choice).toEqual([
+    "This was a short card to take in at a glance, and that belongs on your Mac.",
+    "Your phone suited it just as well.",
+  ]);
+  // Equally suitable, and behind another window: the busy-or-locked term is
+  // why it lost, and saying only "just as well" would leave that unexplained.
+  expect(why(shaped("note", [candidate(mac, "visual.card", null, 1200), candidate(phone, "visual.card", null, 1200, -20)])).choice[1])
+    .toBe("Your phone suited it just as well, but its app was not in front.");
+  // Devices of the same kind fold, exactly as the candidate lines do.
+  const tabs = [0, 1].map(index => `d${index}dddddd-dddd-4ddd-8ddd-dddddddddd0${index}`);
+  const folded = shaped("passage", [candidate(mac, "visual.card", null, 1200), ...tabs.map(id => candidate(id, "visual.card", null, 1040))]);
+  expect(activityRows(parseLedgerTurns({ events: [began, folded] }), new Map([...kinds, ...tabs.map(id => [id, "browser"] as const)]))[0].why.choice[1])
+    .toBe("2 browsers could have shown a card, but your Mac suits this better.");
+  // A destination the owner named outranks the fit, so where it belonged and
+  // where it went are two separate facts and neither is hidden.
+  const hinted = event({ kind: "decision", turn_id: turn(50), generation: 1, action_id: action(50), privacy: "shared_room",
+    shape: "roster", hint: "macos", candidates: [candidate(mac, "visual.card", null, 1120), candidate(tv, "visual.card", null, 1200)] });
+  expect(why(hinted).choice).toEqual([
+    "This was a list to choose from. It belongs on your TV, and Cosmos sent it to your Mac because you asked for that.",
+  ]);
+  expect(why(hinted).hint).toBe("You asked for the Mac");
+  // Every channel is named in the owner's words when it could have been used.
+  expect(why(shaped("play", [candidate(tv, "action.play", null, 1200), candidate(phone, "action.play", null, 1120)])).choice[1])
+    .toBe("Your phone could have played it, but your TV suits this better.");
+  expect(why(shaped("utterance", [candidate(pin, "audio.tts", null, 1200), candidate(tv, "audio.tts", null, 1120)])).choice).toEqual([
+    "This was a short answer to say out loud, and that belongs on your Ai Pin.",
+    "Your TV could have spoken it, but your Ai Pin suits this better.",
+  ]);
+  // A turn decided before the runtime bound a shape says nothing about one,
+  // and a turn where nothing was eligible has no choice to explain.
+  expect(why(shaped(undefined, [candidate(mac, "visual.card", null, 1200)])).choice).toEqual([]);
+  expect(why(shaped("roster", [candidate(mac, "visual.card", "privacy")])).choice).toEqual([]);
+  // Not one line of it is a number.
+  expect(JSON.stringify(why(shaped("roster", [candidate(tv, "visual.card", null, 1200), candidate(mac, "visual.card", null, 1120)]))))
+    .not.toMatch(/1200|1120|score|fit|weight/iu);
+});
+
+it("keeps a device in the background apart from a device that is not connected", () => {
+  const began = event({ kind: "turn_began", turn_id: turn(51), generation: 1, origin: pin, request_digest: "c".repeat(64), privacy: "shared_room" });
+  const decision = event({ kind: "decision", turn_id: turn(51), generation: 1, action_id: action(51), privacy: "shared_room",
+    shape: "utterance", candidates: [candidate(pin, "audio.tts", null, 1200), candidate(mac, "audio.tts", "unattended"),
+      candidate(tv, "audio.tts", "unavailable")] });
+  const { candidates } = activityRows(parseLedgerTurns({ events: [began, decision] }), kinds)[0].why;
+  expect(candidates).toEqual([
+    "Your Ai Pin could speak it.",
+    "Your Mac could not speak it — its app was not in front.",
+    "Your TV could not speak it — it was not connected.",
+    "A device in the background is still connected. Only speech is lost, because speech cannot wait for it.",
+  ]);
+  // Several of a kind read as several, and the reminder is still said once.
+  const macs = [0, 1].map(index => `b${index}bbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb0${index}`);
+  const many = new Map([...kinds, ...macs.map(id => [id, "macos"] as const)]);
+  const several = event({ kind: "decision", turn_id: turn(51), generation: 1, action_id: action(51), privacy: "shared_room",
+    shape: "utterance", candidates: macs.map(id => candidate(id, "audio.tts", "unattended")) });
+  expect(activityRows(parseLedgerTurns({ events: [began, several] }), many)[0].why.candidates).toEqual([
+    "2 Macs could not speak it — their apps were not in front.",
+    "A device in the background is still connected. Only speech is lost, because speech cannot wait for it.",
+  ]);
+});
+
+it("rejects a shape or a weighing term it has never seen rather than reading it as something else", () => {
+  const began = event({ kind: "turn_began", turn_id: turn(52), generation: 1, origin: pin, request_digest: "c".repeat(64), privacy: "shared_room" });
+  const decision = (data: Record<string, unknown>) =>
+    event({ kind: "decision", turn_id: turn(52), generation: 1, action_id: action(52), privacy: "shared_room", candidates: [], ...data });
+  for (const bad of [
+    decision({ shape: "hologram" }),
+    decision({ shape: null }),
+    decision({ candidates: [{ ...candidate(mac, "visual.card", null), shape_fit: -1 }] }),
+    decision({ candidates: [{ ...candidate(mac, "visual.card", null), shape_fit: "high" }] }),
+    decision({ candidates: [{ ...candidate(mac, "visual.card", null), attention: 1.5 }] }),
+    decision({ candidates: [{ ...candidate(mac, "visual.card", null), attention: "busy" }] }),
+  ]) {
+    expect(() => parseLedgerTurns({ events: [began, bad] }), JSON.stringify(bad)).toThrow();
+  }
+  // A decision logged before the busy-or-locked term existed carries none, and
+  // is read as saying nothing about it rather than as saying it was in front.
+  const { attention: _attention, ...older } = candidate(mac, "visual.card", null, 1200);
+  const [turnRow] = parseLedgerTurns({ events: [began, decision({ shape: "note", candidates: [older, candidate(phone, "visual.card", null, 1200)] })] });
+  expect(turnRow.candidates.map(item => item.background)).toEqual([false, false]);
+  expect(activityRows([turnRow], kinds)[0].why.choice[1]).toBe("Your phone suited it just as well.");
 });

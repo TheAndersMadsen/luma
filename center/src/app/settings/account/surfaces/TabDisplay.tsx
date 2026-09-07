@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Switch } from "@/components/Status";
 import { BrowserRuntime } from "@/lib/browserRuntime";
 import { NO_STATUS, type StatusLine } from "@/lib/turnOutcome";
-import type { RenderCommand } from "@/lib/contracts/ambianceRuntime";
+import type { RenderCommand, RoutingTarget } from "@/lib/contracts/ambianceRuntime";
 import styles from "./surfaces.module.css";
 import { SurfaceTab, type TabStatus } from "./surfaceTab";
 
@@ -42,7 +42,7 @@ export function useSurfaceTab(active = true) {
     leave() { tab.current?.leave(); },
     cancel() { void tab.current?.runtime.cancel(); },
     /** Resolves when Cosmos has admitted the request or refused it, so the composer can stay disabled until then. */
-    input(text: string) { return tab.current?.runtime.input(text) ?? Promise.resolve(); },
+    input(text: string, target?: RoutingTarget) { return tab.current?.runtime.input(text, target) ?? Promise.resolve(); },
   };
 }
 
