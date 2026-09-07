@@ -205,14 +205,57 @@ pub(crate) fn command(action: &Action, card: Option<&Card>) -> Option<Value> {
             }
             card.value()
         }
-        SemanticIntent::InformationalSpeech { .. }
-        | SemanticIntent::DeviceAction { .. }
-        | SemanticIntent::Confirmation { .. } => return None,
+        SemanticIntent::InformationalSpeech { .. } | SemanticIntent::DeviceAction { .. } => {
+            return None;
+        }
     };
     Some(
         json!({"version":1,"actionId":action.id,"turnId":action.turn_id,"generation":action.generation,"surfaceId":action.surface_id,"incarnation":action.incarnation,"channel":"visual.card","contentDigest":action.content_digest,"content":content,"expiresAt":action.display_expires_at_ms,"privacy":action.privacy}),
     )
 }
+/// Serialization only, in the exact style of a render command. The device
+/// receives the bound command, the key it deduplicates on, and how long it
+/// has to say what happened; it never receives a reason, a fallback or the
+/// candidate the runtime resolved.
+pub(crate) fn act_command(action: &Action) -> Option<Value> {
+    if !action.channel.is_action()
+        || !action.intent.valid()
+        || action.content_digest != action.intent.content_digest()
+    {
+        return None;
+    }
+    let SemanticIntent::DeviceAction { operation } = &action.intent else {
+        return None;
+    };
+    // Derived from the committed claim, never from a wall clock: the device
+    // has the acknowledgment window plus the channel's own report budget,
+    // and never more than the action's own life.
+    let report_by = action
+        .dispatched_at_ms
+        .saturating_add(crate::ambiance::ACK_MS)
+        .saturating_add(operation.report_budget_ms())
+        .min(action.display_expires_at_ms);
+    Some(json!({
+        "version": 1,
+        "actionId": action.id,
+        "turnId": action.turn_id,
+        "generation": action.generation,
+        "surfaceId": action.surface_id,
+        "incarnation": action.incarnation,
+        "channel": action.channel.as_str(),
+        "contentDigest": action.content_digest,
+        "idempotencyKey": crate::ambiance::action::idempotency_key(
+            action.surface_id,
+            action.incarnation,
+            action.id,
+        ),
+        "operation": operation,
+        "expiresAt": action.display_expires_at_ms,
+        "reportBy": report_by,
+        "privacy": action.privacy,
+    }))
+}
+
 async fn status(State(api): State<ApiState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     let principal = owner(&headers, &api)?;
     api.runtime

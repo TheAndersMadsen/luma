@@ -41,14 +41,23 @@ pub struct Approval {
     pub policy: Option<Policy>,
 }
 
-/// What a personal surface learns while a private card waits for it: that
-/// something is waiting, its class, its expiry and which surface asked. It
-/// carries no content; the card arrives through the normal render path once
-/// the surface reports its unlocked foreground.
+/// What a personal surface learns while something waits for it: that
+/// something is waiting, what kind of thing it is, its class, its expiry and
+/// which surface asked. It carries no content; the card or the command
+/// arrives through the normal path once the surface reports its unlocked
+/// foreground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvitationKind {
+    Card,
+    Task,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Invitation {
     pub id: Uuid,
+    pub kind: InvitationKind,
     pub origin_surface: Uuid,
     pub privacy: PrivacyClass,
     pub expires_at_ms: i64,
@@ -164,9 +173,11 @@ impl RuntimeState {
         }
     }
 
-    /// A private card waiting for this surface: proposed for it, above the
-    /// shared-room ceiling, not yet dispatched because its foreground has not
-    /// reported visible.
+    /// What is waiting for this surface: a private card proposed for it above
+    /// the shared-room ceiling, or a device action of any class, in either
+    /// case not yet dispatched because its foreground has not reported
+    /// visible. A phone cannot begin an action in the background, so an
+    /// action waits exactly the way a private card already does.
     pub(super) fn invitation_for(&self, surface: Uuid, now: i64) -> Option<Invitation> {
         let turn = self.turn.as_ref().filter(|t| !t.cancelled && !t.finished)?;
         self.actions
@@ -174,13 +185,26 @@ impl RuntimeState {
             .find(|a| {
                 a.surface_id == surface
                     && a.turn_id == turn.fence.turn_id
-                    && a.channel == Channel::VisualCard
-                    && a.privacy > PrivacyClass::SharedRoom
-                    && a.status == ActionStatus::Proposed
                     && now < a.display_expires_at_ms
+                    && match a.channel {
+                        Channel::VisualCard => {
+                            a.privacy > PrivacyClass::SharedRoom
+                                && a.status == ActionStatus::Proposed
+                        }
+                        channel if channel.is_action() => matches!(
+                            a.status,
+                            ActionStatus::Proposed | ActionStatus::AwaitingGrant
+                        ),
+                        _ => false,
+                    }
             })
             .map(|a| Invitation {
                 id: a.id,
+                kind: if a.channel.is_action() {
+                    InvitationKind::Task
+                } else {
+                    InvitationKind::Card
+                },
                 origin_surface: turn.fence.origin_surface,
                 privacy: a.privacy,
                 expires_at_ms: a.display_expires_at_ms,

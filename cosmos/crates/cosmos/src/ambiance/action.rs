@@ -299,6 +299,42 @@ impl Operation {
         }
     }
 
+    /// How long the executing installation has, after acknowledging, to say
+    /// what happened. It is the channel's published budget, and for a command
+    /// the owner's own entry budget.
+    pub fn report_budget_ms(&self) -> i64 {
+        match self {
+            Self::Open { .. } => 10_000,
+            Self::Route { .. } => 20_000,
+            Self::Play { .. } => 30_000,
+            Self::Run { budget_ms, .. } => *budget_ms,
+        }
+    }
+
+    /// What a person is asked to confirm, in the policy engine's own words.
+    /// The model never sees or writes this.
+    pub fn description(&self, device_kind: &str, class: PrivacyClass) -> Description {
+        let (verb, subject, effect) = match self {
+            Self::Open { label, .. } => ("open", label.clone(), "opens it on that device"),
+            Self::Route { name, .. } => ("route", name.clone(), "starts navigation on that device"),
+            Self::Play { title, .. } => ("play", title.clone(), "starts playback on that device"),
+            Self::Run {
+                label,
+                mutates: true,
+                ..
+            } => ("run", label.clone(), "changes files on that device"),
+            Self::Run { label, .. } => ("run", label.clone(), "does not change files"),
+        };
+        Description {
+            kind: DescriptionKind::DeviceAction,
+            verb: verb.to_owned(),
+            subject,
+            device_kind: device_kind.to_owned(),
+            effect: effect.to_owned(),
+            class,
+        }
+    }
+
     pub fn valid(&self) -> bool {
         match self {
             Self::Open {
@@ -531,6 +567,20 @@ pub enum ReportOutcome {
     Unknown,
 }
 
+impl ReportOutcome {
+    /// The status a reported outcome commits the action to. Every reported
+    /// outcome is terminal: a device says what happened exactly once.
+    pub fn status(self) -> super::ActionStatus {
+        match self {
+            Self::Completed => super::ActionStatus::Completed,
+            Self::Refused => super::ActionStatus::Refused,
+            Self::Failed => super::ActionStatus::Failed,
+            Self::Cancelled => super::ActionStatus::Cancelled,
+            Self::Unknown => super::ActionStatus::OutcomeUnknown,
+        }
+    }
+}
+
 /// The closed evidence vocabulary. No free text crosses this leg except the
 /// owner's own command output, which is content and is handled as content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -541,6 +591,202 @@ pub enum EvidenceKind {
     Playback,
     Command,
     Declined,
+}
+
+/// What a player reported. A launch that cannot be observed further is not
+/// playback, which is why `Launched` can never carry a completed outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackState {
+    Playing,
+    Buffering,
+    Launched,
+}
+
+/// Why a device declined a bound command. The origin never learns this; the
+/// owner reads it in their own ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclineReason {
+    NoHandler,
+    Locked,
+    NotPermitted,
+    Unresolvable,
+    VersionChanged,
+    EntryChanged,
+    NoAttestation,
+}
+
+/// The device's own bounded account of what it observed. Nothing here is
+/// prose: every field is an identifier, a flag, a digest or a number.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum Evidence {
+    Open {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved_app: Option<String>,
+        opened: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        document_digest: Option<String>,
+    },
+    Route {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved_app: Option<String>,
+        launched: bool,
+        navigating: bool,
+    },
+    Playback {
+        provider: String,
+        state: PlaybackState,
+        position_ms: i64,
+        item_digest: String,
+    },
+    Command {
+        entry_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        duration_ms: i64,
+        output_bytes: u32,
+        truncated: bool,
+    },
+    Declined {
+        reason: DeclineReason,
+    },
+}
+
+impl Evidence {
+    pub fn kind(&self) -> EvidenceKind {
+        match self {
+            Self::Open { .. } => EvidenceKind::Open,
+            Self::Route { .. } => EvidenceKind::Route,
+            Self::Playback { .. } => EvidenceKind::Playback,
+            Self::Command { .. } => EvidenceKind::Command,
+            Self::Declined { .. } => EvidenceKind::Declined,
+        }
+    }
+
+    pub fn valid(&self) -> bool {
+        let app = |value: &Option<String>| {
+            value
+                .as_ref()
+                .is_none_or(|id| Locator::App { id: id.clone() }.valid())
+        };
+        match self {
+            Self::Open {
+                resolved_app,
+                document_digest,
+                ..
+            } => app(resolved_app) && document_digest.as_deref().is_none_or(digest_text),
+            Self::Route { resolved_app, .. } => app(resolved_app),
+            Self::Playback {
+                provider,
+                position_ms,
+                item_digest,
+                ..
+            } => {
+                provider_id(provider)
+                    && (0..=86_400_000).contains(position_ms)
+                    && digest_text(item_digest)
+            }
+            Self::Command {
+                entry_id,
+                duration_ms,
+                output_bytes,
+                ..
+            } => {
+                token(entry_id, MAX_ENTRY_ID_BYTES)
+                    && (0..=MAX_BUDGET_MS).contains(duration_ms)
+                    && *output_bytes <= 16 * 1024 * 1024
+            }
+            Self::Declined { .. } => true,
+        }
+    }
+
+    /// Whether this evidence can belong to a command on this channel at all.
+    /// A refusal is legal everywhere; anything else must match the operation.
+    pub fn fits(&self, channel: Channel) -> bool {
+        match self {
+            Self::Declined { .. } => channel.is_action(),
+            Self::Open { .. } => channel == Channel::ActionOpen,
+            Self::Route { .. } => channel == Channel::ActionRoute,
+            Self::Playback { .. } => channel == Channel::ActionPlay,
+            Self::Command { .. } => channel == Channel::ActionRun,
+        }
+    }
+
+    /// Whether this evidence can carry a `completed` outcome. A launch the
+    /// device could not observe further is `unknown`, never `completed`, and
+    /// a non-zero exit code is evidence of a command that ran, not a failure.
+    pub fn proves_completion(&self) -> bool {
+        match self {
+            Self::Open { opened, .. } => *opened,
+            Self::Route { navigating, .. } => *navigating,
+            Self::Playback { state, .. } => *state == PlaybackState::Playing,
+            Self::Command { .. } => true,
+            Self::Declined { .. } => false,
+        }
+    }
+
+    /// The one value the ledger keeps of what the device said.
+    pub fn digest(&self) -> String {
+        hash(serde_json::to_string(self).unwrap_or_default().as_bytes())
+    }
+}
+
+/// Why the runtime told a device to stop. A revoke supersedes remaining work;
+/// it does not un-open an application (§5.4's accepted residue).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevokeReason {
+    Cancelled,
+    Preempted,
+    Superseded,
+    Expired,
+    RevalidationFailed,
+}
+
+/// One dispatched device action per principal at a time, and at most six in a
+/// rolling ten minutes: §4.5(d)'s residual risk is accumulation of low-risk
+/// actions, and §10's answer is a per-session budget.
+pub const BUDGET_WINDOW_MS: i64 = 600_000;
+pub const BUDGET_LIMIT: usize = 6;
+/// A running command must say it is still running at least this often.
+pub const PROGRESS_GRACE_MS: i64 = 10_000;
+pub const MAX_PROGRESS: u64 = 60;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActionBudget {
+    #[serde(default)]
+    pub dispatched_at_ms: Vec<i64>,
+}
+
+impl ActionBudget {
+    pub fn prune(&mut self, now: i64) {
+        self.dispatched_at_ms
+            .retain(|at| now.saturating_sub(*at) < BUDGET_WINDOW_MS);
+        while self.dispatched_at_ms.len() > BUDGET_LIMIT + 2 {
+            self.dispatched_at_ms.remove(0);
+        }
+    }
+
+    pub fn exhausted(&self, now: i64) -> bool {
+        self.dispatched_at_ms
+            .iter()
+            .filter(|at| now.saturating_sub(**at) < BUDGET_WINDOW_MS)
+            .count()
+            >= BUDGET_LIMIT
+    }
+
+    pub fn spend(&mut self, now: i64) {
+        self.dispatched_at_ms.push(now);
+        self.prune(now);
+    }
 }
 
 /// Which runtime-minted candidate a bound action came from.
@@ -1800,8 +2046,8 @@ mod tests {
     // ---- owner permissions and runtime-minted candidates ----
 
     use crate::ambiance::{
-        BrowserProof, OriginProof, RuntimeError, RuntimeOperation, RuntimeResult, RuntimeState,
-        SemanticIntent, TurnFence,
+        Action, ActionStatus, BrowserProof, OriginProof, RoomProof, RuntimeData, RuntimeError,
+        RuntimeOperation, RuntimeResult, RuntimeState, SemanticIntent, TurnFence, grant,
     };
     use crate::surface_registry::{Mutation, Record, hash, transition};
     use std::collections::BTreeMap;
@@ -1921,7 +2167,7 @@ mod tests {
             let turn_id = Uuid::new_v4();
             let proof = match self.proofs.get(&self.origin) {
                 Some(proof) => OriginProof::SequencedRoom {
-                    connection: crate::ambiance::RoomProof::Native(proof.clone()),
+                    connection: RoomProof::Native(proof.clone()),
                     stamp: crate::ambiance::InputStamp {
                         epoch: self.state.ingress[&self.origin].epoch,
                         sequence: self.state.ingress[&self.origin].high_water + 1,
@@ -2455,7 +2701,7 @@ mod tests {
         let bound = events
             .iter()
             .find_map(|event| match event {
-                crate::ambiance::RuntimeData::ActionBound {
+                RuntimeData::ActionBound {
                     candidate,
                     entry_digest,
                     reference_digest,
@@ -2719,7 +2965,7 @@ mod tests {
             events
                 .iter()
                 .find_map(|event| match event {
-                    crate::ambiance::RuntimeData::Decision { candidates, .. } => Some(
+                    RuntimeData::Decision { candidates, .. } => Some(
                         candidates
                             .iter()
                             .map(|c| (c.surface_id, c.blocker))
@@ -2876,6 +3122,1041 @@ mod tests {
             fixture.state.action_channels(&fixture.records, mac),
             vec![Channel::ActionOpen]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Dispatch, ceremony and outcome
+    // -----------------------------------------------------------------------
+
+    impl Fixture {
+        fn proof(&self, surface: Uuid) -> RoomProof {
+            RoomProof::Native(self.proofs[&surface].clone())
+        }
+
+        fn visible(&mut self, surface: Uuid, visible: bool, now: i64) {
+            let proof = self.proofs[&surface].clone();
+            self.state
+                .set_native_visible(&self.records, &proof, visible, now)
+                .unwrap();
+        }
+
+        /// Keep a connection current across a long-running command, exactly
+        /// as an ordinary client heartbeat does.
+        fn heartbeat(&mut self, surface: Uuid, now: i64) {
+            let proof = self.proofs[&surface].clone();
+            self.state
+                .heartbeat_native(&self.records, &proof, now)
+                .unwrap();
+        }
+
+        /// A shared-perceivable origin: it originates and is spoken to, it
+        /// never acts, and it is never a ceremony venue.
+        fn begin_from_pin(&mut self) -> TurnFence {
+            let pin = crate::surface_registry::pin_surface_id("U:owner", "aabb");
+            let record = transition(
+                None,
+                0,
+                pin,
+                &Mutation::ApprovePin {
+                    device_id: "aabb".into(),
+                },
+                NOW,
+            )
+            .unwrap()
+            .0;
+            self.records.insert(pin, record);
+            self.origin = pin;
+            let RuntimeResult::Begun(fence) = self
+                .apply(
+                    RuntimeOperation::Begin {
+                        turn_id: Uuid::new_v4(),
+                        worker: Uuid::new_v4(),
+                        origin: OriginProof::Pin {
+                            device: cosmos_core::AuthenticatedDeviceIdentity::from_edge("aabb")
+                                .unwrap(),
+                            surface_id: pin,
+                            echo_fingerprint: hash(b"pin request"),
+                        },
+                        request_digest: hash(b"pin request"),
+                        privacy_floor: PrivacyClass::Public,
+                    },
+                    NOW + 1,
+                )
+                .unwrap()
+            else {
+                panic!("turn")
+            };
+            fence
+        }
+
+        fn play_policy(&mut self, surface: Uuid) {
+            self.set_actions(
+                surface,
+                Some(Policy {
+                    maximum_class: PrivacyClass::SharedRoom,
+                    open: None,
+                    route: None,
+                    play: Some(PlayPolicy {
+                        providers: vec!["youtube".into()],
+                    }),
+                }),
+            )
+            .unwrap();
+        }
+
+        fn propose(
+            &mut self,
+            fence: &TurnFence,
+            operation: Operation,
+            now: i64,
+        ) -> Result<RuntimeResult, RuntimeError> {
+            self.state
+                .apply(
+                    "U:owner",
+                    &self.records,
+                    RuntimeOperation::Propose {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                        intent: SemanticIntent::DeviceAction { operation },
+                        privacy: PrivacyClass::Public,
+                        hint: None,
+                    },
+                    now,
+                )
+                .map(|(result, _)| result)
+        }
+
+        fn poll(&mut self, surface: Uuid, now: i64) -> Vec<Action> {
+            let connection = self.proof(surface);
+            let RuntimeResult::Pending(actions) = self
+                .state
+                .apply(
+                    "U:owner",
+                    &self.records,
+                    RuntimeOperation::Poll { connection },
+                    now,
+                )
+                .unwrap()
+                .0
+            else {
+                panic!("poll")
+            };
+            actions
+        }
+
+        fn action(&self, id: Uuid) -> crate::ambiance::Action {
+            self.state.actions[&id].clone()
+        }
+
+        fn acknowledge(
+            &mut self,
+            action: &Action,
+            now: i64,
+        ) -> Result<RuntimeResult, RuntimeError> {
+            let connection = self.proof(action.surface_id);
+            self.apply(
+                RuntimeOperation::Ack {
+                    action_id: action.id,
+                    turn_id: action.turn_id,
+                    generation: action.generation,
+                    connection,
+                    channel: action.channel,
+                    content_digest: action.content_digest.clone(),
+                },
+                now,
+            )
+        }
+
+        fn report(
+            &mut self,
+            action: &Action,
+            outcome: ReportOutcome,
+            evidence: Evidence,
+            output: Option<String>,
+            now: i64,
+        ) -> Result<RuntimeResult, RuntimeError> {
+            let connection = self.proof(action.surface_id);
+            self.apply(
+                RuntimeOperation::Report {
+                    connection,
+                    action_id: action.id,
+                    turn_id: action.turn_id,
+                    generation: action.generation,
+                    channel: action.channel,
+                    content_digest: action.content_digest.clone(),
+                    outcome,
+                    evidence,
+                    output,
+                },
+                now,
+            )
+        }
+
+        fn confirmation(&mut self, surface: Uuid, now: i64) -> Option<grant::Request> {
+            let connection = self.proof(surface);
+            let RuntimeResult::Confirmation(request) = self
+                .apply(RuntimeOperation::Confirmation { connection }, now)
+                .unwrap()
+            else {
+                panic!("confirmation")
+            };
+            request
+        }
+
+        fn grant(
+            &mut self,
+            request: &grant::Request,
+            surface: Uuid,
+            granted: bool,
+            attestation: Option<Attestation>,
+            digest: &str,
+            now: i64,
+        ) -> Result<Vec<crate::ambiance::RuntimeData>, RuntimeError> {
+            let incarnation = self.proofs[&surface].incarnation;
+            self.state.resolve_grant(
+                request.grant_id,
+                request.action_id,
+                surface,
+                incarnation,
+                granted,
+                attestation,
+                digest,
+                now,
+            )
+        }
+    }
+
+    fn play(title: &str) -> Operation {
+        Operation::Play {
+            title: title.into(),
+            query: title.into(),
+            providers: vec!["youtube".into()],
+            item_digest: format!("c1{}", "1".repeat(62)),
+        }
+    }
+
+    fn playing() -> Evidence {
+        Evidence::Playback {
+            provider: "youtube".into(),
+            state: PlaybackState::Playing,
+            position_ms: 4_200,
+            item_digest: format!("c1{}", "1".repeat(62)),
+        }
+    }
+
+    fn run_operation() -> Operation {
+        Operation::Run {
+            entry_id: entry().id,
+            label: entry().label,
+            entry_digest: entry().entry_digest(),
+            argv_digest: entry().argv_digest(),
+            budget_ms: entry().budget_ms,
+            mutates: entry().mutates,
+        }
+    }
+
+    /// Visibility is required to begin an effect and never to continue one:
+    /// launching a player backgrounds Cosmos, and an effect must not be
+    /// retired the instant it succeeds.
+    #[test]
+    fn ambiance_device_action_is_claimed_only_by_a_visible_foreground_and_survives_leaving_it() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv"]);
+        let tv = ids[0];
+        fixture.play_policy(tv);
+        let fence = fixture.begin();
+        fixture.visible(tv, false, NOW + 2);
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        // A hidden foreground cannot begin it, and the action waits instead of
+        // failing the poll.
+        fixture.poll(tv, NOW + 3);
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Proposed);
+        fixture.visible(tv, true, NOW + 4);
+        fixture.poll(tv, NOW + 5);
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Dispatched);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 6)
+            .unwrap();
+        // The player is in front now, not Cosmos. The effect continues.
+        fixture.visible(tv, false, NOW + 7);
+        let events = fixture.state.reconcile(&fixture.records, NOW + 8);
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            RuntimeData::ActionChanged { status, .. }
+                if status.terminal()
+        )));
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Acknowledged);
+        // And the report is accepted from a backgrounded installation.
+        fixture
+            .report(
+                &fixture.action(action.id),
+                ReportOutcome::Completed,
+                playing(),
+                None,
+                NOW + 9,
+            )
+            .unwrap();
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Completed);
+    }
+
+    /// An acknowledgment on an action channel means "bound and legal here" and
+    /// sets no outcome; only the device's own final report may, and only with
+    /// evidence that shows what it claims.
+    #[test]
+    fn ambiance_acknowledge_on_an_action_channel_sets_no_turn_outcome_but_a_report_does() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv"]);
+        let tv = ids[0];
+        fixture.play_policy(tv);
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        fixture.poll(tv, NOW + 3);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 4)
+            .unwrap();
+        assert!(fixture.state.turn.as_ref().unwrap().outcome.is_none());
+        assert!(!fixture.state.turn.as_ref().unwrap().finished);
+        // A launch nobody observed is unknown, never completed.
+        let launched = Evidence::Playback {
+            provider: "youtube".into(),
+            state: PlaybackState::Launched,
+            position_ms: 0,
+            item_digest: format!("c1{}", "1".repeat(62)),
+        };
+        assert_eq!(
+            fixture
+                .report(
+                    &fixture.action(action.id),
+                    ReportOutcome::Completed,
+                    launched.clone(),
+                    None,
+                    NOW + 5
+                )
+                .unwrap_err(),
+            RuntimeError::Stale
+        );
+        // Evidence from another channel is not this command's evidence.
+        assert_eq!(
+            fixture
+                .report(
+                    &fixture.action(action.id),
+                    ReportOutcome::Completed,
+                    Evidence::Open {
+                        resolved_app: None,
+                        opened: true,
+                        document_digest: None
+                    },
+                    None,
+                    NOW + 5,
+                )
+                .unwrap_err(),
+            RuntimeError::Stale
+        );
+        assert!(fixture.state.turn.as_ref().unwrap().outcome.is_none());
+        let events = fixture
+            .state
+            .apply(
+                "U:owner",
+                &fixture.records,
+                RuntimeOperation::Report {
+                    connection: fixture.proof(tv),
+                    action_id: action.id,
+                    turn_id: action.turn_id,
+                    generation: action.generation,
+                    channel: action.channel,
+                    content_digest: action.content_digest.clone(),
+                    outcome: ReportOutcome::Unknown,
+                    evidence: launched,
+                    output: None,
+                },
+                NOW + 6,
+            )
+            .unwrap()
+            .1;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeData::ActionReported {
+                outcome: ReportOutcome::Unknown,
+                evidence: EvidenceKind::Playback,
+                ..
+            }
+        )));
+        let outcome = fixture.state.turn.as_ref().unwrap().outcome.unwrap();
+        assert_eq!(
+            (outcome.surface_id, outcome.channel),
+            (tv, Channel::ActionPlay)
+        );
+        assert!(fixture.state.turn.as_ref().unwrap().finished);
+        // Exactly one report per command.
+        assert!(
+            fixture
+                .report(
+                    &fixture.action(action.id),
+                    ReportOutcome::Completed,
+                    playing(),
+                    None,
+                    NOW + 7
+                )
+                .is_err()
+        );
+    }
+
+    /// A command that changes files always confirms, at the installation that
+    /// will carry it out, with the actor evidence its manifest declares.
+    #[test]
+    fn ambiance_grant_is_single_use_venue_bound_and_refuses_a_weaker_attestation() {
+        let (mut fixture, ids) = Fixture::new(&["macos", "android_tv"]);
+        let (mac, tv) = (ids[0], ids[1]);
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, run_operation(), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        // Nothing dispatches without a ceremony.
+        assert_eq!(action.status, ActionStatus::AwaitingGrant);
+        fixture.poll(mac, NOW + 3);
+        assert_eq!(
+            fixture.action(action.id).status,
+            ActionStatus::AwaitingGrant
+        );
+        // A television is bystander-perceivable, so it is never a venue.
+        assert!(fixture.confirmation(tv, NOW + 3).is_none());
+        let request = fixture.confirmation(mac, NOW + 4).unwrap();
+        assert_eq!(request.action_id, action.id);
+        assert_eq!(request.risk, Risk::High);
+        assert_eq!(request.attestation, Attestation::DeviceOwnerAuth);
+        // The description is composed by policy from the bound command and the
+        // owner's own label, and it carries the class.
+        assert_eq!(request.description.verb, "run");
+        assert_eq!(request.description.subject, entry().label);
+        assert_eq!(request.description.device_kind, "macos");
+        assert_eq!(
+            request.description_digest,
+            request.description.content_digest()
+        );
+        // A bare tap cannot mint a high-risk authority, and the answer binds to
+        // the exact sentence the owner read.
+        assert!(
+            fixture
+                .grant(
+                    &request,
+                    mac,
+                    true,
+                    Some(Attestation::ForegroundTap),
+                    &request.description_digest,
+                    NOW + 5
+                )
+                .is_err()
+        );
+        assert!(
+            fixture
+                .grant(
+                    &request,
+                    mac,
+                    true,
+                    Some(Attestation::DeviceOwnerAuth),
+                    &"a".repeat(64),
+                    NOW + 5
+                )
+                .is_err()
+        );
+        // A grant naming this venue never authorises another installation.
+        assert!(
+            fixture
+                .grant(
+                    &request,
+                    tv,
+                    true,
+                    Some(Attestation::DeviceOwnerAuth),
+                    &request.description_digest,
+                    NOW + 5
+                )
+                .is_err()
+        );
+        fixture
+            .grant(
+                &request,
+                mac,
+                true,
+                Some(Attestation::DeviceOwnerAuth),
+                &request.description_digest,
+                NOW + 6,
+            )
+            .unwrap();
+        fixture.poll(mac, NOW + 7);
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Dispatched);
+        // Single use: the grant is consumed in the same transaction that
+        // claimed the command it authorised.
+        assert!(fixture.state.grants.values().all(|grant| grant.consumed));
+        assert!(!fixture.state.granted(action.id, NOW + 8));
+    }
+
+    /// A ceremony expires thirty seconds after the sentence a person could
+    /// read, and a restart voids it: unconfirmed is denied.
+    #[test]
+    fn ambiance_grant_expires_from_the_confirm_frame_and_is_void_after_a_restart() {
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, run_operation(), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        // The command waits for the venue's own foreground before the clock
+        // starts, so a Pin-origin command does not expire on the way to a Mac.
+        fixture.visible(mac, false, NOW + 3);
+        assert!(fixture.confirmation(mac, NOW + 10_000).is_none());
+        assert!(fixture.state.grants.is_empty());
+        // It waits for the venue, not for a clock: the command's own window
+        // is the five minutes a private card gets, plus its report budget.
+        assert!(
+            action.display_expires_at_ms >= NOW + 2 + super::super::personal::PRIVATE_DISPLAY_MS
+        );
+        fixture.visible(mac, true, NOW + 10_001);
+        let request = fixture.confirmation(mac, NOW + 10_002).unwrap();
+        assert_eq!(request.expires_at_ms, NOW + 10_002 + grant::GRANT_MS);
+        // An unanswered ceremony expires and denies by fail-safe default.
+        let events = fixture
+            .state
+            .reconcile(&fixture.records, request.expires_at_ms + 1);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeData::GrantResolved {
+                outcome: grant::Outcome::Expired,
+                ..
+            }
+        )));
+        assert!(!fixture.state.granted(action.id, request.expires_at_ms + 1));
+
+        // A restart mints a fresh worker, the fence rejects every operation on
+        // that turn, and the grant is dropped rather than honoured.
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let fence = fixture.begin();
+        fixture.propose(&fence, run_operation(), NOW + 2).unwrap();
+        let request = fixture.confirmation(mac, NOW + 3).unwrap();
+        fixture.state.turn.as_mut().unwrap().fence.worker = Uuid::new_v4();
+        assert!(
+            fixture
+                .grant(
+                    &request,
+                    mac,
+                    true,
+                    Some(Attestation::DeviceOwnerAuth),
+                    &request.description_digest,
+                    NOW + 4
+                )
+                .is_err()
+        );
+        fixture.state.reconcile(&fixture.records, NOW + 5);
+        assert!(
+            fixture
+                .state
+                .grants
+                .values()
+                .all(|grant| grant.decision.is_none())
+        );
+    }
+
+    /// Six device actions in a rolling ten minutes and one in flight. The
+    /// origin hears the ordinary understated acknowledgment; the owner reads
+    /// the budget row.
+    #[test]
+    fn ambiance_seventh_action_in_ten_minutes_is_budget_blocked() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv"]);
+        let tv = ids[0];
+        fixture.play_policy(tv);
+        let mut at = NOW + 2;
+        for index in 0..BUDGET_LIMIT {
+            let fence = fixture.begin();
+            let RuntimeResult::Proposed(action) = fixture
+                .propose(&fence, play(&format!("Trailer {index}")), at)
+                .unwrap()
+            else {
+                panic!("proposed")
+            };
+            fixture.poll(tv, at);
+            assert_eq!(fixture.action(action.id).status, ActionStatus::Dispatched);
+            fixture.acknowledge(&fixture.action(action.id), at).unwrap();
+            fixture
+                .report(
+                    &fixture.action(action.id),
+                    ReportOutcome::Completed,
+                    playing(),
+                    None,
+                    at,
+                )
+                .unwrap();
+            at += 1_000;
+        }
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, play("Trailer seven"), at).unwrap()
+        else {
+            panic!("proposed")
+        };
+        let events = fixture
+            .state
+            .apply(
+                "U:owner",
+                &fixture.records,
+                RuntimeOperation::Poll {
+                    connection: fixture.proof(tv),
+                },
+                at,
+            )
+            .unwrap()
+            .1;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeData::ActionBudgetExhausted { limit, .. } if *limit as usize == BUDGET_LIMIT
+        )));
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Proposed);
+        // The window rolls: the same six dispatches no longer bar the next.
+        assert!(fixture.state.action_budget.exhausted(at));
+        assert!(!fixture.state.action_budget.exhausted(at + BUDGET_WINDOW_MS));
+    }
+
+    /// A long command stays live on its own progress, not on a registry
+    /// heartbeat, and progress never consumes an ordered ingress slot.
+    #[test]
+    fn ambiance_progress_renews_the_worker_lease_past_seventy_five_seconds() {
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        // The Mac is both the origin and the venue, so the turn outlives the
+        // command on its own connection rather than a browser's lease.
+        let fence = fixture.begin_from(mac);
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, run_operation(), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        let request = fixture.confirmation(mac, NOW + 3).unwrap();
+        fixture
+            .grant(
+                &request,
+                mac,
+                true,
+                Some(Attestation::DeviceOwnerAuth),
+                &request.description_digest,
+                NOW + 4,
+            )
+            .unwrap();
+        fixture.poll(mac, NOW + 5);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 6)
+            .unwrap();
+        let lease = fixture.state.turn.as_ref().unwrap().lease_until_ms;
+        let cursor = fixture.state.ingress[&mac].controls.len();
+        let mut at = NOW + 6;
+        for sequence in 1..=12u64 {
+            at += 9_000;
+            fixture.heartbeat(mac, at);
+            fixture
+                .apply(
+                    RuntimeOperation::Progress {
+                        connection: fixture.proof(mac),
+                        action_id: action.id,
+                        generation: action.generation,
+                        sequence,
+                        elapsed_ms: at - NOW,
+                    },
+                    at,
+                )
+                .unwrap();
+            fixture.state.reconcile(&fixture.records, at);
+        }
+        // Well past the seventy-five second lease and still running.
+        assert!(at - NOW > crate::ambiance::WORKER_LEASE_MS);
+        assert!(fixture.state.turn.as_ref().unwrap().lease_until_ms > lease);
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Running);
+        assert_eq!(fixture.state.ingress[&mac].controls.len(), cursor);
+        // Progress is idempotent by its own sequence.
+        let RuntimeResult::ProgressAccepted { duplicate } = fixture
+            .apply(
+                RuntimeOperation::Progress {
+                    connection: fixture.proof(mac),
+                    action_id: action.id,
+                    generation: action.generation,
+                    sequence: 3,
+                    elapsed_ms: 3_000,
+                },
+                at,
+            )
+            .unwrap()
+        else {
+            panic!("progress")
+        };
+        assert!(duplicate);
+        // A turn with a running effect is not finished, so its outcome can
+        // still be delivered.
+        assert!(!fixture.state.turn.as_ref().unwrap().finished);
+        assert!(
+            fixture
+                .apply(
+                    RuntimeOperation::Finish {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                    },
+                    at,
+                )
+                .is_err()
+        );
+        // Ten seconds of silence and the outcome is unknown, with no retry.
+        fixture
+            .state
+            .reconcile(&fixture.records, at + PROGRESS_GRACE_MS + 1);
+        let action = fixture.action(action.id);
+        assert_eq!(action.status, ActionStatus::OutcomeUnknown);
+        assert_eq!(action.revoked, Some(RevokeReason::Expired));
+        assert_eq!(action.attempts, 1);
+    }
+
+    /// A side-effecting action never repairs to another device, and only an
+    /// idempotent channel retries at all: `action.run` never does.
+    #[test]
+    fn ambiance_device_action_never_repairs_and_retries_only_where_idempotent() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv", "android"]);
+        let (tv, phone) = (ids[0], ids[1]);
+        fixture.play_policy(tv);
+        // A phone declares no player at all, so the owner cannot even write
+        // that permission for it.
+        assert!(
+            fixture
+                .set_actions(
+                    phone,
+                    Some(Policy {
+                        maximum_class: PrivacyClass::SharedRoom,
+                        open: None,
+                        route: None,
+                        play: Some(PlayPolicy {
+                            providers: vec!["youtube".into()],
+                        }),
+                    }),
+                )
+                .is_err()
+        );
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        // A phone declares no player, so the decision names exactly one
+        // eligible surface and no fallback to repair to.
+        assert_eq!(action.surface_id, tv);
+        assert!(action.fallbacks.is_empty());
+        fixture.poll(tv, NOW + 3);
+        // A lost acknowledgment is retried once, on the same surface, with the
+        // same idempotency key.
+        let key = idempotency_key(tv, fixture.proofs[&tv].incarnation, action.id);
+        fixture
+            .state
+            .reconcile(&fixture.records, NOW + 3 + crate::ambiance::ACK_MS);
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Proposed);
+        assert_eq!(fixture.action(action.id).attempts, 1);
+        fixture.poll(tv, NOW + 3 + crate::ambiance::ACK_MS);
+        let retried = fixture.action(action.id);
+        assert_eq!(retried.status, ActionStatus::Dispatched);
+        assert_eq!(retried.surface_id, tv);
+        assert_eq!(
+            idempotency_key(retried.surface_id, retried.incarnation, retried.id),
+            key
+        );
+        // The second loss is unknown, never a third attempt and never another
+        // surface.
+        fixture
+            .state
+            .reconcile(&fixture.records, NOW + 3 + 3 * crate::ambiance::ACK_MS);
+        assert_eq!(
+            fixture.action(action.id).status,
+            ActionStatus::OutcomeUnknown
+        );
+        assert_eq!(fixture.state.actions.len(), 1);
+
+        // A command never retries at all.
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, run_operation(), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        let request = fixture.confirmation(mac, NOW + 3).unwrap();
+        fixture
+            .grant(
+                &request,
+                mac,
+                true,
+                Some(Attestation::DeviceOwnerAuth),
+                &request.description_digest,
+                NOW + 4,
+            )
+            .unwrap();
+        fixture.poll(mac, NOW + 5);
+        fixture
+            .state
+            .reconcile(&fixture.records, NOW + 5 + crate::ambiance::ACK_MS);
+        assert_eq!(
+            fixture.action(action.id).status,
+            ActionStatus::OutcomeUnknown
+        );
+    }
+
+    /// A new request from the owner voids a turn whose effect is still
+    /// running. The stopped task is reported cancelled, never completed.
+    #[test]
+    fn ambiance_new_input_preempts_a_running_effect_and_revokes_it() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv"]);
+        let tv = ids[0];
+        fixture.play_policy(tv);
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        fixture.poll(tv, NOW + 3);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 4)
+            .unwrap();
+        // A second turn would ordinarily be refused while this one is live.
+        let next = fixture.begin();
+        assert_ne!(next.turn_id, fence.turn_id);
+        let revocation = fixture
+            .state
+            .revocations
+            .iter()
+            .find(|revocation| revocation.action_id == action.id)
+            .unwrap();
+        assert_eq!(revocation.reason, RevokeReason::Preempted);
+        assert_eq!(revocation.surface_id, tv);
+        // The preempted effect never becomes a completed one.
+        assert!(!fixture.state.actions.contains_key(&action.id));
+    }
+
+    /// No action channel is eligible above the shared-room ceiling on an
+    /// installation without a current personal declaration, and a television
+    /// can never hold one.
+    #[test]
+    fn ambiance_no_action_channel_is_eligible_above_shared_room_without_a_declaration() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv", "macos"]);
+        let (tv, mac) = (ids[0], ids[1]);
+        fixture.play_policy(tv);
+        fixture.set_actions(mac, Some(open_policy())).unwrap();
+        let open = Operation::Open {
+            locator: Locator::Https {
+                url: "https://github.com/owner/repo".into(),
+            },
+            version: None,
+            position: None,
+            label: "repo".into(),
+        };
+        let blocker = |fixture: &Fixture, surface: Uuid, channel: Channel, privacy| {
+            fixture
+                .state
+                .candidate(
+                    &fixture.records,
+                    &fixture.records[&surface],
+                    fixture.origin,
+                    channel,
+                    privacy,
+                    None,
+                    None,
+                    NOW + 2,
+                )
+                .blocker
+        };
+        assert_eq!(
+            blocker(&fixture, tv, Channel::ActionPlay, PrivacyClass::SharedRoom),
+            None
+        );
+        assert_eq!(
+            blocker(&fixture, tv, Channel::ActionPlay, PrivacyClass::Private),
+            Some(crate::ambiance::policy::Blocker::Privacy)
+        );
+        assert_eq!(
+            blocker(&fixture, mac, Channel::ActionOpen, PrivacyClass::Private),
+            Some(crate::ambiance::policy::Blocker::Privacy)
+        );
+        // A television never becomes personal, whatever the owner writes.
+        assert!(
+            fixture
+                .apply(
+                    RuntimeOperation::SetPrivatePolicy {
+                        surface_id: tv,
+                        approval_revision: fixture.records[&tv].revision,
+                        expected_revision: 0,
+                        policy: Some(crate::ambiance::personal::Policy {
+                            maximum_class: PrivacyClass::Private,
+                        }),
+                    },
+                    NOW,
+                )
+                .is_err()
+        );
+        // The Mac's own declaration lifts its ceiling, and the owner's action
+        // permission is still checked at that class.
+        fixture.allow_private(mac);
+        assert_eq!(
+            blocker(&fixture, mac, Channel::ActionOpen, PrivacyClass::Private),
+            None
+        );
+        fixture.set_actions(mac, None).unwrap();
+        assert_eq!(
+            blocker(&fixture, mac, Channel::ActionOpen, PrivacyClass::Private),
+            Some(crate::ambiance::policy::Blocker::Unavailable)
+        );
+        assert!(!fixture.state.action_permits(&fixture.records, mac, &open));
+    }
+
+    /// Every outcome that is not a committed `completed` produces the same
+    /// sentence, byte for byte: a refusal, a failure, a cancellation, an
+    /// unknown outcome, a privacy suppression, an exhausted budget and a
+    /// capability miss are indistinguishable from a shared surface.
+    #[test]
+    fn ambiance_every_non_completed_outcome_produces_the_byte_identical_shared_sentence() {
+        let sentence = |outcome: Option<(ReportOutcome, Evidence)>| {
+            let (mut fixture, ids) = Fixture::new(&["android_tv", "macos"]);
+            let (tv, mac) = (ids[0], ids[1]);
+            fixture.play_policy(tv);
+            let _ = mac;
+            let fence = fixture.begin_from_pin();
+            let proposed = fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap();
+            let action = match (proposed, outcome) {
+                (RuntimeResult::Proposed(action), Some((outcome, evidence))) => {
+                    fixture.poll(tv, NOW + 3);
+                    fixture
+                        .acknowledge(&fixture.action(action.id), NOW + 4)
+                        .unwrap();
+                    fixture
+                        .report(&fixture.action(action.id), outcome, evidence, None, NOW + 5)
+                        .unwrap();
+                    Some(action.id)
+                }
+                // Nothing was dispatched at all: the origin still hears the
+                // same sentence and never learns which of these it was.
+                (_, None) => None,
+                _ => panic!("proposed"),
+            };
+            let RuntimeResult::Proposed(expression) = fixture
+                .apply(
+                    RuntimeOperation::ExpressAction {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                        action_id: action,
+                    },
+                    NOW + 6,
+                )
+                .unwrap()
+            else {
+                panic!("expression")
+            };
+            assert!(expression.expression);
+            assert_eq!(expression.privacy, PrivacyClass::SharedRoom);
+            assert_eq!(expression.channel, Channel::AudioTts);
+            expression.intent.text().to_owned()
+        };
+        let declined = Evidence::Declined {
+            reason: DeclineReason::NoHandler,
+        };
+        let launched = Evidence::Playback {
+            provider: "youtube".into(),
+            state: PlaybackState::Launched,
+            position_ms: 0,
+            item_digest: format!("c1{}", "1".repeat(62)),
+        };
+        let handled = crate::ambiance::ACTION_HANDLED_EXPRESSION;
+        for outcome in [
+            Some((ReportOutcome::Refused, declined)),
+            Some((ReportOutcome::Failed, launched.clone())),
+            Some((ReportOutcome::Cancelled, launched.clone())),
+            Some((ReportOutcome::Unknown, launched)),
+            None,
+        ] {
+            assert_eq!(sentence(outcome), handled);
+        }
+        assert_eq!(
+            sentence(Some((ReportOutcome::Completed, playing()))),
+            crate::ambiance::ACTION_COMPLETED_EXPRESSION
+        );
+        assert_ne!(handled, crate::ambiance::ACTION_COMPLETED_EXPRESSION);
+    }
+
+    /// A non-zero exit code is a command that ran: the runtime would lie in
+    /// exactly the direction the outcome gate exists to prevent if it called
+    /// that a failure. Its output is content and lands as content.
+    #[test]
+    fn ambiance_exit_code_one_is_completed_and_its_output_is_routed_as_private_content() {
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        fixture.allow_private(mac);
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, run_operation(), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        let request = fixture.confirmation(mac, NOW + 3).unwrap();
+        fixture
+            .grant(
+                &request,
+                mac,
+                true,
+                Some(Attestation::DeviceOwnerAuth),
+                &request.description_digest,
+                NOW + 4,
+            )
+            .unwrap();
+        fixture.poll(mac, NOW + 5);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 6)
+            .unwrap();
+        let evidence = Evidence::Command {
+            entry_id: entry().id,
+            exit_code: Some(1),
+            duration_ms: 48_211,
+            output_bytes: 18_422,
+            truncated: true,
+        };
+        fixture
+            .report(
+                &fixture.action(action.id),
+                ReportOutcome::Completed,
+                evidence,
+                Some("2 tests failed".into()),
+                NOW + 7,
+            )
+            .unwrap();
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Completed);
+        // The command's own bytes join to at least private, so they can only
+        // land on a personal surface.
+        let card = fixture
+            .state
+            .actions
+            .values()
+            .find(|candidate| candidate.channel == Channel::VisualCard)
+            .unwrap();
+        assert_eq!(card.surface_id, mac);
+        assert!(card.privacy >= PrivacyClass::Private);
     }
 
     #[test]

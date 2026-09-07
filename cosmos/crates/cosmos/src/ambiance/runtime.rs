@@ -921,7 +921,30 @@ impl AmbianceRuntime {
             SemanticIntent::InformationalSpeech { text } => Some(text.clone()),
             _ => None,
         };
+        let acting = intent.channel().is_action();
         let mut result = propose(intent).await.map_err(runtime_error)?;
+        // Nothing could carry the command out: no approved installation, none
+        // in front of anyone, the class too high for any of them, or the
+        // budget already spent. The origin hears the same shared-safe
+        // sentence it hears for a refusal, so it never learns which.
+        if acting && matches!(result, RuntimeResult::Blocked) {
+            tracing::info!(turn = %fence.turn_id, "ambiance device action had no eligible surface");
+            if let Ok(expressed) = self
+                .store
+                .runtime(
+                    principal,
+                    RuntimeOperation::ExpressAction {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                        action_id: None,
+                    },
+                )
+                .await
+            {
+                result = expressed;
+            }
+        }
         // Speech that no approved, visible, disclosure-permitted surface can
         // play is shown as the same text instead of silently ending the turn.
         if let (RuntimeResult::Blocked, Some(text)) = (&result, spoken) {
@@ -1658,6 +1681,74 @@ impl AmbianceRuntime {
         };
         cancellation.fence = None;
         Ok(confirmation)
+    }
+
+    /// A shared-perceivable origin hears exactly one of two sentences about a
+    /// device action, and only once the report it speaks for is committed.
+    /// Neither names an operation, a device kind, a class or a reason:
+    /// privacy suppression, a capability miss, an exhausted budget, a decline
+    /// and an ordinary failure are byte-identical from a shared surface.
+    pub async fn action_expression(
+        &self,
+        authenticated: &AuthenticatedRequest,
+        action: &super::Action,
+    ) -> Result<super::Action, Status> {
+        let principal = authenticated.principal.expose_for_authorization();
+        // Wait for the device's own account, bounded by the same window a
+        // display confirmation waits in. A command still running when the
+        // window closes is not claimed as finished: it falls to the second
+        // sentence, which claims nothing.
+        let wait = async {
+            loop {
+                crate::pin_admission::admit(
+                    &self.store,
+                    self.pairing.as_ref(),
+                    Some(authenticated),
+                )
+                .await?;
+                let result = self
+                    .store
+                    .runtime(
+                        principal,
+                        RuntimeOperation::Inspect {
+                            turn_id: action.turn_id,
+                            generation: action.generation,
+                            worker: self.worker,
+                        },
+                    )
+                    .await
+                    .map_err(runtime_error)?;
+                let RuntimeResult::Observed(actions) = result else {
+                    return Err(Status::internal("invalid runtime observation"));
+                };
+                let Some(current) = actions.iter().find(|candidate| candidate.id == action.id)
+                else {
+                    return Ok(());
+                };
+                if current.status.terminal() {
+                    return Ok(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), wait).await;
+        let result = self
+            .store
+            .runtime(
+                principal,
+                RuntimeOperation::ExpressAction {
+                    turn_id: action.turn_id,
+                    generation: action.generation,
+                    worker: self.worker,
+                    action_id: Some(action.id),
+                },
+            )
+            .await
+            .map_err(runtime_error)?;
+        let RuntimeResult::Proposed(expression) = result else {
+            return Err(Status::failed_precondition("expression unavailable"));
+        };
+        Ok(expression)
     }
 
     pub async fn cancel(&self, principal: &str, fence: &TurnFence) -> Result<(), Status> {

@@ -12,6 +12,13 @@ pub const ACK_MS: i64 = 3_000;
 pub const WORKER_LEASE_MS: i64 = 75_000;
 pub const MAX_ACTIONS: usize = 32;
 
+/// The two sentences a shared-perceivable origin may hear about a device
+/// action. Neither names an operation, a device kind, a class or a reason:
+/// privacy suppression, a capability miss, an exhausted budget, a decline and
+/// an ordinary failure are byte-identical from a shared surface.
+pub const ACTION_COMPLETED_EXPRESSION: &str = "Done on your approved device.";
+pub const ACTION_HANDLED_EXPRESSION: &str = "Heard. Handled on your approved device.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeError {
     Unavailable,
@@ -209,9 +216,49 @@ pub enum RuntimeOperation {
     PersonalSurfaces {
         privacy: PrivacyClass,
     },
-    /// The private card waiting for a connected surface, if any.
+    /// The private card or waiting task for a connected surface, if any.
     Invitation {
         connection: RoomProof,
+    },
+    /// The confirmation this installation is being asked for, minting it when
+    /// a command is waiting and this venue's own foreground is reporting.
+    Confirmation {
+        connection: RoomProof,
+    },
+    /// What this installation must be told to stop carrying out, and why.
+    Revocations {
+        connection: RoomProof,
+    },
+    /// One running command saying it is still running. Unsequenced, so it
+    /// never consumes an ingress slot, and idempotent by its own sequence.
+    Progress {
+        connection: RoomProof,
+        action_id: Uuid,
+        generation: u64,
+        sequence: u64,
+        elapsed_ms: i64,
+    },
+    /// The device's own final account of one dispatched command. Only this
+    /// may set the turn's outcome.
+    Report {
+        connection: RoomProof,
+        action_id: Uuid,
+        turn_id: Uuid,
+        generation: u64,
+        channel: Channel,
+        content_digest: String,
+        outcome: super::action::ReportOutcome,
+        evidence: super::action::Evidence,
+        /// The command's own bounded output, for a terminal command report.
+        output: Option<String>,
+    },
+    /// The runtime's own shared-safe sentence for a device action, proposed
+    /// only once the report it speaks for is committed.
+    ExpressAction {
+        turn_id: Uuid,
+        generation: u64,
+        worker: Uuid,
+        action_id: Option<Uuid>,
     },
     /// The runtime offered the owner's private memory to this turn's cognition.
     OfferPrivateContext {
@@ -427,6 +474,12 @@ pub enum RuntimeResult {
     },
     PersonalSurfaces(usize),
     Invitation(Option<super::personal::Invitation>),
+    Confirmation(Option<super::grant::Request>),
+    Revocations(Vec<Revocation>),
+    Reported(Action),
+    ProgressAccepted {
+        duplicate: bool,
+    },
     PrivateContextOffered,
     ScreenContextPolicy(Option<super::screen::Approval>),
     ScreenContextOffered,
@@ -559,6 +612,17 @@ pub enum ActionStatus {
     Cancelled,
     OutcomeUnknown,
 }
+
+impl ActionStatus {
+    /// Whether nothing more can happen to this action. Every payload it still
+    /// carries is erased before the transaction that lands here commits.
+    pub fn terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Refused | Self::Failed | Self::Cancelled | Self::OutcomeUnknown
+        )
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Action {
@@ -587,6 +651,30 @@ pub struct Action {
     /// class that a later raise of the turn's class does not retire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub expression: bool,
+    /// What the executing device said happened. Only a device's own final
+    /// report writes this, and only it may set the turn's outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<super::action::ReportOutcome>,
+    /// Why the runtime told the device to stop, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked: Option<super::action::RevokeReason>,
+    /// The highest progress sequence this action has accepted. Progress is
+    /// unsequenced on the wire and idempotent here.
+    #[serde(default, skip_serializing_if = "num::is_zero")]
+    pub progress: u64,
+    /// When the executing installation was first given this command, so the
+    /// ledger can say how long it took to say what happened.
+    #[serde(default, skip_serializing_if = "num::is_zero_i64")]
+    pub dispatched_at_ms: i64,
+}
+
+mod num {
+    pub fn is_zero(value: &u64) -> bool {
+        *value == 0
+    }
+    pub fn is_zero_i64(value: &i64) -> bool {
+        *value == 0
+    }
 }
 
 impl Action {
@@ -597,6 +685,33 @@ impl Action {
             worker: self.worker,
             origin_surface: self.origin_surface,
         }
+    }
+
+    /// Whether this action still owes the turn something. A card's
+    /// acknowledgment is its outcome; an action channel's is not, because a
+    /// device can accept a command and then fail to carry it out.
+    pub fn live(&self) -> bool {
+        match self.status {
+            ActionStatus::Proposed
+            | ActionStatus::AwaitingGrant
+            | ActionStatus::Dispatched
+            | ActionStatus::Running => true,
+            ActionStatus::Acknowledged => self.channel.is_action(),
+            status => !status.terminal(),
+        }
+    }
+
+    /// Whether the executing installation has already begun. Visibility is
+    /// required to begin, never to continue.
+    pub fn started(&self) -> bool {
+        matches!(
+            self.status,
+            ActionStatus::Dispatched | ActionStatus::Acknowledged | ActionStatus::Running
+        )
+    }
+
+    fn bound_operation(&self) -> Option<&super::action::Operation> {
+        bound_operation(&self.intent)
     }
 }
 
@@ -713,7 +828,34 @@ pub struct RuntimeState {
     pub device_action_policies: BTreeMap<Uuid, super::action::Approval>,
     #[serde(default)]
     pub device_command_policies: BTreeMap<Uuid, super::action::CommandApproval>,
+    /// Live confirmation ceremonies, fenced by their own turn and worker.
+    #[serde(default)]
+    pub grants: BTreeMap<Uuid, super::grant::Grant>,
+    /// Dispatched device actions in the rolling window.
+    #[serde(default)]
+    pub action_budget: super::action::ActionBudget,
+    /// What each installation still has to be told to stop, and why.
+    #[serde(default)]
+    pub revocations: Vec<Revocation>,
 }
+
+/// One retired effect a device may still be carrying out. It is kept just
+/// long enough to reach the installation that was asked to do it, because a
+/// new turn clears the action rows the reason would otherwise live on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Revocation {
+    pub action_id: Uuid,
+    pub surface_id: Uuid,
+    pub incarnation: Uuid,
+    pub reason: super::action::RevokeReason,
+    pub expires_at_ms: i64,
+}
+
+/// A revocation reaches a connected installation within its own delivery
+/// loop; it is not durable owner state.
+pub const REVOCATION_MS: i64 = 120_000;
+pub const MAX_REVOCATIONS: usize = 8;
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -766,6 +908,29 @@ pub enum BrowserControl {
     },
     State {
         visible: bool,
+    },
+    /// What the device says happened to one bound command. Exactly one per
+    /// action, so an action costs at most two ingress slots.
+    Report {
+        action_id: Uuid,
+        turn_id: Uuid,
+        generation: u64,
+        channel: Channel,
+        content_digest: String,
+        outcome: super::action::ReportOutcome,
+        evidence: super::action::Evidence,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// The owner's answer to a confirmation, bound to the exact sentence they
+    /// read and carrying the actor evidence the platform actually obtained.
+    Grant {
+        grant_id: Uuid,
+        action_id: Uuid,
+        granted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attestation: Option<super::action::Attestation>,
+        description_digest: String,
     },
 }
 
@@ -944,6 +1109,61 @@ pub enum RuntimeData {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entry_digest: Option<String>,
         content_digest: String,
+    },
+    /// A confirmation ceremony was put in front of a person at the exact
+    /// installation that would carry the command out.
+    GrantRequested {
+        fence: TurnFence,
+        grant_id: Uuid,
+        action_id: Uuid,
+        venue_surface: Uuid,
+        risk: super::action::Risk,
+        expires_at_ms: i64,
+    },
+    /// How the ceremony ended, and how long the person took. Habituation is
+    /// instrumented, never celebrated: a reflex grant is a signal to redesign.
+    GrantResolved {
+        grant_id: Uuid,
+        action_id: Uuid,
+        venue_surface: Uuid,
+        outcome: super::grant::Outcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attestation: Option<super::action::Attestation>,
+        dwell_ms: i64,
+    },
+    /// The executing device's own account of what happened. It carries the
+    /// evidence kind and its digest, never the command's output.
+    ActionReported {
+        action_id: Uuid,
+        channel: Channel,
+        outcome: super::action::ReportOutcome,
+        evidence: super::action::EvidenceKind,
+        evidence_digest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        elapsed_ms: i64,
+        attempt: u8,
+    },
+    /// Six device actions in ten minutes, or one already in flight. The
+    /// origin hears the ordinary understated acknowledgment; the owner reads
+    /// this.
+    ActionBudgetExhausted {
+        fence: TurnFence,
+        window_ms: i64,
+        limit: u8,
+    },
+    /// The runtime told a device to stop. A revoke supersedes remaining work;
+    /// it does not un-open an application.
+    EffectRevoked {
+        action_id: Uuid,
+        reason: super::action::RevokeReason,
+    },
+    /// A new request from the owner voided a turn whose effect was still
+    /// running. The stopped task is reported cancelled, never completed.
+    TurnPreempted {
+        turn_id: Uuid,
+        generation: u64,
+        by_surface: Uuid,
     },
     /// The origin's own screen text reached cognition: which app it came
     /// from (digest) and how many bytes; never the text.
@@ -1210,6 +1430,28 @@ impl RuntimeState {
         now: i64,
     ) -> Candidate {
         let mut presence = self.presence(record, now);
+        // Above the shared-room ceiling only a personal surface may render or
+        // act, within the ceiling its owner declared. It holds the card while
+        // its signed connection is current; rendering waits for its
+        // foreground. Speech is never lifted by a personal declaration.
+        let personal = privacy > PrivacyClass::SharedRoom
+            && channel != Channel::AudioTts
+            && self
+                .personal_ceiling(records, record.surface_id)
+                .is_some_and(|ceiling| privacy <= ceiling);
+        // An action channel is held on the same terms whatever its class: no
+        // platform begins a command in the background, so a command waits for
+        // a foreground exactly the way a private card does, and an effect
+        // already begun is not retired the instant it succeeds by launching
+        // something in front of Cosmos. Visibility is required to begin, in
+        // `claim`, and never to continue.
+        if personal || channel.needs_foreground() {
+            presence.available = self
+                .native_connections
+                .get(&record.surface_id)
+                .and_then(|state| state.connection.as_ref())
+                .is_some_and(|connection| connection.current(record, now));
+        }
         // Native speech exists only as the runtime's own disclosed synthesis.
         // Without the origin owner's current provider permission there is no
         // speech to route, so the surface is unavailable for that channel.
@@ -1236,22 +1478,6 @@ impl RuntimeState {
                         .action_channels(records, record.surface_id)
                         .contains(&channel),
                 };
-        }
-        // Above the shared-room ceiling only a personal surface may render or
-        // act, within the ceiling its owner declared. It holds the card while
-        // its signed connection is current; rendering waits for its
-        // foreground. Speech is never lifted by a personal declaration.
-        let personal = privacy > PrivacyClass::SharedRoom
-            && channel != Channel::AudioTts
-            && self
-                .personal_ceiling(records, record.surface_id)
-                .is_some_and(|ceiling| privacy <= ceiling);
-        if personal {
-            presence.available = self
-                .native_connections
-                .get(&record.surface_id)
-                .and_then(|state| state.connection.as_ref())
-                .is_some_and(|connection| connection.current(record, now));
         }
         policy::candidate(record, presence, origin, channel, privacy, hint, personal)
     }
@@ -1313,6 +1539,9 @@ impl RuntimeState {
         for connection in self.pin_connections.values().filter(|c| !c.closed) {
             due = due.min(connection.expires_at_ms);
         }
+        for grant in self.grants.values().filter(|grant| !grant.consumed) {
+            due = due.min(grant.expires_at_ms);
+        }
         if let Some(turn) = self.turn.as_ref().filter(|t| !t.cancelled) {
             due = due.min(turn.lease_until_ms);
             if let Some(voice) = turn.voice.as_ref().filter(|_| turn.voice_pending()) {
@@ -1340,20 +1569,14 @@ impl RuntimeState {
             }
         }
         for action in self.actions.values() {
-            if matches!(
-                action.status,
-                ActionStatus::Cancelled | ActionStatus::OutcomeUnknown
-            ) {
+            if action.status.terminal() {
                 if action.intent.has_payload() {
                     return 0;
                 }
                 continue;
             }
             due = due.min(action.display_expires_at_ms);
-            if matches!(
-                action.status,
-                ActionStatus::Proposed | ActionStatus::Dispatched
-            ) {
+            if action.live() {
                 due = due.min(action.deadline_ms);
             }
             if let Some(record) = records.get(&action.surface_id) {
@@ -1374,11 +1597,7 @@ impl RuntimeState {
     pub fn clear_terminal_payloads(&mut self) -> Vec<RuntimeData> {
         let mut events = Vec::new();
         for action in self.actions.values_mut() {
-            if matches!(
-                action.status,
-                ActionStatus::Cancelled | ActionStatus::OutcomeUnknown
-            ) && action.intent.has_payload()
-            {
+            if action.status.terminal() && action.intent.has_payload() {
                 action.intent.clear_payload();
                 events.push(RuntimeData::PayloadCleared {
                     action_id: action.id,
@@ -1611,15 +1830,16 @@ impl RuntimeState {
                 (action.id, valid)
             })
             .collect();
+        let mut revoked = Vec::new();
         for action in self.actions.values_mut() {
-            if matches!(
-                action.status,
-                ActionStatus::Cancelled | ActionStatus::OutcomeUnknown
-            ) {
+            if action.status.terminal() {
                 continue;
             }
             let valid = validity[&action.id];
             if !valid {
+                // P7: a side-effecting action never repairs to another
+                // device. Its fallbacks are still computed and logged in the
+                // decision; they are simply never dispatched to.
                 let repair = origin_valid
                     && now < action.display_expires_at_ms
                     && action.privacy <= PrivacyClass::SharedRoom
@@ -1628,29 +1848,63 @@ impl RuntimeState {
                         action.status,
                         ActionStatus::Proposed | ActionStatus::Dispatched
                     );
-                action.status = if action.channel == Channel::AudioTts && action.attempts > 0 {
+                let unknown = (action.channel == Channel::AudioTts || action.channel.is_action())
+                    && action.attempts > 0;
+                action.status = if unknown {
                     ActionStatus::OutcomeUnknown
                 } else {
                     ActionStatus::Cancelled
                 };
+                if action.channel.is_action() {
+                    action.revoked = Some(if origin_valid {
+                        super::action::RevokeReason::RevalidationFailed
+                    } else {
+                        super::action::RevokeReason::Cancelled
+                    });
+                    revoked.push(action.clone());
+                }
                 events.push(action_event(action));
                 if repair {
                     repairs.push(action.clone());
                 }
-            } else if action.status == ActionStatus::Proposed && now >= action.deadline_ms {
+            } else if matches!(
+                action.status,
+                ActionStatus::Proposed | ActionStatus::AwaitingGrant
+            ) && now >= action.deadline_ms
+            {
                 action.status = if action.attempts > 0 {
                     ActionStatus::OutcomeUnknown
                 } else {
                     ActionStatus::Cancelled
                 };
+                if action.channel.is_action() {
+                    action.revoked = Some(super::action::RevokeReason::Expired);
+                    revoked.push(action.clone());
+                }
                 events.push(action_event(action));
                 if action.channel == Channel::VisualCard {
                     repairs.push(action.clone());
                 }
-            } else if action.status == ActionStatus::Dispatched && now >= action.deadline_ms {
-                if action.channel == Channel::VisualCard && action.attempts == 1 {
-                    // Retry only on this exact surface/key. Poll reclaims under
-                    // policy, then gives the same key another bounded deadline.
+            } else if (action.status == ActionStatus::Dispatched
+                // An acknowledged card lives out its display window; an
+                // acknowledged command owes a report inside the channel's own
+                // budget, and a running one inside its progress grace.
+                || (action.channel.is_action()
+                    && matches!(
+                        action.status,
+                        ActionStatus::Acknowledged | ActionStatus::Running
+                    )))
+                && now >= action.deadline_ms
+            {
+                // Retry only on this exact surface/key, and only where the
+                // channel declares itself idempotent. `action.run` never
+                // retries; a missing report is unknown, never a second run.
+                let retry = action.attempts == 1
+                    && action.status == ActionStatus::Dispatched
+                    && (action.channel == Channel::VisualCard || action.channel.idempotent());
+                if retry {
+                    // Poll reclaims under policy, then gives the same key
+                    // another bounded deadline.
                     action.status = ActionStatus::Proposed;
                     action.deadline_ms =
                         now.saturating_add(ACK_MS).min(action.display_expires_at_ms);
@@ -1659,10 +1913,20 @@ impl RuntimeState {
                     if action.channel == Channel::VisualCard {
                         repairs.push(action.clone());
                     }
+                    if action.channel.is_action() {
+                        action.revoked = Some(super::action::RevokeReason::Expired);
+                        revoked.push(action.clone());
+                    }
                 }
                 events.push(action_event(action));
             }
         }
+        for action in revoked {
+            events.extend(self.record_revocation(&action, now));
+        }
+        events.extend(self.reconcile_grants(now));
+        self.revocations
+            .retain(|revocation| now < revocation.expires_at_ms);
         for previous in repairs {
             if self.actions.len() >= MAX_ACTIONS {
                 continue;
@@ -1712,10 +1976,7 @@ impl RuntimeState {
                 && records
                     .get(&turn.fence.origin_surface)
                     .is_some_and(|r| matches!(r.binding, Binding::Browser | Binding::Native { .. }))
-                && self
-                    .actions
-                    .values()
-                    .all(|a| !matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched))
+                && self.actions.values().all(|a| !a.live())
             {
                 turn.finished = true;
                 events.push(RuntimeData::TurnFinished {
@@ -1725,6 +1986,62 @@ impl RuntimeState {
             }
         }
         events.extend(self.clear_terminal_payloads());
+        events
+    }
+
+    /// Remember that one installation must be told to stop, and log it. The
+    /// row outlives the action, because a new turn clears the action first.
+    fn record_revocation(&mut self, action: &Action, now: i64) -> Vec<RuntimeData> {
+        let Some(reason) = action.revoked else {
+            return Vec::new();
+        };
+        if !action.started() && action.attempts == 0 {
+            // Nothing was ever sent, so there is nothing to stop.
+            return vec![RuntimeData::EffectRevoked {
+                action_id: action.id,
+                reason,
+            }];
+        }
+        self.revocations.retain(|r| r.action_id != action.id);
+        self.revocations.push(Revocation {
+            action_id: action.id,
+            surface_id: action.surface_id,
+            incarnation: action.incarnation,
+            reason,
+            expires_at_ms: now.saturating_add(REVOCATION_MS),
+        });
+        while self.revocations.len() > MAX_REVOCATIONS {
+            self.revocations.remove(0);
+        }
+        vec![RuntimeData::EffectRevoked {
+            action_id: action.id,
+            reason,
+        }]
+    }
+
+    /// Retire one action-channel action and tell its installation to stop.
+    pub(super) fn revoke_action(
+        &mut self,
+        action_id: Uuid,
+        reason: super::action::RevokeReason,
+        now: i64,
+    ) -> Vec<RuntimeData> {
+        let Some(action) = self.actions.get_mut(&action_id) else {
+            return Vec::new();
+        };
+        if action.status.terminal() {
+            return Vec::new();
+        }
+        let unknown = action.channel.is_action() && action.started();
+        action.status = if unknown {
+            ActionStatus::OutcomeUnknown
+        } else {
+            ActionStatus::Cancelled
+        };
+        action.revoked = Some(reason);
+        let action = action.clone();
+        let mut events = vec![action_event(&action)];
+        events.extend(self.record_revocation(&action, now));
         events
     }
     pub(super) fn claim(
@@ -1738,14 +2055,33 @@ impl RuntimeState {
     ) -> Result<(Action, Vec<RuntimeData>), RuntimeError> {
         let action = self.actions.get(&id).ok_or(RuntimeError::NotFound)?;
         let turn = self.fence(action.turn_id, generation, worker, now)?;
+        // A command that always confirms is claimable only once its own
+        // ceremony has been answered at the installation that will act.
+        let ready = action.status == ActionStatus::Proposed
+            || (action.status == ActionStatus::AwaitingGrant && action.channel.needs_grant());
         if turn.finished
             || turn.voice_pending()
             || action.generation != generation
             || action.worker != worker
-            || action.status != ActionStatus::Proposed
+            || !ready
+            || !self.granted(id, now)
             || !self.origin_valid(turn, records, now)
         {
             return Err(RuntimeError::Stale);
+        }
+        // Visibility is required to begin. No platform starts a command in
+        // the background, and a command must not be dispatched to a screen
+        // nobody is looking at.
+        if action.channel.needs_foreground()
+            && !self.surface_visible(records, action.surface_id, now)
+        {
+            return Err(RuntimeError::PolicyBlocked);
+        }
+        // §4.5(d)'s residual risk is accumulated low-risk actions; §10's
+        // answer is a per-principal budget. One effect at a time, six in ten
+        // minutes. The origin hears the ordinary understated acknowledgment.
+        if action.channel.is_action() && self.action_budget_blocked(now) {
+            return Err(RuntimeError::PolicyBlocked);
         }
         if native_speech
             && (!Self::disclosed_speech_origin(records, turn)
@@ -1812,8 +2148,45 @@ impl RuntimeState {
         } else {
             ActionStatus::Dispatched
         };
+        action.dispatched_at_ms = now;
+        let dispatched = action.clone();
         events.push(action_event(action));
-        Ok((action.clone(), events))
+        if dispatched.channel.is_action() {
+            // The grant is single-use and is consumed in the same transaction
+            // that dispatches the command it authorized.
+            self.consume_grant(id, now);
+            self.action_budget.spend(now);
+            // The effect's own turn stays live while the device works: the
+            // lease is renewed here and again by every accepted progress, so
+            // a long command never needs an effect timer of its own.
+            self.renew_lease(now);
+        }
+        Ok((dispatched, events))
+    }
+
+    /// Whether a new device action may begin at all: one effect in flight per
+    /// principal, six dispatched in the rolling window.
+    pub(super) fn action_budget_blocked(&self, now: i64) -> bool {
+        self.action_budget.exhausted(now)
+            || self.actions.values().any(|a| {
+                a.channel.is_action()
+                    && matches!(
+                        a.status,
+                        ActionStatus::Dispatched
+                            | ActionStatus::Acknowledged
+                            | ActionStatus::Running
+                    )
+            })
+    }
+
+    /// The worker lease is stamped once when a turn begins; a device action
+    /// renews it so the effect's own turn is still there to receive its
+    /// outcome. The registry heartbeat stays hygiene and is never the
+    /// in-flight detector.
+    fn renew_lease(&mut self, now: i64) {
+        if let Some(turn) = self.turn.as_mut().filter(|t| !t.cancelled) {
+            turn.lease_until_ms = turn.lease_until_ms.max(now.saturating_add(WORKER_LEASE_MS));
+        }
     }
     fn acknowledged_visual(
         &self,
@@ -2005,11 +2378,18 @@ impl RuntimeState {
             let content_digest = intent.content_digest();
             // A private card waits for its personal surface's unlocked
             // foreground; a shared card is renewed or repaired within a minute.
-            let window = if privacy > PrivacyClass::SharedRoom {
+            // An action waits the same way whatever its class, because a
+            // phone or a Mac cannot begin one in the background, and it then
+            // has the channel's own budget to say what happened.
+            let waiting = intent.channel().needs_foreground() || privacy > PrivacyClass::SharedRoom;
+            let window = if waiting {
                 super::personal::PRIVATE_DISPLAY_MS
             } else {
                 60_000
             };
+            let window = window.saturating_add(
+                bound_operation(&intent).map_or(0, super::action::Operation::report_budget_ms),
+            );
             let display_expires_at_ms = match &intent {
                 SemanticIntent::PlaceAddressCard { content } => content.expires_at_ms,
                 _ => now.checked_add(window).ok_or(RuntimeError::Unavailable)?,
@@ -2019,6 +2399,7 @@ impl RuntimeState {
                 .map_or(display_expires_at_ms, |confirmation| {
                     display_expires_at_ms.min(confirmation.expires_at_ms)
                 });
+            let channel = intent.channel();
             let action = Action {
                 id,
                 root_id: id,
@@ -2026,14 +2407,20 @@ impl RuntimeState {
                 generation,
                 worker,
                 surface_id,
-                channel: intent.channel(),
+                channel,
                 incarnation,
                 content_digest,
                 intent,
                 privacy,
-                status: ActionStatus::Proposed,
-                deadline_ms: if privacy > PrivacyClass::SharedRoom {
-                    display_expires_at_ms
+                status: if channel.needs_grant() {
+                    ActionStatus::AwaitingGrant
+                } else {
+                    ActionStatus::Proposed
+                },
+                deadline_ms: if waiting {
+                    now.checked_add(super::personal::PRIVATE_DISPLAY_MS)
+                        .ok_or(RuntimeError::Unavailable)?
+                        .min(display_expires_at_ms)
                 } else {
                     now.checked_add(ACK_MS)
                         .ok_or(RuntimeError::Unavailable)?
@@ -2047,6 +2434,10 @@ impl RuntimeState {
                     .map(|confirmation| confirmation.root_id),
                 origin_surface,
                 expression,
+                outcome: None,
+                revoked: None,
+                progress: 0,
+                dispatched_at_ms: 0,
             };
             self.actions.insert(id, action.clone());
             if let Some(confirmation) = confirmation {
@@ -2482,6 +2873,47 @@ impl RuntimeState {
                 let record = self.room_record(records, &connection, now)?;
                 RuntimeResult::Invitation(self.invitation_for(record.surface_id, now))
             }
+            // The ceremony is minted only once the venue's own foreground is
+            // reporting, so the thirty-second clock starts at the sentence a
+            // person can actually read, not at the proposal.
+            RuntimeOperation::Confirmation { connection } => {
+                let record = self.room_record(records, &connection, now)?;
+                let surface_id = record.surface_id;
+                let incarnation = connection.incarnation();
+                if self.surface_visible(records, surface_id, now)
+                    && let Some((_, appended)) =
+                        self.request_grant(records, surface_id, incarnation, now)?
+                {
+                    events.extend(appended);
+                }
+                RuntimeResult::Confirmation(
+                    self.grants
+                        .values()
+                        .find(|grant| {
+                            grant.venue_surface == surface_id
+                                && grant.venue_incarnation == incarnation
+                                && grant.decision.is_none()
+                                && grant.live(now)
+                        })
+                        .map(super::grant::Request::from),
+                )
+            }
+            RuntimeOperation::Revocations { connection } => {
+                let record = self.room_record(records, &connection, now)?;
+                let surface_id = record.surface_id;
+                let incarnation = connection.incarnation();
+                RuntimeResult::Revocations(
+                    self.revocations
+                        .iter()
+                        .filter(|revocation| {
+                            revocation.surface_id == surface_id
+                                && revocation.incarnation == incarnation
+                                && now < revocation.expires_at_ms
+                        })
+                        .copied()
+                        .collect(),
+                )
+            }
             RuntimeOperation::OfferPrivateContext { fence, count } => {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
                 // Private memory is offered only to a turn already above the
@@ -2855,6 +3287,76 @@ impl RuntimeState {
                             events.extend(appended);
                         }
                     }
+                    // Exactly one report per action. It is the only thing that
+                    // may claim an outcome, and it is admitted on the same
+                    // ordered cursor as the acknowledgment that preceded it.
+                    BrowserControl::Report {
+                        action_id,
+                        turn_id,
+                        generation,
+                        channel,
+                        content_digest,
+                        outcome,
+                        evidence,
+                        output,
+                    } => {
+                        if stamp.instance_id != action_id
+                            || generation == 0
+                            || generation > 9_007_199_254_740_991
+                            || !digest_valid(&content_digest)
+                        {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        let (_, appended) = self.apply(
+                            principal,
+                            records,
+                            RuntimeOperation::Report {
+                                connection: connection.clone(),
+                                action_id,
+                                turn_id,
+                                generation,
+                                channel,
+                                content_digest,
+                                outcome,
+                                evidence,
+                                output,
+                            },
+                            now,
+                        )?;
+                        events.extend(appended);
+                    }
+                    // The owner's answer to a ceremony. A decline is one
+                    // control away and weighs exactly as much as an accept;
+                    // dismissing the panel answers nothing and expires.
+                    BrowserControl::Grant {
+                        grant_id,
+                        action_id,
+                        granted,
+                        attestation,
+                        description_digest,
+                    } => {
+                        if stamp.instance_id != grant_id
+                            || grant_id.is_nil()
+                            || action_id.is_nil()
+                            || !digest_valid(&description_digest)
+                        {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        if !duplicate {
+                            let appended = self.resolve_grant(
+                                grant_id,
+                                action_id,
+                                surface_id,
+                                incarnation,
+                                granted,
+                                attestation,
+                                &description_digest,
+                                now,
+                            )?;
+                            events.extend(appended);
+                            events.extend(self.reconcile(records, now));
+                        }
+                    }
                     // apply_with_registry applies the checked browser mutation
                     // in the same Store transaction after this sequence is
                     // admitted. Native visibility lives on the connection.
@@ -3049,12 +3551,43 @@ impl RuntimeState {
                     });
                     return Ok((RuntimeResult::EchoRejected, events));
                 }
-                if self
+                // A correction from an enrolled origin speaking as the
+                // principal voids the active turn's remaining actions. While a
+                // task runs the assistant stays answerable: the new request
+                // preempts it, and the stopped task is reported cancelled,
+                // never completed.
+                if let Some(turn) = self
                     .turn
                     .as_ref()
-                    .is_some_and(|t| !t.cancelled && !t.finished && now < t.lease_until_ms)
+                    .filter(|t| !t.cancelled && !t.finished && now < t.lease_until_ms)
                 {
-                    return Err(RuntimeError::Busy);
+                    let running: Vec<Uuid> = self
+                        .actions
+                        .values()
+                        .filter(|a| a.channel.is_action() && a.live())
+                        .map(|a| a.id)
+                        .collect();
+                    if running.is_empty() {
+                        return Err(RuntimeError::Busy);
+                    }
+                    let (turn_id, generation) = (turn.fence.turn_id, turn.fence.generation);
+                    for id in running {
+                        events.extend(self.revoke_action(
+                            id,
+                            super::action::RevokeReason::Preempted,
+                            now,
+                        ));
+                    }
+                    self.turn.as_mut().unwrap().cancelled = true;
+                    events.push(RuntimeData::TurnPreempted {
+                        turn_id,
+                        generation,
+                        by_surface: record.surface_id,
+                    });
+                    events.push(RuntimeData::TurnCancelled {
+                        turn_id,
+                        generation,
+                    });
                 }
                 self.generation = self
                     .generation
@@ -3313,10 +3846,14 @@ impl RuntimeState {
                 if action.surface_id != connection.surface_id()
                     || action.incarnation != connection.incarnation()
                     || action.generation != generation
-                    || !self.presence(record, now).available
+                    // A command already begun continues while its connection
+                    // is current; the room record above proved exactly that.
+                    || !(self.presence(record, now).available || action.channel.is_action())
                     || !matches!(
                         action.status,
-                        ActionStatus::Dispatched | ActionStatus::Acknowledged
+                        ActionStatus::Dispatched
+                            | ActionStatus::Acknowledged
+                            | ActionStatus::Running
                     )
                 {
                     return Err(RuntimeError::Stale);
@@ -3367,11 +3904,14 @@ impl RuntimeState {
                     || action.incarnation != connection.incarnation()
                     || action.channel != channel
                     || !(channel == Channel::VisualCard
-                        || (channel == Channel::AudioTts
+                        || ((channel == Channel::AudioTts || channel.is_action())
                             && matches!(record.binding, Binding::Native { .. })))
                     || action.content_digest != content_digest
                     || (action.status != ActionStatus::Acknowledged && now >= action.deadline_ms)
-                    || !self.presence(record, now).available
+                    // A device that has begun keeps its command while its
+                    // connection is current: launching a player or a map
+                    // backgrounds Cosmos, and the acknowledgment follows.
+                    || !(self.presence(record, now).available || channel.is_action())
                     || !matches!(
                         action.status,
                         ActionStatus::Dispatched | ActionStatus::Acknowledged
@@ -3383,12 +3923,26 @@ impl RuntimeState {
                 let first = action.status != ActionStatus::Acknowledged;
                 if first {
                     action.status = ActionStatus::Acknowledged;
+                    // On an action channel an acknowledgment means "I bound
+                    // this exact command and it is legal here". The device now
+                    // has the channel's own budget to say what happened.
+                    if channel.is_action() {
+                        let budget = action
+                            .bound_operation()
+                            .map_or(ACK_MS, super::action::Operation::report_budget_ms);
+                        action.deadline_ms =
+                            now.saturating_add(budget).min(action.display_expires_at_ms);
+                    }
                     events.push(action_event(action));
                 }
-                let outcome = (first && !action.expression).then_some(TurnOutcome {
-                    surface_id: action.surface_id,
-                    channel: action.channel,
-                });
+                // An acknowledgment on an action channel is not an outcome: a
+                // device can accept a command and then fail to carry it out.
+                // Only its own final report may set the turn's outcome.
+                let outcome =
+                    (first && !action.expression && !channel.is_action()).then_some(TurnOutcome {
+                        surface_id: action.surface_id,
+                        channel: action.channel,
+                    });
                 // An acknowledged choice list becomes bounded recent context
                 // at the shared-room ceiling, so "number two" can be resolved
                 // by the next turn; a private list is not remembered. The
@@ -3459,9 +4013,7 @@ impl RuntimeState {
                     .get(&turn.fence.origin_surface)
                     .is_some_and(|r| matches!(r.binding, Binding::Browser | Binding::Native { .. }))
                     && !turn.finished
-                    && self.actions.values().all(|a| {
-                        !matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched)
-                    })
+                    && self.actions.values().all(|a| !a.live())
                 {
                     turn.finished = true;
                     events.push(RuntimeData::TurnFinished {
@@ -3469,6 +4021,193 @@ impl RuntimeState {
                         generation,
                     });
                 }
+                result
+            }
+            // Only this may claim an outcome. It is the device's own account
+            // of what happened, bounded, closed and checked against the exact
+            // command the decision bound.
+            RuntimeOperation::Report {
+                connection,
+                action_id,
+                turn_id,
+                generation,
+                channel,
+                content_digest,
+                outcome,
+                evidence,
+                output,
+            } => {
+                let record = self.room_record(records, &connection, now)?;
+                let action = self.actions.get(&action_id).ok_or(RuntimeError::NotFound)?;
+                self.fence(turn_id, generation, action.worker, now)?;
+                let declined = matches!(evidence, super::action::Evidence::Declined { .. });
+                if !channel.is_action()
+                    || !matches!(record.binding, Binding::Native { .. })
+                    || action.turn_id != turn_id
+                    || action.generation != generation
+                    || action.surface_id != record.surface_id
+                    || action.incarnation != connection.incarnation()
+                    || action.channel != channel
+                    || action.content_digest != content_digest
+                    || !action.started()
+                    || !evidence.valid()
+                    || !evidence.fits(channel)
+                    // A launch a device could not observe further is unknown,
+                    // never completed, and a refusal is exactly the evidence
+                    // that says the device declined.
+                    || (outcome == super::action::ReportOutcome::Completed
+                        && !evidence.proves_completion())
+                    || (outcome == super::action::ReportOutcome::Refused) != declined
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                // The owner's own command output is content and travels as
+                // content; nothing else crosses this leg as free text.
+                let output = match (&evidence, output) {
+                    (_, None) => None,
+                    (super::action::Evidence::Command { .. }, Some(output))
+                        if !output.is_empty()
+                            && output.len() <= super::action::MAX_OUTPUT_BYTES
+                            && !output
+                                .chars()
+                                .any(|c| c.is_control() && c != '\n' && c != '\t') =>
+                    {
+                        Some(output)
+                    }
+                    _ => return Err(RuntimeError::InvalidRequest),
+                };
+                let evidence_digest = evidence.digest();
+                let exit_code = match &evidence {
+                    super::action::Evidence::Command { exit_code, .. } => *exit_code,
+                    _ => None,
+                };
+                let action = self.actions.get_mut(&action_id).unwrap();
+                let elapsed_ms = now.saturating_sub(action.dispatched_at_ms);
+                action.status = outcome.status();
+                action.outcome = Some(outcome);
+                let reported = action.clone();
+                events.push(RuntimeData::ActionReported {
+                    action_id,
+                    channel,
+                    outcome,
+                    evidence: evidence.kind(),
+                    evidence_digest,
+                    exit_code,
+                    elapsed_ms,
+                    attempt: reported.attempts,
+                });
+                events.push(action_event(&reported));
+                let turn = self.turn.as_mut().unwrap();
+                if turn.outcome.is_none() && !reported.expression {
+                    turn.outcome = Some(TurnOutcome {
+                        surface_id: reported.surface_id,
+                        channel: reported.channel,
+                    });
+                }
+                let fence = turn.fence.clone();
+                // The command's own bytes are the device's, not the runtime's.
+                // They join to at least private, so they can only land on a
+                // personal surface, and the ledger keeps only their digest.
+                if let Some(output) = output {
+                    let privacy = self
+                        .turn
+                        .as_ref()
+                        .map_or(PrivacyClass::Private, |turn| turn.privacy)
+                        .max(PrivacyClass::Private)
+                        .max(super::runtime::input_privacy(&output));
+                    let (_, appended) = self.propose_output(
+                        records,
+                        &fence,
+                        OutputProposal {
+                            expression: false,
+                            intent: SemanticIntent::VisualTextCard { text: output },
+                            privacy,
+                            confirmation: None,
+                            hint: None,
+                        },
+                        now,
+                    )?;
+                    events.extend(appended);
+                } else {
+                    events.extend(self.reconcile(records, now));
+                }
+                RuntimeResult::Reported(reported)
+            }
+            // Liveness for a long command. It never touches the ingress
+            // cursor, so a three-minute task costs no ordered slots, and it
+            // renews both the command's deadline and the turn's worker lease.
+            RuntimeOperation::Progress {
+                connection,
+                action_id,
+                generation,
+                sequence,
+                elapsed_ms,
+            } => {
+                let record = self.room_record(records, &connection, now)?;
+                let action = self.actions.get(&action_id).ok_or(RuntimeError::NotFound)?;
+                self.fence(action.turn_id, generation, action.worker, now)?;
+                if !action.channel.is_action()
+                    || action.generation != generation
+                    || action.surface_id != record.surface_id
+                    || action.incarnation != connection.incarnation()
+                    || !action.started()
+                    || sequence == 0
+                    || sequence > super::action::MAX_PROGRESS
+                    || !(0..=super::action::MAX_BUDGET_MS).contains(&elapsed_ms)
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                let duplicate = sequence <= action.progress;
+                if !duplicate {
+                    let action = self.actions.get_mut(&action_id).unwrap();
+                    action.progress = sequence;
+                    action.status = ActionStatus::Running;
+                    action.deadline_ms = now
+                        .saturating_add(super::action::PROGRESS_GRACE_MS)
+                        .min(action.display_expires_at_ms);
+                    let running = action.clone();
+                    events.push(action_event(&running));
+                    self.renew_lease(now);
+                }
+                RuntimeResult::ProgressAccepted { duplicate }
+            }
+            // The runtime's own shared-safe sentence. A shared-perceivable
+            // origin hears one of exactly two, neither of which names an
+            // operation, a device kind, a class or a reason.
+            RuntimeOperation::ExpressAction {
+                turn_id,
+                generation,
+                worker,
+                action_id,
+            } => {
+                let fence = self.fence(turn_id, generation, worker, now)?.fence.clone();
+                if self.actions.values().any(|a| a.expression) {
+                    return Err(RuntimeError::Busy);
+                }
+                let completed = action_id
+                    .and_then(|id| self.actions.get(&id))
+                    .filter(|a| {
+                        a.turn_id == turn_id && a.generation == generation && a.channel.is_action()
+                    })
+                    .is_some_and(|a| a.outcome == Some(super::action::ReportOutcome::Completed));
+                let text = if completed {
+                    ACTION_COMPLETED_EXPRESSION
+                } else {
+                    ACTION_HANDLED_EXPRESSION
+                };
+                let (result, appended) = self.propose_output(
+                    records,
+                    &fence,
+                    OutputProposal {
+                        expression: true,
+                        intent: SemanticIntent::InformationalSpeech { text: text.into() },
+                        privacy: PrivacyClass::SharedRoom,
+                        confirmation: None,
+                        hint: None,
+                    },
+                    now,
+                )?;
+                events.extend(appended);
                 result
             }
             RuntimeOperation::Cancel {
@@ -3496,17 +4235,44 @@ impl RuntimeState {
                     .filter(|a| {
                         a.surface_id == connection.surface_id()
                             && a.incarnation == connection.incarnation()
-                            && a.status == ActionStatus::Proposed
-                            && a.channel == Channel::VisualCard
+                            && (a.status == ActionStatus::Proposed
+                                || (a.status == ActionStatus::AwaitingGrant
+                                    && self.granted(a.id, now)))
+                            && (a.channel == Channel::VisualCard || a.channel.is_action())
                             // Dispatch-time revalidation: a private card is
-                            // claimed only by an unlocked, visible foreground.
+                            // claimed only by an unlocked, visible foreground,
+                            // and so is every device action whatever its class.
                             && (a.privacy <= PrivacyClass::SharedRoom || visible)
+                            && (!a.channel.needs_foreground() || visible)
                     })
-                    .map(|a| (a.id, a.generation, a.worker))
+                    .map(|a| (a.id, a.generation, a.worker, a.channel))
                     .collect();
-                for (id, generation, worker) in pending {
-                    let (_, appended) = self.claim(records, id, generation, worker, now, false)?;
-                    events.extend(appended);
+                let fence = self.turn.as_ref().map(|turn| turn.fence.clone());
+                for (id, generation, worker, channel) in pending {
+                    // Six device actions in ten minutes, one in flight. The
+                    // owner reads this row; the origin hears nothing new.
+                    if channel.is_action() && self.action_budget_blocked(now) {
+                        if let Some(fence) = fence.clone() {
+                            events.push(RuntimeData::ActionBudgetExhausted {
+                                fence,
+                                window_ms: super::action::BUDGET_WINDOW_MS,
+                                limit: super::action::BUDGET_LIMIT as u8,
+                            });
+                        }
+                        continue;
+                    }
+                    // One un-claimable action must not fail the whole poll and
+                    // take card rendering down with it.
+                    match self.claim(records, id, generation, worker, now, false) {
+                        Ok((_, appended)) => events.extend(appended),
+                        Err(
+                            RuntimeError::PolicyBlocked
+                            | RuntimeError::Stale
+                            | RuntimeError::NotFound
+                            | RuntimeError::Busy,
+                        ) => continue,
+                        Err(error) => return Err(error),
+                    }
                 }
                 RuntimeResult::Pending(
                     self.actions
@@ -3526,11 +4292,7 @@ impl RuntimeState {
                 worker,
             } => {
                 self.fence(turn_id, generation, worker, now)?;
-                if self
-                    .actions
-                    .values()
-                    .any(|a| matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched))
-                {
+                if self.actions.values().any(Action::live) {
                     return Err(RuntimeError::Busy);
                 }
                 let turn = self.turn.as_mut().unwrap();

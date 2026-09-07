@@ -77,15 +77,6 @@ impl Channel {
             Self::ActionOpen | Self::ActionRoute | Self::ActionPlay
         )
     }
-
-    /// The channel's risk ceiling. The bound operation refines it: a command
-    /// entry that changes files is `high` whatever else it declares.
-    pub fn risk(self) -> super::action::Risk {
-        match self {
-            Self::ActionRun => super::action::Risk::High,
-            _ => super::action::Risk::Low,
-        }
-    }
 }
 
 pub const MIN_CHOICES: usize = 2;
@@ -129,20 +120,14 @@ pub enum SemanticIntent {
     DeviceAction {
         operation: super::action::Operation,
     },
-    /// The policy engine's own description of a command awaiting the owner's
-    /// confirmation. Never model prose.
-    Confirmation {
-        request: super::action::Description,
-    },
 }
 impl SemanticIntent {
     pub fn text(&self) -> &str {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text,
-            Self::PlaceAddressCard { .. }
-            | Self::ChoiceList { .. }
-            | Self::DeviceAction { .. }
-            | Self::Confirmation { .. } => "",
+            Self::PlaceAddressCard { .. } | Self::ChoiceList { .. } | Self::DeviceAction { .. } => {
+                ""
+            }
         }
     }
     /// Every model-authored word of the proposal, for the runtime's own
@@ -164,9 +149,6 @@ impl SemanticIntent {
             // Human-visible operation strings can raise the class and never
             // lower it; a command contributes the owner's own label only.
             Self::DeviceAction { operation } => operation.classified_text(),
-            Self::Confirmation { request } => {
-                format!("{}\n{}", request.subject, request.effect)
-            }
         }
     }
     /// Whether the durable action still carries content to clear.
@@ -175,17 +157,15 @@ impl SemanticIntent {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => !text.is_empty(),
             Self::PlaceAddressCard { .. } => false,
             Self::ChoiceList { title, items } => !title.is_empty() || !items.is_empty(),
-            // A bound command and a ceremony description are the runtime's own
-            // record of what it decided, not retained content.
-            Self::DeviceAction { .. } | Self::Confirmation { .. } => false,
+            // A bound command is the runtime's own record of what it decided,
+            // not retained content.
+            Self::DeviceAction { .. } => false,
         }
     }
     pub fn clear_payload(&mut self) {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text.clear(),
-            Self::PlaceAddressCard { .. }
-            | Self::DeviceAction { .. }
-            | Self::Confirmation { .. } => {}
+            Self::PlaceAddressCard { .. } | Self::DeviceAction { .. } => {}
             Self::ChoiceList { title, items } => {
                 title.clear();
                 items.clear();
@@ -199,14 +179,12 @@ impl SemanticIntent {
             | Self::PlaceAddressCard { .. }
             | Self::ChoiceList { .. } => Channel::VisualCard,
             Self::DeviceAction { operation } => operation.channel(),
-            Self::Confirmation { .. } => Channel::ConfirmTap,
         }
     }
     pub fn valid(&self) -> bool {
         match self {
             Self::PlaceAddressCard { content } => content.valid(),
             Self::DeviceAction { operation } => operation.valid(),
-            Self::Confirmation { request } => request.valid(),
             Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
                 !self.text().trim().is_empty() && self.text().len() <= 4000
             }
@@ -226,7 +204,6 @@ impl SemanticIntent {
         match self {
             Self::PlaceAddressCard { content } => content.digest.clone(),
             Self::DeviceAction { operation } => operation.content_digest(),
-            Self::Confirmation { request } => request.content_digest(),
             Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
                 crate::surface_registry::hash(self.text().as_bytes())
             }

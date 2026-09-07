@@ -169,6 +169,9 @@ pub(crate) struct Outputs {
     pub(crate) speech: watch::Sender<Option<Speech>>,
     pub(crate) invitation: watch::Sender<Option<Invitation>>,
     pub(crate) status: watch::Sender<Option<TurnStatus>>,
+    pub(crate) task: watch::Sender<Option<crate::action::Task>>,
+    pub(crate) confirmation: watch::Sender<Option<crate::action::Confirmation>>,
+    pub(crate) revoked: watch::Sender<Option<crate::action::Revoked>>,
 }
 
 impl Outputs {
@@ -177,6 +180,9 @@ impl Outputs {
         self.speech.send_replace(None);
         self.invitation.send_replace(None);
         self.status.send_replace(None);
+        self.task.send_replace(None);
+        self.confirmation.send_replace(None);
+        self.revoked.send_replace(None);
     }
 }
 
@@ -211,6 +217,41 @@ fn answer(
             }
             Ok((Incoming::Status(status), reply)) => {
                 outputs.status.send_replace(Some(status));
+                Ok(reply)
+            }
+            // A transport receipt is not an effect. The platform now binds
+            // the command, acknowledges the binding, and only afterwards
+            // reports what it actually observed.
+            Ok((Incoming::Act(task), reply)) => {
+                outputs.revoked.send_replace(None);
+                outputs.task.send_replace(Some(task));
+                Ok(reply)
+            }
+            Ok((Incoming::Confirm(confirmation), reply)) => {
+                outputs.confirmation.send_replace(confirmation);
+                Ok(reply)
+            }
+            // A revoke supersedes remaining work. The platform stops what it
+            // can and reports `cancelled` only when it can prove nothing
+            // started or that it stopped it; otherwise `unknown`.
+            Ok((Incoming::Revoke(action_id, reason), reply)) => {
+                outputs
+                    .revoked
+                    .send_replace(Some(crate::action::Revoked { action_id, reason }));
+                outputs.task.send_if_modified(|current| {
+                    let matched = current.as_ref().is_some_and(|t| t.action_id == action_id);
+                    if matched {
+                        *current = None;
+                    }
+                    matched
+                });
+                outputs.confirmation.send_if_modified(|current| {
+                    let matched = current.as_ref().is_some_and(|c| c.action_id == action_id);
+                    if matched {
+                        *current = None;
+                    }
+                    matched
+                });
                 Ok(reply)
             }
             Ok((Incoming::Clear(action_id), reply)) => {

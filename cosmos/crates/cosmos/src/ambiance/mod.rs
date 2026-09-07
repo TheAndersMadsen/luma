@@ -5,6 +5,7 @@ pub mod changes;
 pub mod continuation;
 pub mod disclosure;
 pub mod echo;
+pub mod grant;
 pub mod ledger;
 pub mod lookup;
 pub mod native_connection;

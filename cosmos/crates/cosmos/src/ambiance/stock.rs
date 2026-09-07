@@ -49,6 +49,12 @@ async fn response_started(
     if action.intent.channel() == Channel::VisualCard {
         action = runtime.display_confirmation(auth, &action).await?;
     }
+    // A device action is not spoken; the runtime's own shared-safe sentence
+    // is, and only after the device's report commits. The Pin never learns
+    // the operation, the device kind or the reason.
+    if action.intent.channel().is_action() {
+        action = runtime.action_expression(auth, &action).await?;
+    }
     let RuntimeResult::Dispatch(action) = runtime.stock_claim(auth, &action).await? else {
         return Err(Status::failed_precondition("dispatch not committed"));
     };

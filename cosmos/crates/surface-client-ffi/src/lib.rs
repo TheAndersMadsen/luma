@@ -238,6 +238,21 @@ enum Command {
     SetVisible(bool),
     Acknowledge,
     AcknowledgeSpeech,
+    /// Bind the current command locally and say it is legal here. Never an
+    /// outcome, and never sent for a command this platform will not attempt.
+    AcknowledgeTask,
+    /// Say what happened, once, after the platform observed it.
+    Report(cosmos_surface_client::Report),
+    /// Say the current command is still running.
+    Progress {
+        sequence: u64,
+        elapsed_ms: i64,
+    },
+    /// Answer the current ceremony with the actor evidence obtained.
+    Grant {
+        granted: bool,
+        attestation: Option<cosmos_surface_client::Attestation>,
+    },
     Disconnect,
 }
 
@@ -400,6 +415,8 @@ fn pending(value: Option<Pending>) -> Value {
                 OperationKind::Cancel => "cancel",
                 OperationKind::State => "state",
                 OperationKind::Acknowledge => "acknowledge",
+                OperationKind::Report => "report",
+                OperationKind::Grant => "grant",
             },
             "instanceId": value.instance_id.to_string(),
             "sequence": value.sequence,
@@ -464,6 +481,7 @@ fn invitation(value: Option<&cosmos_surface_client::Invitation>) -> Value {
     value.map_or(Value::Null, |invitation| {
         json!({
             "id": invitation.id.to_string(),
+            "kind": invitation.kind,
             "origin": invitation.origin,
             "privacy": invitation.privacy,
             "expiresAtMs": invitation.expires_at_ms,
@@ -481,6 +499,46 @@ fn status(value: Option<&TurnStatus>) -> Value {
             "state": status.state,
             "surfacePlatform": status.surface.map(|platform| platform.as_str()),
             "privacy": status.privacy,
+        })
+    })
+}
+
+/// The command this installation was asked to carry out. The platform
+/// re-verifies it against its own copy of the owner's policy, acknowledges
+/// the binding, then reports only what it actually observed.
+fn task(value: Option<&cosmos_surface_client::Task>) -> Value {
+    value.map_or(Value::Null, |task| {
+        json!({
+            "actionId": task.action_id.to_string(),
+            "turnId": task.turn_id.to_string(),
+            "generation": task.generation,
+            "channel": task.channel,
+            "contentDigest": task.content_digest,
+            "idempotencyKey": task.idempotency_key,
+            "operation": task.operation,
+            "expiresAtMs": task.expires_at_ms,
+            "reportByMs": task.report_by_ms,
+            "privacy": task.privacy,
+        })
+    })
+}
+
+/// The ceremony this installation is the venue for. The description is the
+/// runtime's own composed words; a platform renders them from its own strings
+/// file and echoes the digest, so the answer binds to the sentence read.
+fn confirmation(value: Option<&cosmos_surface_client::Confirmation>) -> Value {
+    value.map_or(Value::Null, |confirmation| {
+        json!({
+            "grantId": confirmation.grant_id.to_string(),
+            "actionId": confirmation.action_id.to_string(),
+            "turnId": confirmation.turn_id.to_string(),
+            "generation": confirmation.generation,
+            "description": confirmation.description,
+            "descriptionDigest": confirmation.description_digest,
+            "risk": confirmation.risk,
+            "attestation": confirmation.attestation,
+            "privacy": confirmation.privacy,
+            "expiresAtMs": confirmation.expires_at_ms,
         })
     })
 }
@@ -529,6 +587,11 @@ fn snapshot(
         "speech": status.as_ref().map_or(Value::Null, |s| speech(s.speech.as_ref())),
         "invitation": status.as_ref().map_or(Value::Null, |s| invitation(s.invitation.as_ref())),
         "status": status.as_ref().map_or(Value::Null, |s| self::status(s.turn_status.as_ref())),
+        "task": status.as_ref().map_or(Value::Null, |s| task(s.task.as_ref())),
+        "confirmation": status.as_ref().map_or(Value::Null, |s| confirmation(s.confirmation.as_ref())),
+        "revoked": status.as_ref().and_then(|s| s.revoked).map(|revoked| json!({
+            "actionId": revoked.action_id.to_string(), "reason": revoked.reason,
+        })),
     })
 }
 
@@ -681,6 +744,10 @@ async fn run(
             Some(Command::SetVisible(_)) => "set_visible",
             Some(Command::Acknowledge) => "acknowledge",
             Some(Command::AcknowledgeSpeech) => "acknowledge_speech",
+            Some(Command::AcknowledgeTask) => "acknowledge_task",
+            Some(Command::Report(_)) => "report",
+            Some(Command::Progress { .. }) => "progress",
+            Some(Command::Grant { .. }) => "grant",
             Some(Command::Disconnect) => "disconnect",
             None => "heartbeat",
         };
@@ -735,6 +802,34 @@ async fn run(
                         Some(speech) => client.acknowledge_speech(&speech).await,
                         None => {
                             push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_speech")));
+                            return None;
+                        }
+                    },
+                    Some(Command::AcknowledgeTask) => match client.task() {
+                        Some(task) => client.acknowledge_task(&task).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_task")));
+                            return None;
+                        }
+                    },
+                    Some(Command::Report(report)) => match client.task() {
+                        Some(task) => client.report(&task, report).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_task")));
+                            return None;
+                        }
+                    },
+                    Some(Command::Progress { sequence, elapsed_ms }) => match client.task() {
+                        Some(task) => client.progress(&task, sequence, elapsed_ms).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_task")));
+                            return None;
+                        }
+                    },
+                    Some(Command::Grant { granted, attestation }) => match client.confirmation() {
+                        Some(confirmation) => client.grant(&confirmation, granted, attestation).await,
+                        None => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_confirmation")));
                             return None;
                         }
                     },
@@ -938,7 +1033,90 @@ command!(
     cosmos_surface_acknowledge_speech,
     Command::AcknowledgeSpeech
 );
+command!(cosmos_surface_acknowledge_task, Command::AcknowledgeTask);
 command!(cosmos_surface_disconnect, Command::Disconnect);
+
+/// # Safety
+/// The handle must be live; report must be readable for length bytes until
+/// return.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_report(
+    surface: *mut CosmosSurface,
+    report: *const u8,
+    length: usize,
+) -> i32 {
+    boundary(|| {
+        let bytes = match unsafe { optional_bytes(report, length, 16 * 1024) } {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) | Err(_) => return INVALID_ARGUMENT,
+        };
+        let Ok(report) = cosmos_surface_client::Report::parse(bytes) else {
+            return INVALID_ARGUMENT;
+        };
+        unsafe { enqueue(surface, Command::Report(report)) }
+    })
+}
+
+/// # Safety
+/// The handle must be live and cannot be concurrently destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_progress(
+    surface: *mut CosmosSurface,
+    sequence: u32,
+    elapsed_ms: i64,
+) -> i32 {
+    boundary(|| unsafe {
+        enqueue(
+            surface,
+            Command::Progress {
+                sequence: u64::from(sequence),
+                elapsed_ms,
+            },
+        )
+    })
+}
+
+/// # Safety
+/// The handle must be live; attestation must be readable for its length until
+/// return, and may be null only when its length is zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_grant(
+    surface: *mut CosmosSurface,
+    granted: i32,
+    attestation: *const u8,
+    attestation_length: usize,
+) -> i32 {
+    boundary(|| {
+        if !matches!(granted, 0 | 1) {
+            return INVALID_ARGUMENT;
+        }
+        let attestation = match unsafe { optional_bytes(attestation, attestation_length, 64) } {
+            Ok(None) => None,
+            Err(_) => return INVALID_ARGUMENT,
+            Ok(Some(bytes)) => match std::str::from_utf8(bytes)
+                .ok()
+                .and_then(cosmos_surface_client::Attestation::parse)
+            {
+                Some(value) => Some(value),
+                None => return INVALID_ARGUMENT,
+            },
+        };
+        // Granting without the evidence the ceremony asked for is not an
+        // answer; the client refuses it before anything is sent.
+        if granted == 1 && attestation.is_none() {
+            return INVALID_ARGUMENT;
+        }
+        unsafe {
+            enqueue(
+                surface,
+                Command::Grant {
+                    granted: granted == 1,
+                    attestation,
+                },
+            )
+        }
+    })
+}
 
 /// # Safety
 /// The handle must be live, written must be writable, and output must be writable

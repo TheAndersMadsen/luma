@@ -29,6 +29,10 @@ fn render_action(intent: SemanticIntent) -> Action {
         display_expires_at_ms: 20_000,
         attempts: 1,
         fallbacks: Vec::new(),
+        outcome: None,
+        revoked: None,
+        progress: 0,
+        dispatched_at_ms: 0,
     }
 }
 

@@ -59,8 +59,17 @@ pub enum DisplayContent {
 pub enum TurnState {
     Working,
     Waiting,
+    /// A command is waiting for the owner's confirmation at the installation
+    /// that would carry it out.
+    Confirming,
+    /// An approved device is carrying a command out. Nothing is claimed yet.
+    Acting,
     Shown,
     Spoken,
+    /// A device reported that it carried the command out.
+    Done,
+    /// A device reported that it did not. The origin never learns why.
+    Refused,
     Nowhere,
     Unknown,
 }
@@ -170,6 +179,7 @@ pub struct Display {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Invitation {
     pub id: Uuid,
+    pub kind: InvitationKind,
     pub origin: String,
     pub privacy: Privacy,
     pub expires_at_ms: i64,
@@ -180,11 +190,21 @@ pub struct Invitation {
 struct InvitationFrame {
     version: u8,
     id: Uuid,
+    kind: InvitationKind,
     surface_id: Uuid,
     incarnation: Uuid,
     origin: String,
     privacy: Privacy,
     expires_at: i64,
+}
+
+/// What is waiting: a private card, or a command this installation was asked
+/// to carry out. A phone cannot begin either in the background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvitationKind {
+    Card,
+    Task,
 }
 
 /// Inert credit token. Platforms render text and one HTTPS link per part.
@@ -241,6 +261,71 @@ enum Frame {
         stamp: Stamp,
         status: StatusFrame,
     },
+    Act {
+        version: u8,
+        stamp: Stamp,
+        command: ActCommand,
+    },
+    Revoke {
+        version: u8,
+        stamp: Stamp,
+        #[serde(rename = "actionId")]
+        action_id: Uuid,
+        reason: crate::action::RevokeReason,
+    },
+    Confirm {
+        version: u8,
+        stamp: Stamp,
+        #[serde(deserialize_with = "explicit_request")]
+        request: Option<ConfirmRequest>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ActCommand {
+    version: u8,
+    action_id: Uuid,
+    turn_id: Uuid,
+    generation: u64,
+    surface_id: Uuid,
+    incarnation: Uuid,
+    channel: String,
+    content_digest: String,
+    idempotency_key: String,
+    operation: crate::action::Operation,
+    expires_at: i64,
+    report_by: i64,
+    privacy: Privacy,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfirmRequest {
+    version: u8,
+    grant_id: Uuid,
+    action_id: Uuid,
+    turn_id: Uuid,
+    generation: u64,
+    surface_id: Uuid,
+    incarnation: Uuid,
+    channel: String,
+    description_digest: String,
+    description: crate::action::Description,
+    risk: crate::action::Risk,
+    attestation: crate::action::Attestation,
+    privacy: Privacy,
+    expires_at: i64,
+}
+
+/// `request` is null when no ceremony is live, and a frame that omits the
+/// field is a shape the runtime never sends: read it explicitly so a missing
+/// key is rejected rather than read as "no ceremony".
+fn explicit_request<'de, D>(deserializer: D) -> Result<Option<ConfirmRequest>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
 }
 
 pub(crate) enum Incoming {
@@ -249,6 +334,9 @@ pub(crate) enum Incoming {
     Speak(crate::speech::SpeechFrame),
     Invite(Option<Invitation>),
     Status(TurnStatus),
+    Act(crate::action::Task),
+    Revoke(Uuid, crate::action::RevokeReason),
+    Confirm(Option<crate::action::Confirmation>),
 }
 
 /// The exact bound connection this frame must name.
@@ -626,13 +714,22 @@ pub(crate) fn parse_frame(
                             .origin
                             .bytes()
                             .all(|b| b.is_ascii_lowercase() || b == b'_')
-                        || !matches!(frame.privacy, Privacy::NearUser | Privacy::Private)
+                        || match frame.kind {
+                            // A private card waits for an unlocked personal
+                            // foreground; a command waits for any foreground,
+                            // because no platform starts one in the background.
+                            InvitationKind::Card => {
+                                !matches!(frame.privacy, Privacy::NearUser | Privacy::Private)
+                            }
+                            InvitationKind::Task => frame.privacy == Privacy::Sensitive,
+                        }
                         || frame.expires_at <= now_ms
                     {
                         return Err(Error::InvalidResponse);
                     }
                     Some(Invitation {
                         id: frame.id,
+                        kind: frame.kind,
                         origin: frame.origin,
                         privacy: frame.privacy,
                         expires_at_ms: frame.expires_at,
@@ -666,6 +763,110 @@ pub(crate) fn parse_frame(
                 }),
                 stamp,
             )
+        }
+        // A bound command for this exact connection. The client recomputes
+        // the content digest from the canonical tuple: it never carries out
+        // something whose shape it could not reproduce itself.
+        Frame::Act {
+            version,
+            stamp,
+            command,
+        } => {
+            if version != 1
+                || !valid_stamp(&stamp)
+                || command.version != 1
+                || command.action_id.is_nil()
+                || command.turn_id.is_nil()
+                || command.action_id != stamp.instance_id
+                || command.generation == 0
+                || command.generation > MAX_SEQUENCE
+                || command.surface_id != expected.surface_id
+                || command.incarnation != expected.incarnation
+                || command.channel != command.operation.channel()
+                || command.expires_at <= now_ms
+                || command.report_by <= now_ms
+                || command.report_by > command.expires_at
+                || !command.operation.valid()
+                || command.content_digest != command.operation.content_digest()
+                || !crate::action::digest_text(&command.idempotency_key)
+                || command.privacy == Privacy::Sensitive
+            {
+                return Err(Error::InvalidResponse);
+            }
+            (
+                Incoming::Act(crate::action::Task {
+                    action_id: command.action_id,
+                    turn_id: command.turn_id,
+                    generation: command.generation,
+                    channel: command.channel,
+                    content_digest: command.content_digest,
+                    idempotency_key: command.idempotency_key,
+                    operation: command.operation,
+                    expires_at_ms: command.expires_at,
+                    report_by_ms: command.report_by,
+                    privacy: command.privacy,
+                }),
+                stamp,
+            )
+        }
+        Frame::Revoke {
+            version,
+            stamp,
+            action_id,
+            reason,
+        } => {
+            if version != 1 || !valid_stamp(&stamp) || action_id.is_nil() {
+                return Err(Error::InvalidResponse);
+            }
+            (Incoming::Revoke(action_id, reason), stamp)
+        }
+        // The ceremony this installation is the venue for. Its description is
+        // the runtime's own words; the platform renders them from its own
+        // strings file and echoes the digest, so the answer binds to the exact
+        // sentence a person read.
+        Frame::Confirm {
+            version,
+            stamp,
+            request,
+        } => {
+            if version != 1 || !valid_stamp(&stamp) {
+                return Err(Error::InvalidResponse);
+            }
+            let confirmation = match request {
+                None => None,
+                Some(request) => {
+                    if request.version != 1
+                        || request.grant_id.is_nil()
+                        || request.action_id.is_nil()
+                        || request.turn_id.is_nil()
+                        || request.generation == 0
+                        || request.generation > MAX_SEQUENCE
+                        || request.surface_id != expected.surface_id
+                        || request.incarnation != expected.incarnation
+                        || request.channel != "confirm.tap"
+                        || !request.description.valid()
+                        || request.description_digest != request.description.content_digest()
+                        || request.description.class != request.privacy
+                        || request.privacy == Privacy::Sensitive
+                        || request.expires_at <= now_ms
+                    {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Some(crate::action::Confirmation {
+                        grant_id: request.grant_id,
+                        action_id: request.action_id,
+                        turn_id: request.turn_id,
+                        generation: request.generation,
+                        description: request.description,
+                        description_digest: request.description_digest,
+                        risk: request.risk,
+                        attestation: request.attestation,
+                        privacy: request.privacy,
+                        expires_at_ms: request.expires_at,
+                    })
+                }
+            };
+            (Incoming::Confirm(confirmation), stamp)
         }
         Frame::Clear {
             version,
@@ -938,6 +1139,364 @@ mod tests {
             &sha256_hex(b"x"),
         );
         assert!(parse_frame(&unknown, expected(), 1_000_000_000).is_err());
+    }
+
+    fn act(operation: serde_json::Value, digest: &str) -> String {
+        serde_json::json!({
+            "version": 1, "kind": "act",
+            "stamp": {"epoch": Uuid::from_u128(9), "sequence": 4, "instanceId": Uuid::from_u128(7)},
+            "command": {
+                "version": 1, "actionId": Uuid::from_u128(7), "turnId": Uuid::from_u128(8),
+                "generation": 2, "surfaceId": Uuid::from_u128(2), "incarnation": Uuid::from_u128(5),
+                "channel": "action.open", "contentDigest": digest,
+                "idempotencyKey": "a0".to_owned() + &"4".repeat(62),
+                "operation": operation,
+                "expiresAt": 1_000_060_000, "reportBy": 1_000_030_000,
+                "privacy": "shared_room",
+            }
+        })
+        .to_string()
+    }
+
+    /// A command is carried out only when this client can reproduce the
+    /// runtime's binding itself, for its own connection, from a shape it
+    /// bounds. Every digest here is the canonical tuple in
+    /// `contracts/fixtures/ambiance-device-action-digests-v1.json`.
+    #[test]
+    fn client_recomputes_every_device_action_digest_and_binds_the_connection() {
+        let file: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/ambiance-device-action-digests-v1.json"
+        ))
+        .unwrap();
+        let vector = |name: &str| -> String {
+            file["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap()["digest"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let operations = [
+            (
+                "open-https",
+                crate::action::Operation::Open {
+                    locator: crate::action::Locator::Https {
+                        url: "https://github.com/owner/repo/pull/412".into(),
+                    },
+                    version: None,
+                    position: Some(crate::action::Position::Fragment {
+                        value: "discussion_r1".into(),
+                    }),
+                    label: "PR 412".into(),
+                },
+            ),
+            (
+                "open-file-line",
+                crate::action::Operation::Open {
+                    locator: crate::action::Locator::File {
+                        root_id: "repo".into(),
+                        relative: "cosmos/crates/cosmos/src/ambiance/state.rs".into(),
+                    },
+                    version: Some(format!("7c40{}", "0".repeat(60))),
+                    position: Some(crate::action::Position::Line { line: 1710 }),
+                    label: "state.rs".into(),
+                },
+            ),
+            (
+                "open-app",
+                crate::action::Operation::Open {
+                    locator: crate::action::Locator::App {
+                        id: "dev.zed.Zed".into(),
+                    },
+                    version: None,
+                    position: None,
+                    label: "Zed".into(),
+                },
+            ),
+            (
+                "route",
+                crate::action::Operation::Route {
+                    place_id: "ChIJa1b2c3d4e5f6".into(),
+                    name: "Restaurant Barr".into(),
+                    address: "Strandgade 93, 1401 København".into(),
+                    lat: "55.673611".into(),
+                    lng: "12.596944".into(),
+                },
+            ),
+            (
+                "play",
+                crate::action::Operation::Play {
+                    title: "The Zone of Interest trailer".into(),
+                    query: "The Zone of Interest trailer".into(),
+                    providers: vec!["youtube".into()],
+                    item_digest: file["cases"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|case| case["name"] == "play")
+                        .unwrap()["canonical"][5]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                },
+            ),
+            (
+                "run",
+                crate::action::Operation::Run {
+                    entry_id: "project-tests".into(),
+                    label: "Project tests".into(),
+                    entry_digest: vector("command-entry"),
+                    argv_digest: vector("command-argv"),
+                    budget_ms: 900_000,
+                    mutates: true,
+                },
+            ),
+        ];
+        for (name, operation) in &operations {
+            assert!(operation.valid(), "{name}");
+            assert_eq!(operation.content_digest(), vector(name), "{name}");
+        }
+        let (open, _) = &operations[0];
+        let _ = open;
+        let operation = serde_json::to_value(&operations[0].1).unwrap();
+        let digest = operations[0].1.content_digest();
+        let (incoming, reply) =
+            parse_frame(&act(operation.clone(), &digest), expected(), 1_000_000_000).unwrap();
+        let Incoming::Act(task) = incoming else {
+            panic!("act expected")
+        };
+        assert_eq!(task.action_id, Uuid::from_u128(7));
+        assert_eq!(task.channel, "action.open");
+        assert_eq!(task.operation, operations[0].1);
+        assert_eq!(
+            reply,
+            serde_json::json!({"version":1,"kind":"received","stamp":{"epoch":Uuid::from_u128(9),"sequence":4,"instanceId":Uuid::from_u128(7)}}).to_string()
+        );
+        // A drift in either implementation refuses the command rather than
+        // carrying out something the owner never approved.
+        assert!(
+            parse_frame(
+                &act(operation.clone(), &sha256_hex(b"other")),
+                expected(),
+                1_000_000_000
+            )
+            .is_err()
+        );
+        // Another installation's command is never this installation's.
+        assert!(
+            parse_frame(
+                &act(operation.clone(), &digest),
+                Expected {
+                    incarnation: Uuid::from_u128(6),
+                    ..expected()
+                },
+                1_000_000_000
+            )
+            .is_err()
+        );
+        assert!(parse_frame(&act(operation, &digest), expected(), 1_000_060_000).is_err());
+    }
+
+    /// A locator this client cannot open without ambiguity is not a command.
+    #[test]
+    fn client_rejects_an_unsupported_operation_or_an_ambiguous_locator() {
+        let open = |locator: serde_json::Value| serde_json::json!({"kind": "open", "locator": locator, "label": "x"});
+        for locator in [
+            serde_json::json!({"scheme": "https", "url": "http://github.com/a"}),
+            serde_json::json!({"scheme": "https", "url": "https://user:pw@github.com/a"}),
+            serde_json::json!({"scheme": "https", "url": "https://github.com:8443/a"}),
+            serde_json::json!({"scheme": "https", "url": "https://github.com/a b"}),
+            serde_json::json!({"scheme": "file", "rootId": "repo", "relative": "../secrets"}),
+            serde_json::json!({"scheme": "file", "rootId": "repo", "relative": "/etc/passwd"}),
+            serde_json::json!({"scheme": "file", "rootId": "REPO", "relative": "a"}),
+            serde_json::json!({"scheme": "ftp", "url": "ftp://github.com/a"}),
+        ] {
+            let operation = open(locator.clone());
+            let digest = sha256_hex(b"unused");
+            assert!(
+                parse_frame(&act(operation, &digest), expected(), 1_000_000_000).is_err(),
+                "{locator}"
+            );
+        }
+        // An unknown operation kind is not decoded into something adjacent.
+        assert!(
+            parse_frame(
+                &act(
+                    serde_json::json!({"kind": "paste", "text": "x"}),
+                    &sha256_hex(b"x")
+                ),
+                expected(),
+                1_000_000_000
+            )
+            .is_err()
+        );
+        // The channel must be the one the bound operation names.
+        let mismatched = act(
+            serde_json::json!({"kind": "play", "title": "a", "query": "a",
+                "providers": ["youtube"], "itemDigest": "c1".to_owned() + &"1".repeat(62)}),
+            &sha256_hex(b"x"),
+        );
+        assert!(parse_frame(&mismatched, expected(), 1_000_000_000).is_err());
+    }
+
+    /// The ceremony binds to the exact sentence a person reads, and the
+    /// revoke frame says why an effect was stopped.
+    #[test]
+    fn client_confirm_binds_the_description_digest_and_revoke_carries_its_reason() {
+        let description = crate::action::Description {
+            kind: crate::action::DescriptionKind::DeviceAction,
+            verb: "run".into(),
+            subject: "Project tests".into(),
+            device_kind: "macos".into(),
+            effect: "changes files on that device".into(),
+            class: Privacy::Private,
+        };
+        let confirm = |digest: &str, class: &str| {
+            serde_json::json!({
+                "version": 1, "kind": "confirm",
+                "stamp": {"epoch": Uuid::from_u128(9), "sequence": 6, "instanceId": Uuid::from_u128(11)},
+                "request": {
+                    "version": 1, "grantId": Uuid::from_u128(11), "actionId": Uuid::from_u128(7),
+                    "turnId": Uuid::from_u128(8), "generation": 2,
+                    "surfaceId": Uuid::from_u128(2), "incarnation": Uuid::from_u128(5),
+                    "channel": "confirm.tap", "descriptionDigest": digest,
+                    "description": description, "risk": "high",
+                    "attestation": "device_owner_auth", "privacy": class,
+                    "expiresAt": 1_000_030_000,
+                }
+            })
+            .to_string()
+        };
+        let digest = description.content_digest();
+        let (incoming, _) =
+            parse_frame(&confirm(&digest, "private"), expected(), 1_000_000_000).unwrap();
+        let Incoming::Confirm(Some(request)) = incoming else {
+            panic!("confirm expected")
+        };
+        assert_eq!(request.grant_id, Uuid::from_u128(11));
+        assert_eq!(
+            request.attestation,
+            crate::action::Attestation::DeviceOwnerAuth
+        );
+        assert_eq!(request.description, description);
+        // A sentence whose digest does not match is not the sentence Cosmos
+        // will accept an answer for.
+        assert!(
+            parse_frame(
+                &confirm(&sha256_hex(b"other"), "private"),
+                expected(),
+                1_000_000_000
+            )
+            .is_err()
+        );
+        // The rendered class is the class the description carries.
+        assert!(parse_frame(&confirm(&digest, "shared_room"), expected(), 1_000_000_000).is_err());
+        // A withdrawn ceremony is an explicit null, never an omitted key.
+        let withdrawn = serde_json::json!({
+            "version": 1, "kind": "confirm",
+            "stamp": {"epoch": Uuid::from_u128(9), "sequence": 7, "instanceId": Uuid::from_u128(11)},
+            "request": serde_json::Value::Null,
+        })
+        .to_string();
+        let (incoming, _) = parse_frame(&withdrawn, expected(), 1_000_000_000).unwrap();
+        assert!(matches!(incoming, Incoming::Confirm(None)));
+        let omitted = serde_json::json!({
+            "version": 1, "kind": "confirm",
+            "stamp": {"epoch": Uuid::from_u128(9), "sequence": 7, "instanceId": Uuid::from_u128(11)},
+        })
+        .to_string();
+        assert!(parse_frame(&omitted, expected(), 1_000_000_000).is_err());
+        // A revoke names the effect and why it was stopped.
+        let revoke = serde_json::json!({
+            "version": 1, "kind": "revoke",
+            "stamp": {"epoch": Uuid::from_u128(9), "sequence": 8, "instanceId": Uuid::from_u128(7)},
+            "actionId": Uuid::from_u128(7), "reason": "preempted",
+        })
+        .to_string();
+        let (incoming, _) = parse_frame(&revoke, expected(), 1_000_000_000).unwrap();
+        assert!(matches!(
+            incoming,
+            Incoming::Revoke(id, crate::action::RevokeReason::Preempted) if id == Uuid::from_u128(7)
+        ));
+    }
+
+    /// A report claims only what the platform observed, and only what its own
+    /// channel can produce.
+    #[test]
+    fn client_report_refuses_an_outcome_its_evidence_does_not_show() {
+        use crate::action::{DeclineReason, Evidence, PlaybackState, Report, ReportOutcome};
+        let launched = Evidence::Playback {
+            provider: "youtube".into(),
+            state: PlaybackState::Launched,
+            position_ms: 0,
+            item_digest: format!("c1{}", "1".repeat(62)),
+        };
+        let playing = Evidence::Playback {
+            provider: "youtube".into(),
+            state: PlaybackState::Playing,
+            position_ms: 4_200,
+            item_digest: format!("c1{}", "1".repeat(62)),
+        };
+        let completed = |evidence: Evidence| Report {
+            outcome: ReportOutcome::Completed,
+            evidence,
+            output: None,
+        };
+        assert!(!completed(launched.clone()).valid("action.play"));
+        assert!(completed(playing.clone()).valid("action.play"));
+        assert!(!completed(playing).valid("action.open"));
+        assert!(
+            Report {
+                outcome: ReportOutcome::Unknown,
+                evidence: launched,
+                output: None,
+            }
+            .valid("action.play")
+        );
+        // A refusal is exactly the declined evidence, and nothing else is.
+        let declined = Evidence::Declined {
+            reason: DeclineReason::NoHandler,
+        };
+        assert!(
+            Report {
+                outcome: ReportOutcome::Refused,
+                evidence: declined.clone(),
+                output: None,
+            }
+            .valid("action.run")
+        );
+        assert!(
+            !Report {
+                outcome: ReportOutcome::Failed,
+                evidence: declined,
+                output: None,
+            }
+            .valid("action.run")
+        );
+        // Output belongs to a command and is bounded.
+        let command = Evidence::Command {
+            entry_id: "project-tests".into(),
+            exit_code: Some(1),
+            duration_ms: 48_211,
+            output_bytes: 18_422,
+            truncated: true,
+        };
+        assert!(
+            completed(command.clone()).valid("action.run"),
+            "a non-zero exit code is a command that ran"
+        );
+        assert!(
+            !Report {
+                outcome: ReportOutcome::Completed,
+                evidence: command,
+                output: Some("x".repeat(crate::action::MAX_OUTPUT_BYTES + 1)),
+            }
+            .valid("action.run")
+        );
+        assert!(Report::parse(b"{\"outcome\":\"completed\"}").is_err());
     }
 
     #[test]

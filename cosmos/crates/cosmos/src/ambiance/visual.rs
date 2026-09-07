@@ -439,6 +439,10 @@ mod tests {
             expression: false,
             attempts: 1,
             fallbacks: Vec::new(),
+            outcome: None,
+            revoked: None,
+            progress: 0,
+            dispatched_at_ms: 0,
         }
     }
 

@@ -72,6 +72,10 @@ fn delivery_action(intent: crate::ambiance::SemanticIntent) -> crate::ambiance::
         display_expires_at_ms: now_ms() + 30_000,
         attempts: 1,
         fallbacks: Vec::new(),
+        outcome: None,
+        revoked: None,
+        progress: 0,
+        dispatched_at_ms: 0,
     }
 }
 

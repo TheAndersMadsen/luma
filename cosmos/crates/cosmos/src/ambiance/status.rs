@@ -16,8 +16,17 @@ use uuid::Uuid;
 pub enum TurnState {
     Working,
     Waiting,
+    /// A command is waiting for the owner's confirmation at the installation
+    /// that would carry it out.
+    Confirming,
+    /// An approved device is carrying a command out. Nothing is claimed yet.
+    Acting,
     Shown,
     Spoken,
+    /// A device reported that it carried the command out.
+    Done,
+    /// A device reported that it did not. The origin never learns why.
+    Refused,
     Nowhere,
     Unknown,
 }
@@ -26,7 +35,7 @@ impl TurnState {
     pub fn terminal(self) -> bool {
         matches!(
             self,
-            Self::Shown | Self::Spoken | Self::Nowhere | Self::Unknown
+            Self::Shown | Self::Spoken | Self::Done | Self::Refused | Self::Nowhere | Self::Unknown
         )
     }
 }
@@ -72,16 +81,33 @@ impl RuntimeState {
             let state = match outcome.channel {
                 Channel::VisualCard => TurnState::Shown,
                 Channel::AudioTts => TurnState::Spoken,
-                // Only a device report may set an action-channel outcome, and
-                // no report is accepted yet; an outcome the origin cannot name
-                // is reported as one the runtime cannot confirm.
-                Channel::ActionOpen
-                | Channel::ActionRoute
-                | Channel::ActionPlay
-                | Channel::ActionRun
-                | Channel::ConfirmTap => TurnState::Unknown,
+                // Only a device's own final report sets an action-channel
+                // outcome, and the state is exactly what it reported: what it
+                // carried out, what it did not, or what it cannot confirm.
+                channel if channel.is_action() => actions
+                    .clone()
+                    .find(|a| a.surface_id == outcome.surface_id && a.channel == channel)
+                    .and_then(|a| a.outcome)
+                    .map_or(TurnState::Unknown, |outcome| match outcome {
+                        super::action::ReportOutcome::Completed => TurnState::Done,
+                        super::action::ReportOutcome::Refused
+                        | super::action::ReportOutcome::Failed
+                        | super::action::ReportOutcome::Cancelled => TurnState::Refused,
+                        super::action::ReportOutcome::Unknown => TurnState::Unknown,
+                    }),
+                _ => TurnState::Unknown,
             };
             (state, Some(outcome.surface_id))
+        } else if let Some(confirming) = actions
+            .clone()
+            .find(|a| a.status == ActionStatus::AwaitingGrant)
+        {
+            (TurnState::Confirming, Some(confirming.surface_id))
+        } else if let Some(acting) = actions
+            .clone()
+            .find(|a| a.channel.is_action() && a.started())
+        {
+            (TurnState::Acting, Some(acting.surface_id))
         } else if let Some(pending) = actions
             .clone()
             .find(|a| matches!(a.status, ActionStatus::Proposed | ActionStatus::Dispatched))

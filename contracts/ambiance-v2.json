@@ -219,9 +219,9 @@
     {
       "id": "center-local-voice-permission-test-definition",
       "kind": "test-definition",
-      "path": "center/src/app/settings/account/devices/LocalVoicePermission.test.tsx",
-      "anchor": "an uncertain write disables all writes until a fresh read supplies the committed revision",
-      "scope": "Defines explicit owner permission, strict commit validation, same-Pin revision binding, revocation after pairing loss and invalidation of late replies after uncertainty or lifecycle changes.",
+      "path": "center/src/app/settings/account/surfaces/PinCard.test.tsx",
+      "anchor": "each Pin permission turns on and off with the approval Cosmos records for it",
+      "scope": "Defines explicit owner permission for the Pin's own local voice capture on the one page every device shares: strict commit validation, same-Pin revision binding, permissions that can only be taken away after pairing is lost, and a lost reply that claims no change until a fresh read.",
       "limitation": "DOM and mocked upstream fixtures only. Approval does not activate hardware, certify physical privacy, authorize cloud speech or establish application voice-loop acceptance."
     },
     {
@@ -411,9 +411,9 @@
     {
       "id": "center-speech-disclosure-test-definition",
       "kind": "test-definition",
-      "path": "center/src/app/settings/account/surfaces/SpeechPermission.test.tsx",
-      "anchor": "lost replies block another write until a fresh read and never claim success",
-      "scope": "Defines explicit per-surface shared-text permission for Pin and native installations, exact committed response validation, uncertainty after failed writes, revocation while approval is unavailable and aborting/clearing a closed or unmounted view.",
+      "path": "center/src/app/settings/account/surfaces/DeviceCard.test.tsx",
+      "anchor": "Speak replies posts the exact shared-text policy with the region from Services and turns off with an explicit null",
+      "scope": "Defines explicit per-surface shared-text permission for Pin and native installations, the exact committed policy and provider region, revocation with an explicit null, a recorded provider that is no longer configured authorizing nothing, and a lost reply that clears the switch until a fresh read rather than claiming success.",
       "limitation": "DOM and mocked upstream fixtures only. No physical Pin or complete application voice-loop acceptance is established; the control grants synthesis, not native microphone capture."
     },
     {
@@ -911,6 +911,134 @@
       "anchor": "pub struct Continuation",
       "scope": "What moves between a document turn and a later one: a locator, a version digest and a position, written only when the private card the origin's own document produced was acknowledged, held per kind in the bounded runtime memory and never in a prompt.",
       "limitation": "Storage and redaction only. Nothing opens the document at a destination, and the explanation card is not stored or carried."
+    },
+    {
+      "id": "device-action-dispatch-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_device_action_is_claimed_only_by_a_visible_foreground_and_survives_leaving_it",
+      "scope": "Visibility is required to begin an effect and never to continue one: a hidden installation holds the command instead of losing it, a reported foreground claims it, and launching something in front of Cosmos neither retires the effect nor refuses its report.",
+      "limitation": "One synthetic installation over a memory store. No platform carried anything out, so the report is the test's assertion rather than an observed effect."
+    },
+    {
+      "id": "device-action-outcome-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_acknowledge_on_an_action_channel_sets_no_turn_outcome_but_a_report_does",
+      "scope": "An acknowledgment on an action channel commits no outcome and does not finish the turn; only a device's own final report does, only with evidence of its own channel that shows what it claims, and only once. A launch nobody observed is refused as a completed outcome.",
+      "limitation": "Runtime gating only. It proves what the log will accept, not what a device actually did."
+    },
+    {
+      "id": "device-action-exit-code-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_exit_code_one_is_completed_and_its_output_is_routed_as_private_content",
+      "scope": "A command that ran and exited non-zero is completed, because conflating it with a failure would make the runtime lie in the direction the outcome gate exists to prevent. Its output joins to at least private and lands on a personal surface as content; the chain keeps its digest, byte count and exit code.",
+      "limitation": "Synthetic output through the ordinary card path. No command was executed and no client rendered the result."
+    },
+    {
+      "id": "device-action-grant-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_grant_is_single_use_venue_bound_and_refuses_a_weaker_attestation",
+      "scope": "A command that changes files dispatches only under a logged, unexpired, single-use grant for that exact action instance, requested at the installation that will carry it out, answered with the attestation its manifest declares, bound to the exact description digest, and consumed in the same transaction that claims the command. A television is never a venue.",
+      "limitation": "The ceremony is server-side. No client rendered a panel, obtained device-owner authentication, or offered a decline."
+    },
+    {
+      "id": "device-action-grant-lifetime-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_grant_expires_from_the_confirm_frame_and_is_void_after_a_restart",
+      "scope": "The thirty-second clock starts at the sentence a person can read, not at the proposal, so a shared-origin command does not expire on the way to its venue; an unanswered ceremony expires and denies, and a worker change voids every unconsumed grant.",
+      "limitation": "A simulated restart through the turn's own worker fence, not a process restart against a durable store."
+    },
+    {
+      "id": "device-action-budget-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_seventh_action_in_ten_minutes_is_budget_blocked",
+      "scope": "Six dispatched device actions per rolling ten minutes and one in flight per principal. The seventh is skipped rather than failing the poll, is logged for the owner, and becomes claimable again as the window rolls.",
+      "limitation": "A per-principal counter in one process. It bounds accumulation, it does not authenticate who asked."
+    },
+    {
+      "id": "device-action-liveness-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_progress_renews_the_worker_lease_past_seventy_five_seconds",
+      "scope": "A long command stays live on its own unsequenced progress, which consumes no ordered ingress slot, is idempotent by its sequence and renews both the command deadline and the worker lease; the turn is not finished while it runs, and ten seconds of silence makes the outcome unknown with no retry.",
+      "limitation": "Simulated time over a memory store; no real process ran and no tail was transported."
+    },
+    {
+      "id": "device-action-no-repair-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_device_action_never_repairs_and_retries_only_where_idempotent",
+      "scope": "A side-effecting action never repairs to another device; an idempotent channel retries once on the same surface with the same idempotency key and then reports unknown; action.run never retries at all.",
+      "limitation": "Deduplication at the receiving end is the client's obligation and is not exercised here."
+    },
+    {
+      "id": "device-action-preemption-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_new_input_preempts_a_running_effect_and_revokes_it",
+      "scope": "A new request from an enrolled origin voids a turn whose effect is still live instead of being refused: the effect is revoked as preempted, the installation is told to stop, and the stopped task never becomes a completed one.",
+      "limitation": "The revoke is queued for the installation; nothing verifies that a client stopped the work."
+    },
+    {
+      "id": "device-action-shared-expression-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_every_non_completed_outcome_produces_the_byte_identical_shared_sentence",
+      "scope": "A shared-perceivable origin hears exactly two sentences: one for a committed completed outcome and one byte-identical sentence for a refusal, a failure, a cancellation, an unknown outcome and a command nothing could carry out. Neither names an operation, a device kind, a class or a reason.",
+      "limitation": "Covers the runtime's own expression. A physical Pin has not been listened to, and privacy suppression is compared through the same code path rather than over the air."
+    },
+    {
+      "id": "device-action-class-ceiling-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_no_action_channel_is_eligible_above_shared_room_without_a_declaration",
+      "scope": "No action channel is eligible above the shared-room ceiling on an installation without a current personal declaration, a television can never hold one, and the owner's own permission for the exact command is still required at that class.",
+      "limitation": "A candidate-level ablation; it does not observe who is actually in the room."
+    },
+    {
+      "id": "device-action-client-frame-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/display.rs",
+      "anchor": "fn client_recomputes_every_device_action_digest_and_binds_the_connection",
+      "scope": "The shared client accepts a bound command only for its own surface and incarnation, recomputes every canonical content digest against the checked-in vectors, refuses an ambiguous or traversing locator and an unknown operation kind, binds a ceremony to the exact description digest it will echo, and reads a revoke's reason.",
+      "limitation": "Frame interpretation only. No platform executor exists, so nothing was opened, routed, played or run."
+    },
+    {
+      "id": "device-action-client-report-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/display.rs",
+      "anchor": "fn client_report_refuses_an_outcome_its_evidence_does_not_show",
+      "scope": "The client refuses to send a completed outcome whose evidence does not show it, evidence from another channel, a refusal that is not the declined evidence, and output that is not a command's or is over its bound.",
+      "limitation": "Local validation of what a platform hands the client; the platform's own honesty about what it observed is its obligation."
+    },
+    {
+      "id": "device-action-ffi-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client-ffi/src/tests.rs",
+      "anchor": "fn ffi_snapshot_reports_task_and_confirmation",
+      "scope": "The C boundary projects the bound command and the ceremony a platform must render, and checks a report and a grant before either can queue: a grant with no actor evidence, or evidence the platform cannot name, is refused at the boundary.",
+      "limitation": "Argument checking and projection. No Swift, Kotlin or Python binding calls these yet."
+    },
+    {
+      "id": "device-action-header-definition",
+      "kind": "implementation",
+      "path": "clients/macos/Sources/CCosmosSurface/include/cosmos_surface.h",
+      "anchor": "int32_t cosmos_surface_report",
+      "scope": "The FFI contract every platform binding reads: acknowledge binds, report claims only what the platform observed, progress claims nothing, and a grant needs the attestation the ceremony asked for.",
+      "limitation": "A contract, not an implementation. Each client still has to honour it."
+    },
+    {
+      "id": "device-action-grant-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/grant.rs",
+      "anchor": "pub struct Grant",
+      "scope": "The ceremony as runtime state: fenced by its own turn, generation and worker, bound to the venue's current connection and to the exact description digest, carrying the attestation the bound risk requires, single use and dropped when its action, turn or process is gone.",
+      "limitation": "State and rules only. The panel, the countdown, the equal-weight decline and the device-owner authentication are each client's own work."
     }
   ],
   "requirements": [
@@ -958,8 +1086,13 @@
       ],
       "requirement": "Always-confirm effects require a logged, unexpired, single-use grant for the exact action instance.",
       "acceptance": "Bind deterministic ceremony content, arguments, target and epoch; reject changed actions, replay, expiry and restart. Existing conversational confirmation alone is not this grant protocol.",
-      "status": "pending",
-      "evidence": []
+      "status": "partial",
+      "evidence": [
+        "device-action-grant-test-definition",
+        "device-action-grant-lifetime-test-definition",
+        "device-action-header-definition",
+        "device-action-grant-definition"
+      ]
     },
     {
       "id": "invariant-04",
@@ -977,7 +1110,8 @@
         "bounded-analysis-origin-test-definition",
         "screen-context-definition",
         "screen-context-room-test-definition",
-        "device-action-untrusted-content-test-definition"
+        "device-action-untrusted-content-test-definition",
+        "device-action-class-ceiling-test-definition"
       ]
     },
     {
@@ -1031,7 +1165,9 @@
         "origin-status-definition",
         "origin-status-state-test-definition",
         "origin-status-room-test-definition",
-        "native-client-status-test-definition"
+        "native-client-status-test-definition",
+        "device-action-shared-expression-test-definition",
+        "device-action-class-ceiling-test-definition"
       ]
     },
     {
@@ -1080,7 +1216,11 @@
         "application-room-delivery-test-definition",
         "origin-status-definition",
         "origin-status-delivery-definition",
-        "origin-status-room-test-definition"
+        "origin-status-room-test-definition",
+        "device-action-outcome-test-definition",
+        "device-action-exit-code-test-definition",
+        "device-action-shared-expression-test-definition",
+        "device-action-client-report-test-definition"
       ]
     },
     {
@@ -1133,7 +1273,9 @@
         "native-visual-routing-test-definition",
         "device-action-manifest-definition",
         "device-action-contract-definition",
-        "device-action-profile-compatibility-test-definition"
+        "device-action-profile-compatibility-test-definition",
+        "device-action-client-frame-test-definition",
+        "device-action-ffi-test-definition"
       ]
     },
     {
@@ -1191,7 +1333,9 @@
         "screen-context-room-test-definition",
         "device-action-candidate-binding-test-definition",
         "device-action-proposal-exclusivity-test-definition",
-        "device-action-hint-ablation-test-definition"
+        "device-action-hint-ablation-test-definition",
+        "device-action-dispatch-test-definition",
+        "device-action-no-repair-test-definition"
       ]
     },
     {
@@ -1230,7 +1374,10 @@
       "status": "partial",
       "evidence": [
         "runtime-postgres-atomicity-test-definition",
-        "runtime-disconnect-test-definition"
+        "runtime-disconnect-test-definition",
+        "device-action-liveness-test-definition",
+        "device-action-preemption-test-definition",
+        "device-action-budget-test-definition"
       ]
     },
     {
@@ -1372,7 +1519,9 @@
         "native-client-display-test-definition",
         "native-visual-routing-test-definition",
         "native-client-status-test-definition",
-        "native-client-input-test-definition"
+        "native-client-input-test-definition",
+        "device-action-grant-test-definition",
+        "device-action-header-definition"
       ]
     },
     {
@@ -1494,7 +1643,10 @@
         "choice-list-proposal-test-definition",
         "choice-list-memory-test-definition",
         "choice-list-room-test-definition",
-        "native-client-choices-test-definition"
+        "native-client-choices-test-definition",
+        "device-action-dispatch-test-definition",
+        "device-action-outcome-test-definition",
+        "device-action-client-frame-test-definition"
       ]
     },
     {
@@ -1513,7 +1665,10 @@
       "evidence": [
         "screen-context-definition",
         "screen-context-room-test-definition",
-        "screen-context-owner-api-test-definition"
+        "screen-context-owner-api-test-definition",
+        "device-action-dispatch-test-definition",
+        "device-action-outcome-test-definition",
+        "device-action-client-frame-test-definition"
       ]
     },
     {
@@ -1533,7 +1688,10 @@
         "recent-context-definition",
         "recent-context-state-test-definition",
         "recent-context-conversation-test-definition",
-        "routing-hint-policy-test-definition"
+        "routing-hint-policy-test-definition",
+        "device-action-dispatch-test-definition",
+        "device-action-outcome-test-definition",
+        "device-action-client-frame-test-definition"
       ]
     },
     {

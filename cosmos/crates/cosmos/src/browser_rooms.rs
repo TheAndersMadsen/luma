@@ -323,6 +323,19 @@ enum Message {
         stamp: InputStamp,
         control: BrowserControl,
     },
+    /// Liveness for a running command. It is unsequenced by design: it never
+    /// consumes an ordered ingress slot and it never claims an outcome.
+    Progress { progress: ProgressMessage },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProgressMessage {
+    version: u8,
+    action_id: Uuid,
+    generation: u64,
+    sequence: u64,
+    elapsed_ms: i64,
 }
 
 impl Coordinator {
@@ -418,6 +431,7 @@ impl Coordinator {
 struct Sent {
     stamp: InputStamp,
     attempts: u8,
+    channel: crate::ambiance::Channel,
 }
 
 /// Raw audio per speech frame; base64 plus the bound header stays inside the
@@ -443,6 +457,8 @@ async fn deliver(
     let mut speaking: BTreeMap<(String, Uuid), tokio::task::JoinHandle<()>> = BTreeMap::new();
     // The invitation each personal member last received (None = withdrawn).
     let mut invited: BTreeMap<String, Option<Uuid>> = BTreeMap::new();
+    // The ceremony each venue was last asked for (None = withdrawn).
+    let mut confirmed: BTreeMap<String, Option<Uuid>> = BTreeMap::new();
     // The turn status each native origin last received; a terminal state
     // ends a turn's status frames.
     let mut statused: BTreeMap<String, TurnStatus> = BTreeMap::new();
@@ -450,6 +466,7 @@ async fn deliver(
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
         invited.retain(|identity, _| members.contains_key(identity));
+        confirmed.retain(|identity, _| members.contains_key(identity));
         statused.retain(|identity, _| members.contains_key(identity));
         speaking.retain(|(identity, _), job| {
             if !members.contains_key(identity) {
@@ -596,6 +613,51 @@ async fn deliver(
                     }
                     statused.insert(identity.clone(), status);
                 }
+                // The ceremony is minted here, because the thirty-second
+                // clock starts at the sentence a person can read and this is
+                // where the venue's own foreground is known.
+                let confirmation = match tokio::time::timeout(
+                    ADMISSION_TIMEOUT,
+                    runtime.store.runtime(
+                        principal,
+                        RuntimeOperation::Confirmation {
+                            connection: connection.clone(),
+                        },
+                    ),
+                )
+                .await
+                .map_err(|_| Error::Unavailable)?
+                {
+                    Ok(RuntimeResult::Confirmation(request)) => request,
+                    Err(
+                        crate::ambiance::RuntimeError::InvalidOrigin
+                        | crate::ambiance::RuntimeError::Stale
+                        | crate::ambiance::RuntimeError::NotFound,
+                    ) => None,
+                    _ => return Err(Error::Unavailable),
+                };
+                let current = confirmation.as_ref().map(|request| request.grant_id);
+                if confirmed.get(identity).copied().unwrap_or(None) != current {
+                    sequence = sequence
+                        .checked_add(1)
+                        .filter(|n| *n <= 9_007_199_254_740_991)
+                        .ok_or(Error::Unavailable)?;
+                    let stamp = InputStamp {
+                        epoch,
+                        sequence,
+                        instance_id: Uuid::new_v4(),
+                    };
+                    let payload = match confirmation.as_ref() {
+                        Some(request) => confirm_payload(request, proof, &stamp),
+                        None => serde_json::json!({"version":1,"kind":"confirm","stamp":stamp,"request":serde_json::Value::Null}).to_string(),
+                    };
+                    if !received(session.invoke(identity, payload).await, &stamp) {
+                        leave(runtime, principal, &member.proof).await;
+                        participants.lock().await.remove(identity);
+                        continue 'member;
+                    }
+                    confirmed.insert(identity.clone(), current);
+                }
                 for action in actions.iter().filter(|a| {
                     a.channel == Channel::AudioTts && a.status == ActionStatus::Proposed
                 }) {
@@ -613,6 +675,7 @@ async fn deliver(
                         Sent {
                             stamp,
                             attempts: action.attempts.saturating_add(1),
+                            channel: action.channel,
                         },
                     );
                     speaking.insert(
@@ -643,22 +706,49 @@ async fn deliver(
                         ) || (a.status == ActionStatus::Proposed
                             && speaking.contains_key(&(identity.clone(), a.id)))
                     }
-                    // Action and ceremony channels carry their own frames.
-                    // The card and speech room path never dispatches them.
-                    Channel::ActionOpen
-                    | Channel::ActionRoute
-                    | Channel::ActionPlay
-                    | Channel::ActionRun
-                    | Channel::ConfirmTap => false,
+                    // A device keeps its command while it works, whether or
+                    // not Cosmos is still in front of it.
+                    channel if channel.is_action() => matches!(
+                        a.status,
+                        ActionStatus::Dispatched
+                            | ActionStatus::Acknowledged
+                            | ActionStatus::Running
+                    ),
+                    // The ceremony carries its own frame, minted above.
+                    Channel::ConfirmTap => false,
+                    _ => false,
                 })
                 .map(|a| (a.id, a))
                 .collect();
+            // What this installation must still be told to stop, and why. The
+            // row outlives the action itself, because a new turn clears the
+            // action rows first.
+            let revocations = match tokio::time::timeout(
+                ADMISSION_TIMEOUT,
+                runtime.store.runtime(
+                    principal,
+                    RuntimeOperation::Revocations {
+                        connection: connection.clone(),
+                    },
+                ),
+            )
+            .await
+            .map_err(|_| Error::Unavailable)?
+            {
+                Ok(RuntimeResult::Revocations(revocations)) => revocations,
+                Err(
+                    crate::ambiance::RuntimeError::InvalidOrigin
+                    | crate::ambiance::RuntimeError::Stale
+                    | crate::ambiance::RuntimeError::NotFound,
+                ) => Vec::new(),
+                _ => return Err(Error::Unavailable),
+            };
             let clear: Vec<_> = sent
-                .keys()
-                .filter(|(peer, id)| peer == identity && !active.contains_key(id))
-                .cloned()
+                .iter()
+                .filter(|((peer, id), _)| peer == identity && !active.contains_key(id))
+                .map(|((_, id), entry)| (*id, entry.channel))
                 .collect();
-            for key in clear {
+            for (id, channel) in clear {
                 sequence = sequence
                     .checked_add(1)
                     .filter(|n| *n <= 9_007_199_254_740_991)
@@ -668,14 +758,25 @@ async fn deliver(
                     sequence,
                     instance_id: Uuid::new_v4(),
                 };
-                let payload =
-                    serde_json::json!({"version":1,"kind":"clear","stamp":stamp,"actionId":key.1});
-                if !received(session.invoke(identity, payload.to_string()).await, &stamp) {
+                // A display is cleared; an effect is revoked, with the reason
+                // the runtime committed or, failing that, superseded.
+                let payload = if channel.is_action() {
+                    let reason = revocations
+                        .iter()
+                        .find(|revocation| revocation.action_id == id)
+                        .map(|revocation| revocation.reason)
+                        .unwrap_or(crate::ambiance::action::RevokeReason::Superseded);
+                    revoke_payload(id, reason, &stamp)
+                } else {
+                    serde_json::json!({"version":1,"kind":"clear","stamp":stamp,"actionId":id})
+                        .to_string()
+                };
+                if !received(session.invoke(identity, payload).await, &stamp) {
                     leave(runtime, principal, &member.proof).await;
                     participants.lock().await.remove(identity);
                     continue 'member;
                 }
-                sent.remove(&key);
+                sent.remove(&(identity.clone(), id));
             }
             for (id, action) in active {
                 let key = (identity.clone(), id);
@@ -723,8 +824,14 @@ async fn deliver(
                 };
                 // Poll committed the exact claim before this invocation. The
                 // receiver returns transport receipt, then separately submits
-                // its sequenced DOM acknowledgment after render commit.
-                let delivered = match render_payload(runtime, principal, &action, &stamp) {
+                // its sequenced acknowledgment after its own commit, and for
+                // an action its own report after the platform observed it.
+                let payload = if action.channel.is_action() {
+                    act_payload(&action, &stamp)
+                } else {
+                    render_payload(runtime, principal, &action, &stamp)
+                };
+                let delivered = match payload {
                     Some(payload) => received(session.invoke(identity, payload).await, &stamp),
                     // A lost transient card or an oversized envelope cannot be
                     // rendered. Use the same bounded failure lifecycle as a
@@ -736,6 +843,7 @@ async fn deliver(
                     Sent {
                         stamp,
                         attempts: action.attempts,
+                        channel: action.channel,
                     },
                 );
                 if !delivered {
@@ -933,6 +1041,7 @@ async fn invite_payload(
             serde_json::json!({
                 "version": 1,
                 "id": invitation.id,
+                "kind": invitation.kind,
                 "surfaceId": proof.surface_id,
                 "incarnation": proof.incarnation,
                 "origin": origin,
@@ -993,6 +1102,66 @@ fn render_payload(
     let payload = serde_json::json!({"version":1,"kind":"render","stamp":stamp,"command":command})
         .to_string();
     (payload.len() <= cosmos_rtc::MAX_PAYLOAD).then_some(payload)
+}
+
+/// The act frame carries one bound command to the installation that will
+/// carry it out. It answers with the same transport receipt a render does,
+/// which is transport evidence only: the device acknowledges the binding
+/// separately, and only its own report may claim an outcome.
+fn act_payload(action: &crate::ambiance::Action, stamp: &InputStamp) -> Option<String> {
+    let command = crate::browser_runtime_api::act_command(action)?;
+    let payload =
+        serde_json::json!({"version":1,"kind":"act","stamp":stamp,"command":command}).to_string();
+    (payload.len() <= cosmos_rtc::MAX_PAYLOAD).then_some(payload)
+}
+
+/// A revoke supersedes remaining work. It is not a clear: a display can be
+/// erased, an effect can only be told to stop.
+fn revoke_payload(
+    action_id: Uuid,
+    reason: crate::ambiance::action::RevokeReason,
+    stamp: &InputStamp,
+) -> String {
+    serde_json::json!({
+        "version": 1,
+        "kind": "revoke",
+        "stamp": stamp,
+        "actionId": action_id,
+        "reason": reason,
+    })
+    .to_string()
+}
+
+/// The ceremony frame. Its description is composed by policy from the bound
+/// command and the owner's own label, never model prose, and it carries the
+/// class §4.4 requires a ceremony to render.
+fn confirm_payload(
+    request: &crate::ambiance::grant::Request,
+    proof: &NativeProof,
+    stamp: &InputStamp,
+) -> String {
+    serde_json::json!({
+        "version": 1,
+        "kind": "confirm",
+        "stamp": stamp,
+        "request": {
+            "version": 1,
+            "grantId": request.grant_id,
+            "actionId": request.action_id,
+            "turnId": request.turn_id,
+            "generation": request.generation,
+            "surfaceId": proof.surface_id,
+            "incarnation": proof.incarnation,
+            "channel": "confirm.tap",
+            "descriptionDigest": request.description_digest,
+            "description": request.description,
+            "risk": request.risk,
+            "attestation": request.attestation,
+            "privacy": request.privacy,
+            "expiresAt": request.expires_at_ms,
+        },
+    })
+    .to_string()
 }
 
 fn received(result: Result<String, Error>, stamp: &InputStamp) -> bool {
@@ -1064,6 +1233,38 @@ async fn coordinate(
                 context,
             },
         ),
+        // Progress renews the command's deadline and the turn's worker lease.
+        // It is idempotent by its own sequence and touches no ingress cursor.
+        Message::Progress { progress } => {
+            let result = if progress.version != 1 {
+                Err(Error::Invalid)
+            } else {
+                match tokio::time::timeout(
+                    ADMISSION_TIMEOUT,
+                    runtime.store.runtime(
+                        &principal,
+                        RuntimeOperation::Progress {
+                            connection: member.proof,
+                            action_id: progress.action_id,
+                            generation: progress.generation,
+                            sequence: progress.sequence,
+                            elapsed_ms: progress.elapsed_ms,
+                        },
+                    ),
+                )
+                .await
+                {
+                    Ok(Ok(RuntimeResult::ProgressAccepted { duplicate })) => Ok(
+                        serde_json::json!({"version":1,"kind":"accepted","duplicate":duplicate})
+                            .to_string(),
+                    ),
+                    Ok(Err(error)) => Err(runtime_error(error)),
+                    _ => Err(Error::Unavailable),
+                }
+            };
+            let _ = call.reply.send(result);
+            return;
+        }
         Message::Control { stamp, control } => {
             if stamp.epoch != member.epoch {
                 let _ = call.reply.send(Err(Error::Denied));

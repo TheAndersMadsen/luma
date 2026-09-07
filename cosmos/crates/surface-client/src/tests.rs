@@ -311,7 +311,14 @@ fn descriptor_is_public_bounded_and_does_not_contain_connection_credentials() {
     let (client, store) = client();
     let value = serde_json::to_value(client.descriptor()).unwrap();
     assert_eq!(value.as_object().unwrap().len(), 4);
-    assert_eq!(value["approval"], "native-shared-speech-v3");
+    // A fresh enrollment asks the owner to approve the newest profile this
+    // build understands; an installation already approved at an earlier one
+    // keeps it, because the challenge carries the record's own approval.
+    assert_eq!(value["approval"], "native-device-action-v4");
+    for approval in ["native-shared-speech-v3", "native-shared-display-v2"] {
+        assert!(crate::wire::known_approval(approval), "{approval}");
+    }
+    assert!(!crate::wire::known_approval("native-shared-text-v1"));
     assert_eq!(value["platform"], "macos");
     assert!(serde_json::to_vec(&value).unwrap().len() < 1024);
     assert_eq!(store.writes.lock().unwrap().len(), 1);
@@ -380,7 +387,11 @@ fn superseded_profile_connections_are_dropped_without_losing_the_installation() 
     let key = TestSigner::new().public_key_sec1().unwrap();
     let bytes = open_journal().bytes().unwrap();
     let mut value: Value = serde_json::from_slice(&bytes).unwrap();
-    value["open"]["challenge"]["approval"] = json!("native-shared-display-v2");
+    // A profile this build no longer understands at all. An installation the
+    // owner approved at an earlier published profile keeps connecting under
+    // it: the challenge carries the record's own approval, so publishing a new
+    // one never strands a client that has not been updated.
+    value["open"]["challenge"]["approval"] = json!("native-shared-text-v1");
     let restored = Journal::load(&serde_json::to_vec(&value).unwrap(), &config(), &key).unwrap();
     assert!(restored.open.is_none());
     assert!(restored.pending.is_none());

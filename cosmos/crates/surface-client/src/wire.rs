@@ -7,7 +7,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-pub(crate) const PROFILE: &str = "native-shared-speech-v3";
+/// What this build enrolls at: the newest profile it understands. An
+/// installation the owner approved earlier keeps its own, which the challenge
+/// carries, so publishing a new profile never stops it from connecting.
+pub(crate) const PROFILE: &str = "native-device-action-v4";
+/// Every approval profile this build can still hold a connection under.
+pub(crate) const KNOWN_APPROVALS: [&str; 3] = [
+    PROFILE,
+    "native-shared-speech-v3",
+    "native-shared-display-v2",
+];
+
+pub(crate) fn known_approval(value: &str) -> bool {
+    KNOWN_APPROVALS.contains(&value)
+}
 const MAX_REVISION: u64 = 9_007_199_254_740_991;
 const CLOCK_ALLOWANCE_MS: i64 = 5_000;
 const CHALLENGE_MS: i64 = 60_000;
@@ -145,7 +158,7 @@ impl Challenge {
         if self.version != 1
             || self.audience
                 != canonical_origin(&self.audience).map_err(|_| Error::InvalidResponse)?
-            || self.approval != PROFILE
+            || !known_approval(&self.approval)
             || self.approval_revision == 0
             || self.approval_revision > MAX_REVISION
             || self.enrollment_id.is_nil()

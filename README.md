@@ -321,10 +321,10 @@ fallback receives its own new action.
 The device-action increment gives a surface a third thing it can be asked to
 do. An action travels the same pipeline as a card and a spoken reply: cognition
 proposes, the runtime binds, policy decides, and only the device's own report
-may say it happened. This increment lands the definition and the binding, and
-deliberately stops before anything can happen: there is no dispatch frame, no
-confirmation ceremony, no execution report and no client work, so a bound
-action is proposed, routed, logged and then goes nowhere.
+may say it happened. The runtime now binds, decides, confirms, dispatches and
+records the outcome; what is still missing is the other half of every effect —
+no client carries a command out yet, so a dispatched action reaches an approved
+installation and waits there for an executor that has not been written.
 
 The native approval profile is now `native-device-action-v4` and it differs per
 platform, because what a device may be asked to do depends on what its
@@ -372,6 +372,61 @@ proposal branch is rejected rather than silently reduced to the action. A
 `place_lookup` may carry `then: "route"` in the same call, before any provider
 result exists, and a receipt with exactly one place becomes a route the runtime
 binds from its own evidence.
+
+A dispatched command reaches its device as an `act` frame carrying the bound
+operation, the key the device deduplicates on and how long it has to say what
+happened; the device answers with the same transport receipt a card does, which
+is transport evidence and never completion. It then acknowledges the binding —
+on an action channel that means "I bound this exact command and it is legal
+here", it is not an outcome, and it sets none — and afterwards reports what it
+actually observed. Only that report may claim an outcome, and only with
+evidence that shows what it claims: a launch the device could not observe
+further is `unknown` with the launch recorded, never `completed`; a refusal is
+exactly the declined evidence; a non-zero exit code is a command that ran, so
+it is a completed command with its exit code as evidence, not a failure. A long
+command stays alive on its own unsequenced `progress` messages, which consume
+no ordered slot, claim nothing and renew both its deadline and the turn's
+worker lease, so a fifteen-minute task no longer needs the assistant to invent
+an effect timer.
+
+Visibility is required to begin an effect and never to continue one. A command
+is eligible while the installation's signed connection is current, whatever its
+class, and it is claimed only once that installation reports a foreground — so
+a sleeping phone holds the command with the same content-free invitation a
+private card already gets (`invite` now says whether a card or a task is
+waiting), and launching Maps or a player does not retire the effect the instant
+it succeeds. A side-effecting action never repairs to another device; its
+fallbacks are still computed and logged in the decision and simply never
+dispatched to. Only a channel that declares itself idempotent retries, once, on
+the same surface with the same key; `action.run` never retries, because a
+missing report is unknown and never a second run. Six device actions per
+principal per rolling ten minutes, one in flight; the seventh is skipped and
+logged rather than failing the poll. A new request while an effect is running
+preempts that turn instead of being refused: the effect is revoked as
+preempted and reported cancelled, never completed.
+
+**Tasks on this device** always confirm, at the machine that will act. The
+runtime asks for the confirmation only once that installation's own foreground
+reports, so the thirty-second clock starts at the sentence a person can read
+rather than at the proposal; the words are composed by policy from the bound
+command and the owner's own label, never by the model, and each client renders
+them from its own strings file. The answer binds to the exact sentence read,
+carries the actor evidence the platform obtained — a command that changes files
+needs device-owner authentication, and a bare tap cannot stand in for it,
+because every Cosmos manifest declares `actor_unknown` — and is consumed in the
+same transaction that dispatches the command. Dismissing the panel answers
+nothing: the ceremony expires, which denies. A restart mints a fresh worker, so
+every unconsumed grant is void; unconfirmed is denied. A television declares no
+ceremony venue at all.
+
+A shared-perceivable origin hears exactly two sentences and nothing else, and
+only once the report commits: **"Done on your approved device."** for a
+committed completed outcome, and **"Heard. Handled on your approved device."**
+for everything else — a refusal, a failure, a cancellation, an unknown outcome,
+a class nothing could carry, an exhausted budget, a decline, an expiry and a
+capability miss are byte-identical from a shared surface. The richer account
+travels on the origin's own status frame, which gained `confirming`, `acting`,
+`done` and `refused`, names a kind of device and never a reason.
 
 Five canonical content digests bind a command to its exact arguments across the
 runtime, the shared client and Center, with coordinates as fixed six-digit
@@ -454,10 +509,23 @@ also eligible. Class-zero surfaces still contribute no hints of their own;
 trust-gated device hints, hint budgets and learned preference remain open.
 
 Delivery reuses the browser room wire shape. The shared native client accepts
-a render frame only for its exact surface and incarnation, recomputes the text
-or place-card digest byte-for-byte, rejects unsupported credit before display
-and answers with the transport receipt; the platform then renders verbatim
-and submits the sequenced acknowledgment after its own commit. The macOS panel
+a render or `act` frame only for its exact surface and incarnation, recomputes
+the text, place-card or device-action digest byte-for-byte against the checked-in
+vectors, refuses an ambiguous locator or an operation kind it does not know,
+rejects unsupported credit before display and answers with the transport
+receipt; the platform then renders verbatim and submits the sequenced
+acknowledgment after its own commit. Its C boundary gained
+`cosmos_surface_acknowledge_task`, `cosmos_surface_report`,
+`cosmos_surface_progress` and `cosmos_surface_grant`, and its snapshot gained
+`task`, `confirmation` and `revoked`. A fresh enrollment from that client now
+asks the owner to approve `native-device-action-v4`, and it still holds a
+connection under either earlier published profile, so an installation that has
+not been updated keeps connecting, rendering and speaking. No platform executor exists yet: the
+macOS, Linux, phone and TV clients each still have to re-verify a command
+against their own copy of the owner's policy, carry it out without building
+anything from strings, obtain the actor attestation and report only what they
+observed. Center's Activity page does not yet parse the new ledger kinds
+either. The macOS panel
 renders text and place cards with their credit, reports visibility from its
 window occlusion state and acknowledges each card once. Native surfaces cannot
 acknowledge cards dispatched elsewhere. Android, Android TV and Linux clients

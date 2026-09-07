@@ -144,6 +144,34 @@ pub(crate) enum Control {
         #[serde(rename = "contentDigest")]
         content_digest: String,
     },
+    /// Exactly one per command. Only this may claim an outcome.
+    Report {
+        #[serde(rename = "actionId")]
+        action_id: Uuid,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        generation: u64,
+        channel: String,
+        #[serde(rename = "contentDigest")]
+        content_digest: String,
+        outcome: crate::action::ReportOutcome,
+        evidence: crate::action::Evidence,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
+    /// The owner's answer to a ceremony, bound to the exact sentence they
+    /// read and carrying the actor evidence the platform actually obtained.
+    Grant {
+        #[serde(rename = "grantId")]
+        grant_id: Uuid,
+        #[serde(rename = "actionId")]
+        action_id: Uuid,
+        granted: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attestation: Option<crate::action::Attestation>,
+        #[serde(rename = "descriptionDigest")]
+        description_digest: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -197,14 +225,14 @@ impl Journal {
             return Err(Error::InvalidJournal);
         }
         let mut journal: Self = serde_json::from_slice(bytes).map_err(|_| Error::InvalidJournal)?;
-        // A connection signed under a superseded approval profile cannot be
-        // resumed or retried: the owner must reapprove at the current profile,
+        // A connection signed under an approval profile this build no longer
+        // understands cannot be resumed or retried: the owner must reapprove,
         // which drops that connection anyway. Keep the enrollment identity and
         // record any unresolved request as unknown rather than blocking.
         if journal
             .open
             .as_ref()
-            .is_some_and(|open| open.challenge.approval != wire::PROFILE)
+            .is_some_and(|open| !wire::known_approval(&open.challenge.approval))
         {
             journal.open = None;
             journal.abandon_pending();
@@ -381,7 +409,9 @@ impl Journal {
             OperationResult::Cancel => self.last_admission = None,
             OperationResult::Heartbeat
             | OperationResult::State(_)
-            | OperationResult::Acknowledge => {}
+            | OperationResult::Acknowledge
+            | OperationResult::Report
+            | OperationResult::Grant => {}
         }
     }
 }
@@ -416,6 +446,14 @@ impl RpcMessage {
                 control: Control::Acknowledge { .. },
                 ..
             } => OperationKind::Acknowledge,
+            Self::Control {
+                control: Control::Report { .. },
+                ..
+            } => OperationKind::Report,
+            Self::Control {
+                control: Control::Grant { .. },
+                ..
+            } => OperationKind::Grant,
         }
     }
 
@@ -463,11 +501,59 @@ impl RpcMessage {
                 || turn_id.is_nil()
                 || *generation == 0
                 || *generation > MAX_SEQUENCE
-                || !matches!(channel.as_str(), "visual.card" | "audio.tts")
-                || content_digest.len() != 64
-                || !content_digest
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                || !matches!(
+                    channel.as_str(),
+                    "visual.card"
+                        | "audio.tts"
+                        | "action.open"
+                        | "action.route"
+                        | "action.play"
+                        | "action.run"
+                )
+                || !crate::action::digest_text(content_digest) =>
+            {
+                Err(Error::InvalidInput)
+            }
+            Self::Control {
+                control:
+                    Control::Report {
+                        action_id,
+                        turn_id,
+                        generation,
+                        channel,
+                        content_digest,
+                        outcome,
+                        evidence,
+                        output,
+                    },
+                ..
+            } if *action_id != stamp.instance_id
+                || turn_id.is_nil()
+                || *generation == 0
+                || *generation > MAX_SEQUENCE
+                || !channel.starts_with("action.")
+                || !crate::action::digest_text(content_digest)
+                || !crate::action::Report {
+                    outcome: *outcome,
+                    evidence: evidence.clone(),
+                    output: output.clone(),
+                }
+                .valid(channel) =>
+            {
+                Err(Error::InvalidInput)
+            }
+            Self::Control {
+                control:
+                    Control::Grant {
+                        grant_id,
+                        action_id,
+                        description_digest,
+                        ..
+                    },
+                ..
+            } if *grant_id != stamp.instance_id
+                || action_id.is_nil()
+                || !crate::action::digest_text(description_digest) =>
             {
                 Err(Error::InvalidInput)
             }
@@ -567,6 +653,20 @@ impl PendingRpc {
                     duplicate,
                 },
             ) => Ok((OperationResult::Acknowledge, duplicate)),
+            (
+                OperationKind::Report,
+                Reply::Accepted {
+                    version: 1,
+                    duplicate,
+                },
+            ) => Ok((OperationResult::Report, duplicate)),
+            (
+                OperationKind::Grant,
+                Reply::Accepted {
+                    version: 1,
+                    duplicate,
+                },
+            ) => Ok((OperationResult::Grant, duplicate)),
             _ => Err(Error::InvalidResponse),
         }
     }

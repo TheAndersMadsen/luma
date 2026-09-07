@@ -134,6 +134,149 @@ fn snapshots_project_choice_cards_and_turn_status_without_surface_identity() {
     assert_eq!(empty["operation"], "status");
 }
 
+/// The snapshot names the bound command and the ceremony a platform must
+/// render, and nothing about which surface Cosmos chose.
+#[test]
+fn ffi_snapshot_reports_task_and_confirmation() {
+    use cosmos_surface_client::{
+        Attestation, Confirmation, Description, Locator, Operation, Privacy, Risk, Task,
+    };
+    let operation = Operation::Open {
+        locator: Locator::Https {
+            url: "https://github.com/owner/repo/pull/412".into(),
+        },
+        version: None,
+        position: None,
+        label: "PR 412".into(),
+    };
+    let bound = Task {
+        action_id: Uuid::from_u128(7),
+        turn_id: Uuid::from_u128(8),
+        generation: 2,
+        channel: "action.open".into(),
+        content_digest: operation.content_digest(),
+        idempotency_key: "a0".to_owned() + &"4".repeat(62),
+        operation: operation.clone(),
+        expires_at_ms: 60_000,
+        report_by_ms: 30_000,
+        privacy: Privacy::SharedRoom,
+    };
+    let projected = task(Some(&bound));
+    assert_eq!(projected["actionId"], Uuid::from_u128(7).to_string());
+    assert_eq!(projected["channel"], "action.open");
+    assert_eq!(projected["contentDigest"], operation.content_digest());
+    assert_eq!(projected["reportByMs"], 30_000);
+    assert_eq!(projected["operation"]["kind"], "open");
+    assert_eq!(projected["operation"]["locator"]["scheme"], "https");
+    assert!(task(None).is_null());
+
+    let description = Description {
+        kind: cosmos_surface_client::action::DescriptionKind::DeviceAction,
+        verb: "run".into(),
+        subject: "Project tests".into(),
+        device_kind: "macos".into(),
+        effect: "changes files on that device".into(),
+        class: Privacy::Private,
+    };
+    let ceremony = Confirmation {
+        grant_id: Uuid::from_u128(11),
+        action_id: Uuid::from_u128(7),
+        turn_id: Uuid::from_u128(8),
+        generation: 2,
+        description_digest: description.content_digest(),
+        description,
+        risk: Risk::High,
+        attestation: Attestation::DeviceOwnerAuth,
+        privacy: Privacy::Private,
+        expires_at_ms: 30_000,
+    };
+    let projected = confirmation(Some(&ceremony));
+    assert_eq!(projected["grantId"], Uuid::from_u128(11).to_string());
+    assert_eq!(projected["risk"], "high");
+    assert_eq!(projected["attestation"], "device_owner_auth");
+    assert_eq!(projected["description"]["verb"], "run");
+    assert_eq!(projected["description"]["subject"], "Project tests");
+    assert_eq!(
+        projected["descriptionDigest"],
+        ceremony.description.content_digest()
+    );
+    assert!(confirmation(None).is_null());
+    let empty = snapshot(None, &Value::Null, "task", None);
+    assert!(empty["task"].is_null() && empty["confirmation"].is_null());
+}
+
+/// A report crosses the boundary as bounded JSON and is refused before it can
+/// queue anything when it claims what its evidence does not show; a grant
+/// without the attestation the ceremony asked for is not an answer.
+#[test]
+fn ffi_report_and_grant_arguments_are_checked_before_queueing() {
+    let (handle, mut commands) = queued_handle();
+    let surface = Box::into_raw(handle);
+    let call = |body: &str| unsafe { cosmos_surface_report(surface, body.as_ptr(), body.len()) };
+    assert_eq!(call("not json"), INVALID_ARGUMENT);
+    assert_eq!(
+        call(r#"{"outcome":"completed","evidence":{"kind":"open","opened":true},"extra":1}"#),
+        INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { cosmos_surface_report(surface, std::ptr::null(), 0) },
+        INVALID_ARGUMENT
+    );
+    assert_eq!(
+        call(r#"{"outcome":"completed","evidence":{"kind":"open","opened":true}}"#),
+        OK
+    );
+    assert!(matches!(commands.try_recv(), Ok(Command::Report(_))));
+
+    let attestation = b"device_owner_auth";
+    assert_eq!(
+        unsafe { cosmos_surface_grant(surface, 1, attestation.as_ptr(), attestation.len()) },
+        OK
+    );
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::Grant {
+            granted: true,
+            attestation: Some(cosmos_surface_client::Attestation::DeviceOwnerAuth),
+        })
+    ));
+    // Granting with no actor evidence at all is not an answer.
+    assert_eq!(
+        unsafe { cosmos_surface_grant(surface, 1, std::ptr::null(), 0) },
+        INVALID_ARGUMENT
+    );
+    // Declining needs none, and weighs exactly as much.
+    assert_eq!(
+        unsafe { cosmos_surface_grant(surface, 0, std::ptr::null(), 0) },
+        OK
+    );
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::Grant {
+            granted: false,
+            attestation: None,
+        })
+    ));
+    let unknown = b"trust_me";
+    assert_eq!(
+        unsafe { cosmos_surface_grant(surface, 1, unknown.as_ptr(), unknown.len()) },
+        INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { cosmos_surface_grant(surface, 2, std::ptr::null(), 0) },
+        INVALID_ARGUMENT
+    );
+    assert_eq!(unsafe { cosmos_surface_progress(surface, 3, 41_200) }, OK);
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::Progress {
+            sequence: 3,
+            elapsed_ms: 41_200,
+        })
+    ));
+    drop(unsafe { Box::from_raw(surface) });
+}
+
 #[test]
 fn bound_text_target_and_context_arguments_are_checked_before_queueing() {
     assert_eq!(parse_target(None), Ok(None));

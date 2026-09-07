@@ -1,6 +1,7 @@
 //! An owner-approved input and shared-display surface. Platform code owns the
 //! installation key, secure journal, foreground state and actual rendering;
 //! this crate owns admission, exact retries, frame checks and RTC fencing.
+pub mod action;
 pub mod display;
 mod http;
 pub mod speech;
@@ -10,10 +11,14 @@ mod tests;
 mod transport;
 mod wire;
 
+pub use action::{
+    Attestation, Confirmation, DeclineReason, Description, Evidence, Locator, Operation,
+    PlaybackState, Position, Report, ReportOutcome, RevokeReason, Revoked, Risk, Task,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 pub use display::{
-    AttributionPart, ChoiceItem, Display, DisplayContent, Invitation, PlaceItem, Privacy,
-    SurfacePlatform, TurnState, TurnStatus,
+    AttributionPart, ChoiceItem, Display, DisplayContent, Invitation, InvitationKind, PlaceItem,
+    Privacy, SurfacePlatform, TurnState, TurnStatus,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -161,6 +166,8 @@ pub enum OperationKind {
     Cancel,
     State,
     Acknowledge,
+    Report,
+    Grant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +186,8 @@ pub enum OperationResult {
     Cancel,
     State(bool),
     Acknowledge,
+    Report,
+    Grant,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +205,12 @@ pub struct Status {
     pub speech: Option<Speech>,
     /// A current private continuation invitation, if any.
     pub invitation: Option<Invitation>,
+    /// The command this installation was asked to carry out, if current.
+    pub task: Option<Task>,
+    /// The ceremony this installation is the venue for, if current.
+    pub confirmation: Option<Confirmation>,
+    /// The last command the runtime told this installation to stop, and why.
+    pub revoked: Option<action::Revoked>,
     /// The foreground visibility Cosmos last accepted for this connection.
     pub visible: bool,
     /// The committed status of this installation's own current turn.
@@ -234,6 +249,9 @@ pub struct Client {
     speech: tokio::sync::watch::Sender<Option<Speech>>,
     invitation: tokio::sync::watch::Sender<Option<Invitation>>,
     turn_status: tokio::sync::watch::Sender<Option<TurnStatus>>,
+    task: tokio::sync::watch::Sender<Option<Task>>,
+    confirmation: tokio::sync::watch::Sender<Option<Confirmation>>,
+    revoked: tokio::sync::watch::Sender<Option<action::Revoked>>,
     visible: bool,
 }
 
@@ -301,6 +319,9 @@ impl Client {
             speech: tokio::sync::watch::channel(None).0,
             invitation: tokio::sync::watch::channel(None).0,
             turn_status: tokio::sync::watch::channel(None).0,
+            task: tokio::sync::watch::channel(None).0,
+            confirmation: tokio::sync::watch::channel(None).0,
+            revoked: tokio::sync::watch::channel(None).0,
             visible: false,
         })
     }
@@ -328,6 +349,28 @@ impl Client {
         self.status().invitation
     }
 
+    /// Wakes when the runtime dispatches or revokes a command for this
+    /// installation. Nothing here proves an effect: the platform carries the
+    /// command out, then reports what it actually observed.
+    pub fn task_changes(&self) -> tokio::sync::watch::Receiver<Option<Task>> {
+        self.task.subscribe()
+    }
+
+    pub fn task(&self) -> Option<Task> {
+        self.status().task
+    }
+
+    /// Wakes when a ceremony starts or ends here. The platform renders the
+    /// runtime's description from its own strings file, with a decline
+    /// exactly one control away, and answers with `grant`.
+    pub fn confirmation_changes(&self) -> tokio::sync::watch::Receiver<Option<Confirmation>> {
+        self.confirmation.subscribe()
+    }
+
+    pub fn confirmation(&self) -> Option<Confirmation> {
+        self.status().confirmation
+    }
+
     /// Wakes when the runtime delivers or retires a card. Platforms render the
     /// exact content, then call `acknowledge`; nothing here proves rendering.
     pub fn display_changes(&self) -> tokio::sync::watch::Receiver<Option<Display>> {
@@ -353,7 +396,9 @@ impl Client {
             enrollment_id: self.config.enrollment_id,
             public_key: URL_SAFE_NO_PAD.encode(self.public_key),
             platform: self.config.platform,
-            approval: "native-shared-speech-v3",
+            // What a fresh enrollment asks the owner to approve. An
+            // installation already approved at an earlier profile keeps it.
+            approval: wire::PROFILE,
         }
     }
 
@@ -371,6 +416,9 @@ impl Client {
         self.speech.send_replace(None);
         self.invitation.send_replace(None);
         self.turn_status.send_replace(None);
+        self.task.send_replace(None);
+        self.confirmation.send_replace(None);
+        self.revoked.send_replace(None);
         self.visible = false;
         tokio::time::timeout(Duration::from_secs(2), self.cleanup.finish())
             .await
@@ -421,6 +469,17 @@ impl Client {
                 .filter(|invitation| connected && now < invitation.expires_at_ms),
             visible: connected && self.visible,
             turn_status: self.turn_status.borrow().clone().filter(|_| connected),
+            task: self
+                .task
+                .borrow()
+                .clone()
+                .filter(|task| connected && now < task.expires_at_ms),
+            confirmation: self
+                .confirmation
+                .borrow()
+                .clone()
+                .filter(|request| connected && now < request.expires_at_ms),
+            revoked: self.revoked.borrow().filter(|_| connected),
         }
     }
 
@@ -546,6 +605,9 @@ impl Client {
         self.speech.send_replace(None);
         self.invitation.send_replace(None);
         self.turn_status.send_replace(None);
+        self.task.send_replace(None);
+        self.confirmation.send_replace(None);
+        self.revoked.send_replace(None);
         self.visible = false;
         self.session = Some(
             transport::Connection::connect(
@@ -557,6 +619,9 @@ impl Client {
                     speech: self.speech.clone(),
                     invitation: self.invitation.clone(),
                     status: self.turn_status.clone(),
+                    task: self.task.clone(),
+                    confirmation: self.confirmation.clone(),
+                    revoked: self.revoked.clone(),
                 },
             )
             .await?,
@@ -896,6 +961,165 @@ impl Client {
             OperationResult::Acknowledge => Ok(()),
             _ => Err(Error::InvalidResponse),
         }
+    }
+
+    /// Acknowledge the exact current command after binding it locally and
+    /// finding it legal here. On an action channel this is not an outcome:
+    /// never acknowledge a command you will not attempt.
+    pub async fn acknowledge_task(&mut self, task: &Task) -> Result<(), Error> {
+        self.flush()?;
+        if self.task().as_ref() != Some(task) {
+            return Err(Error::NoPending);
+        }
+        let stamp = self.stamp(task.action_id)?;
+        match self
+            .submit(RpcMessage::Control {
+                stamp,
+                control: state::Control::Acknowledge {
+                    action_id: task.action_id,
+                    turn_id: task.turn_id,
+                    generation: task.generation,
+                    channel: task.channel.clone(),
+                    content_digest: task.content_digest.clone(),
+                },
+            })
+            .await?
+        {
+            OperationResult::Acknowledge => Ok(()),
+            _ => Err(Error::InvalidResponse),
+        }
+    }
+
+    /// Say what happened, once, after the platform observed it. Reporting
+    /// `completed` for an effect the platform did not observe is a false
+    /// outcome claim; `cancelled` is a promise that nothing started or that
+    /// this installation stopped it, and anything else is `unknown`.
+    pub async fn report(&mut self, task: &Task, report: Report) -> Result<(), Error> {
+        self.flush()?;
+        if self.task().as_ref() != Some(task) {
+            return Err(Error::NoPending);
+        }
+        if !report.valid(&task.channel) {
+            return Err(Error::InvalidInput);
+        }
+        let stamp = self.stamp(task.action_id)?;
+        let result = self
+            .submit(RpcMessage::Control {
+                stamp,
+                control: state::Control::Report {
+                    action_id: task.action_id,
+                    turn_id: task.turn_id,
+                    generation: task.generation,
+                    channel: task.channel.clone(),
+                    content_digest: task.content_digest.clone(),
+                    outcome: report.outcome,
+                    evidence: report.evidence,
+                    output: report.output,
+                },
+            })
+            .await?;
+        match result {
+            OperationResult::Report => {
+                self.task.send_if_modified(|current| {
+                    let matched = current
+                        .as_ref()
+                        .is_some_and(|current| current.action_id == task.action_id);
+                    if matched {
+                        *current = None;
+                    }
+                    matched
+                });
+                Ok(())
+            }
+            _ => Err(Error::InvalidResponse),
+        }
+    }
+
+    /// Answer the current ceremony with the actor evidence the platform
+    /// actually obtained. Evidence weaker than the ceremony asked for is
+    /// refused by Cosmos; dismissing the panel answers nothing at all.
+    pub async fn grant(
+        &mut self,
+        confirmation: &Confirmation,
+        granted: bool,
+        attestation: Option<Attestation>,
+    ) -> Result<(), Error> {
+        self.flush()?;
+        if self.confirmation().as_ref() != Some(confirmation) {
+            return Err(Error::NoPending);
+        }
+        if granted && attestation.is_none_or(|value| value < confirmation.attestation) {
+            return Err(Error::InvalidInput);
+        }
+        let stamp = self.stamp(confirmation.grant_id)?;
+        match self
+            .submit(RpcMessage::Control {
+                stamp,
+                control: state::Control::Grant {
+                    grant_id: confirmation.grant_id,
+                    action_id: confirmation.action_id,
+                    granted,
+                    attestation,
+                    description_digest: confirmation.description_digest.clone(),
+                },
+            })
+            .await?
+        {
+            OperationResult::Grant => Ok(()),
+            _ => Err(Error::InvalidResponse),
+        }
+    }
+
+    /// Say that a running command is still running. It is unsequenced and
+    /// idempotent: it consumes no ordered slot, claims no outcome, and only
+    /// renews the command's deadline and the turn's worker lease. A repeat of
+    /// an already-accepted sequence changes nothing.
+    pub async fn progress(
+        &mut self,
+        task: &Task,
+        sequence: u64,
+        elapsed_ms: i64,
+    ) -> Result<(), Error> {
+        if self.task().as_ref() != Some(task) {
+            return Err(Error::NoPending);
+        }
+        if sequence == 0
+            || sequence > action::MAX_PROGRESS
+            || !(0..=action::MAX_BUDGET_MS).contains(&elapsed_ms)
+        {
+            return Err(Error::InvalidInput);
+        }
+        let session = self
+            .session
+            .as_ref()
+            .filter(|session| session.alive())
+            .ok_or(Error::Disconnected)?;
+        let payload = serde_json::json!({
+            "kind": "progress",
+            "progress": {
+                "version": 1,
+                "actionId": task.action_id,
+                "generation": task.generation,
+                "sequence": sequence,
+                "elapsedMs": elapsed_ms,
+            },
+        })
+        .to_string();
+        let response = session.invoke(payload).await?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Accepted {
+            version: u8,
+            kind: String,
+            #[allow(dead_code)]
+            duplicate: bool,
+        }
+        let accepted: Accepted =
+            serde_json::from_str(&response).map_err(|_| Error::InvalidResponse)?;
+        if accepted.version != 1 || accepted.kind != "accepted" {
+            return Err(Error::InvalidResponse);
+        }
+        Ok(())
     }
 
     pub async fn cancel(&mut self, admission: Admission) -> Result<(), Error> {

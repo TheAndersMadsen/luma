@@ -1142,6 +1142,100 @@ mod tests {
             contract["deviceActions"]["owner"]["approve-device-command-v1"]["platforms"],
             serde_json::json!(["macos"])
         );
+        // Every enumeration a client, Center or an owner reads is the exact
+        // set this runtime mints. One drift refuses an action with no useful
+        // error, or renders a state nobody wrote words for.
+        let states = contract["deviceActions"]["turnStates"].as_array().unwrap();
+        let expected = [
+            crate::ambiance::status::TurnState::Working,
+            crate::ambiance::status::TurnState::Waiting,
+            crate::ambiance::status::TurnState::Confirming,
+            crate::ambiance::status::TurnState::Acting,
+            crate::ambiance::status::TurnState::Shown,
+            crate::ambiance::status::TurnState::Spoken,
+            crate::ambiance::status::TurnState::Done,
+            crate::ambiance::status::TurnState::Refused,
+            crate::ambiance::status::TurnState::Nowhere,
+            crate::ambiance::status::TurnState::Unknown,
+        ];
+        assert_eq!(states.len(), expected.len());
+        for (published, state) in states.iter().zip(expected) {
+            assert_eq!(*published, serde_json::to_value(state).unwrap());
+        }
+        let evidence = contract["deviceActions"]["evidence"].as_object().unwrap();
+        for kind in [
+            crate::ambiance::action::EvidenceKind::Open,
+            crate::ambiance::action::EvidenceKind::Route,
+            crate::ambiance::action::EvidenceKind::Playback,
+            crate::ambiance::action::EvidenceKind::Command,
+            crate::ambiance::action::EvidenceKind::Declined,
+        ] {
+            let name = serde_json::to_value(kind).unwrap();
+            assert!(evidence.contains_key(name.as_str().unwrap()), "{kind:?}");
+        }
+        let budgets = &contract["deviceActions"]["clocks"]["report_budget_ms"];
+        for (channel, operation) in [
+            (
+                crate::ambiance::Channel::ActionOpen,
+                crate::ambiance::action::Operation::Open {
+                    locator: crate::ambiance::action::Locator::App {
+                        id: "dev.zed.Zed".into(),
+                    },
+                    version: None,
+                    position: None,
+                    label: "Zed".into(),
+                },
+            ),
+            (
+                crate::ambiance::Channel::ActionRoute,
+                crate::ambiance::action::Operation::Route {
+                    place_id: "p".into(),
+                    name: "n".into(),
+                    address: "a".into(),
+                    lat: "0.000000".into(),
+                    lng: "0.000000".into(),
+                },
+            ),
+            (
+                crate::ambiance::Channel::ActionPlay,
+                crate::ambiance::action::Operation::Play {
+                    title: "t".into(),
+                    query: "q".into(),
+                    providers: vec!["youtube".into()],
+                    item_digest: "c".repeat(64),
+                },
+            ),
+        ] {
+            assert_eq!(
+                budgets[channel.as_str()].as_i64(),
+                Some(operation.report_budget_ms()),
+                "{channel:?}"
+            );
+        }
+        assert_eq!(
+            contract["deviceActions"]["clocks"]["grant_ms"].as_i64(),
+            Some(crate::ambiance::grant::GRANT_MS)
+        );
+        assert_eq!(
+            contract["deviceActions"]["clocks"]["progress_grace_ms"].as_i64(),
+            Some(crate::ambiance::action::PROGRESS_GRACE_MS)
+        );
+        assert_eq!(
+            contract["deviceActions"]["clocks"]["act_to_acknowledge_ms"].as_i64(),
+            Some(crate::ambiance::ACK_MS)
+        );
+        assert_eq!(
+            contract["deviceActions"]["clocks"]["wait_for_a_foreground_ms"].as_i64(),
+            Some(crate::ambiance::personal::PRIVATE_DISPLAY_MS)
+        );
+        // The two fixed sentences are published exactly as the runtime speaks
+        // them, because a client that paraphrased one would leak the
+        // difference the invariant exists to hide.
+        let expression = contract["deviceActions"]["expression"]["shared"]
+            .as_str()
+            .unwrap();
+        assert!(expression.contains(crate::ambiance::ACTION_COMPLETED_EXPRESSION));
+        assert!(expression.contains(crate::ambiance::ACTION_HANDLED_EXPRESSION));
     }
 
     /// A television is bystander-perceivable by construction: it is never a
