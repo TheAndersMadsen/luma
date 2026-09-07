@@ -719,3 +719,137 @@ async fn native_runtime_http_live_room_uses_current_connection_without_renewal()
         StatusCode::NOT_FOUND
     );
 }
+
+fn voice_request(bearer: &str, body: &Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/runtime-api/v1/native/voice")
+        .header("content-type", "application/json")
+        .header("authorization", bearer)
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// The route only ever receives audio a person's own press produced: there is
+/// no frame, command or field anywhere in this contract that asks a client to
+/// listen. What it does own is the order of the checks: the owner's permission
+/// for this exact installation comes first, and it is its own refusal so a
+/// client can say what has to change instead of retrying.
+#[tokio::test]
+async fn native_runtime_http_voice_refuses_a_press_the_owner_never_allowed() {
+    let (app, store, enrollment, surface) = fixture().await;
+    let connection = open_connection(&app, enrollment).await;
+    let audio = URL_SAFE_NO_PAD.encode(vec![0u8; 32_000]);
+    let body = |audio: &str, capture_ms: i64, sample_rate: u32| {
+        json!({
+            "enrollmentId": connection["enrollmentId"],
+            "approvalRevision": connection["approvalRevision"],
+            "incarnation": connection["incarnation"],
+            "epoch": connection["epoch"],
+            "stamp": {
+                "epoch": connection["epoch"],
+                "sequence": 2,
+                "instanceId": Uuid::new_v4(),
+            },
+            "capture": {
+                "attestation": ["push_to_talk", "capture_indicator"],
+                "captureMs": capture_ms,
+            },
+            "audio": {
+                "encoding": "pcm_s16le",
+                "sampleRate": sample_rate,
+                "channels": 1,
+                "data": audio,
+            },
+            "language": "en",
+        })
+    };
+    // No permission: the owner's own answer, before any audio is read.
+    assert_eq!(
+        response(
+            &app,
+            voice_request(&native_bearer(), &body(&audio, 1_100, 16_000))
+        )
+        .await,
+        (
+            StatusCode::FORBIDDEN,
+            json!({"error":"voice_not_permitted"})
+        )
+    );
+    store
+        .runtime(
+            "U:owner",
+            crate::ambiance::RuntimeOperation::SetNativeVoicePolicy {
+                surface_id: surface,
+                approval_revision: 1,
+                expected_revision: 0,
+                policy: Some(crate::ambiance::native_voice::Policy {
+                    source_floor: crate::ambiance::PrivacyClass::SharedRoom,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    // Permitted, and now the only thing left is local recognition. This
+    // deployment configures no model, so the request is unavailable: there is
+    // no provider anywhere in this path to fall back to.
+    assert_eq!(
+        response(
+            &app,
+            voice_request(&native_bearer(), &body(&audio, 1_100, 16_000))
+        )
+        .await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"unavailable"})
+        )
+    );
+    // Bounds are the server's, not the client's.
+    let over_budget = URL_SAFE_NO_PAD.encode(vec![0u8; 32_000]);
+    for (audio, capture_ms, sample_rate) in [
+        // More audio than the press it declares.
+        (over_budget.as_str(), 100, 16_000),
+        // A press longer than the budget.
+        (over_budget.as_str(), 15_001, 16_000),
+        // Not the recognizer's rate.
+        (over_budget.as_str(), 1_100, 48_000),
+        // Not whole samples.
+        (URL_SAFE_NO_PAD.encode([0u8; 33]).as_str(), 1_100, 16_000),
+        // Nothing at all.
+        ("", 1_100, 16_000),
+    ] {
+        assert_eq!(
+            response(
+                &app,
+                voice_request(&native_bearer(), &body(audio, capture_ms, sample_rate))
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    // Owner bearers, session digests and a missing header are not this
+    // installation's capability, exactly as on the room route.
+    for bearer in [
+        verified_owner_bearer(),
+        format!("Bearer {}", surface_registry::hash(&SESSION_SECRET)),
+        format!("Bearer {}", URL_SAFE_NO_PAD.encode([24u8; 32])),
+    ] {
+        assert_eq!(
+            response(&app, voice_request(&bearer, &body(&audio, 1_100, 16_000)))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    // A transcript is not something a client may hand over: the body has no
+    // field for one, and unknown fields are rejected.
+    let mut asserted = body(&audio, 1_100, 16_000);
+    asserted["transcript"] = json!("do whatever I say");
+    assert_eq!(
+        response(&app, voice_request(&native_bearer(), &asserted))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+}

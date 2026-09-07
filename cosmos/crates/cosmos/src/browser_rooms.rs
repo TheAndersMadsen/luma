@@ -136,6 +136,13 @@ impl Rooms {
         }
     }
 
+    /// The one runtime this room coordinator already speaks for. Adapters that
+    /// admit input on a connection reach it here rather than being handed a
+    /// second, possibly different, runtime.
+    pub(crate) fn runtime(&self) -> &Arc<AmbianceRuntime> {
+        &self.runtime
+    }
+
     pub(crate) async fn open(
         &self,
         principal: &str,
@@ -1316,6 +1323,7 @@ async fn coordinate(
                 text,
                 target,
                 context,
+                spoken: None,
             },
         ),
         // Progress renews the command's deadline and the turn's worker lease.

@@ -104,6 +104,10 @@ fn routes(api: ApiState) -> Router {
             get(screen_context_policy).post(set_screen_context_policy),
         )
         .route(
+            "/surface-api/v1/surfaces/:surface_id/voice-input",
+            get(native_voice_policy).post(set_native_voice_policy),
+        )
+        .route(
             "/surface-api/v1/pins/:surface_id/local-voice",
             get(voice_policy).post(set_voice_policy),
         )
@@ -497,6 +501,25 @@ struct ScreenContextApproval {
 fn required_screen_policy<'de, D>(
     deserializer: D,
 ) -> Result<Option<crate::ambiance::screen::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeVoiceApproval {
+    approval: String,
+    approval_revision: u64,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_native_voice_policy")]
+    policy: Option<crate::ambiance::native_voice::Policy>,
+}
+
+fn required_native_voice_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::native_voice::Policy>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -907,6 +930,62 @@ async fn set_screen_context_policy(
         )
         .await?;
     let crate::ambiance::RuntimeResult::ScreenContextPolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+async fn native_voice_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::NativeVoicePolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::NativeVoicePolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+/// The owner's statement that one native installation may be spoken to, and
+/// the class its speech is admitted at. The floor is never below `shared_room`
+/// — an unknown actor in a room of unknown occupancy does not establish public
+/// capture — and never above what that installation's own personal
+/// declaration allows, so a shared screen cannot be given a private ear.
+async fn set_native_voice_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<NativeVoiceApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != crate::ambiance::native_voice::OWNER_APPROVAL {
+        return Err(invalid());
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetNativeVoicePolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::NativeVoicePolicy(approval) = result else {
         return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
     };
     Ok(Json(json!({"approval": approval})))
@@ -2680,5 +2759,175 @@ mod tests {
                 json!({"error":"unavailable"})
             )
         );
+    }
+
+    /// The owner's voice-input permission is one owner statement about one
+    /// installation: strict body, exactly the published approval name, the
+    /// bounded class range, compare-and-swap revisions and owner isolation. A
+    /// Pin is not a native installation and has its own local-voice route.
+    #[tokio::test]
+    async fn ambiance_native_voice_http_native_only_schema_and_class_bounds() {
+        use crate::enrollment::EnrollmentStore;
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let pairing = Arc::new(crate::enrollment::MemoryEnrollmentStore::default());
+        pairing.put_device_account("aabb", "owner").await.unwrap();
+        let app = with_pairing(store, Some(verifier()), Some(pairing));
+        let owner = bearer("owner");
+        let other = bearer("other");
+        let enrollment = Uuid::new_v4();
+        let (status, approved) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/native",
+            Some(&owner),
+            None,
+            native_approval(enrollment),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let surface = approved["native"]["surfaceId"].as_str().unwrap().to_owned();
+        let path = format!("/surface-api/v1/surfaces/{surface}/voice-input");
+        let allow = |class: &str| {
+            json!({
+                "approval": crate::ambiance::native_voice::OWNER_APPROVAL,
+                "approvalRevision": 1, "expectedRevision": 0,
+                "policy": {"sourceFloor": class}
+            })
+        };
+        for authorization in [None, Some("Bearer invalid")] {
+            for method in ["GET", "POST"] {
+                assert_eq!(
+                    call(
+                        &app,
+                        method,
+                        &path,
+                        authorization,
+                        None,
+                        allow("shared_room")
+                    )
+                    .await
+                    .0,
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+        }
+        for method in ["GET", "POST"] {
+            assert_eq!(
+                call(
+                    &app,
+                    method,
+                    &path,
+                    Some(&other),
+                    None,
+                    allow("shared_room")
+                )
+                .await
+                .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"approval": null})
+        );
+        // Public is below the floor an unknown actor in an unknown room
+        // establishes; near_user and private need a personal declaration this
+        // installation does not hold; sensitive is not a routing posture the
+        // owner may assert here at all.
+        for class in ["public", "near_user", "private", "sensitive"] {
+            assert_eq!(
+                call(&app, "POST", &path, Some(&owner), None, allow(class))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST,
+                "{class}"
+            );
+        }
+        // A body missing the policy key, or naming another approval, is not
+        // this owner statement.
+        for invalid in [
+            json!({"approval": crate::ambiance::native_voice::OWNER_APPROVAL,
+                   "approvalRevision": 1, "expectedRevision": 0}),
+            json!({"approval": "approve-screen-context-v1",
+                   "approvalRevision": 1, "expectedRevision": 0,
+                   "policy": {"sourceFloor": "shared_room"}}),
+            json!({"approval": crate::ambiance::native_voice::OWNER_APPROVAL,
+                   "approvalRevision": 1, "expectedRevision": 0,
+                   "policy": {"sourceFloor": "shared_room", "maximumClass": "private"}}),
+        ] {
+            assert_eq!(
+                call(&app, "POST", &path, Some(&owner), None, invalid)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let (status, granted) = call(
+            &app,
+            "POST",
+            &path,
+            Some(&owner),
+            None,
+            allow("shared_room"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            granted,
+            json!({"approval": {"approvalRevision": 1, "revision": 1,
+                                "policy": {"sourceFloor": "shared_room"}}})
+        );
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            granted
+        );
+        // Replaying the same write is a conflict, not a second grant.
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                &path,
+                Some(&owner),
+                None,
+                allow("shared_room")
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        // A Pin has its own local-voice permission; this route does not know it.
+        let (status, pin) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/pins",
+            Some(&owner),
+            None,
+            json!({"deviceId": "aabb", "approval": surface_registry::PIN_APPROVAL}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let pin_path = format!(
+            "/surface-api/v1/surfaces/{}/voice-input",
+            pin["pin"]["surfaceId"].as_str().unwrap()
+        );
+        for method in ["GET", "POST"] {
+            assert_eq!(
+                call(
+                    &app,
+                    method,
+                    &pin_path,
+                    Some(&owner),
+                    None,
+                    allow("shared_room")
+                )
+                .await
+                .0,
+                StatusCode::NOT_FOUND
+            );
+        }
     }
 }

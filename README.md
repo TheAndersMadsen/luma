@@ -2415,6 +2415,29 @@ newer library calls are looked up by name at launch, so against a library
 without them the panel reports the feature as not available in this build and
 sends nothing rather than narrowing the request to plain text.
 
+A reply routed to this Mac shows itself. When Cosmos delivers a card, a spoken
+reply, a task or a confirmation, the panel fades in under the menu-bar item on
+its own as a non-activating panel: the owner keeps typing in whatever
+application they were using and Cosmos never comes forward. It fades out again
+over 400 ms after a dwell taken from the reply itself — a moment to notice it
+plus its reading time at 200 words a minute, held between 6 and 20 seconds —
+and every sign of attention starts that countdown over: the pointer over the
+panel, a click on it, a keystroke while it takes keys, a scroll, text in the
+ask field, an open "Continue on" picker, playback still running or a command
+still running here. Escape dismisses it at once; a click hands it the keyboard;
+a panel the owner opened by hand behaves exactly as it did before and is never
+taken away. A confirmation ceremony presents itself and never fades, because
+dismissing it would answer it. Nothing presents itself while the screen is
+locked, while Do Not Disturb or another Focus is on (read from the system's own
+Focus assertions), while an application is in full screen on that display, or
+where the menu-bar item is out of reach; and a card above `shared_room` never
+reaches a panel that is not already on screen, because the runtime releases
+private content to an unlocked foreground and the owner's own open is what
+makes one. In each of those cases the menu-bar glyph shows the waiting state —
+as it now does for any reply that landed while the panel was closed — and the
+reply is there when the owner opens Cosmos. "Show replies automatically" in the
+menu-bar menu turns the whole behaviour off and is remembered across launches.
+
 Approval no longer needs pasted JSON. Each client offers "Approve in Center",
 a link to the surfaces page carrying its public descriptor as a fragment, and
 the Mac panel also renders that link as a QR code to scan with a phone. Center

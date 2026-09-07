@@ -90,6 +90,17 @@ pub enum OriginProof {
         stamp: InputStamp,
         intake: super::voice::Intake,
     },
+    /// One recognized push-to-talk capture from an approved installation. The
+    /// capture is the admitted request's identity and the transcript digest is
+    /// the runtime's own reading of what the local recognizer returned; a
+    /// client never asserts either, and no adapter accepts a transcript.
+    VoiceNative {
+        connection: super::NativeProof,
+        stamp: InputStamp,
+        capture: super::native_voice::Capture,
+        transcript_digest: String,
+        echo_fingerprint: String,
+    },
 }
 
 pub enum RuntimeOperation {
@@ -120,6 +131,20 @@ pub enum RuntimeOperation {
         approval_revision: u64,
         expected_revision: u64,
         policy: Option<super::voice::Policy>,
+    },
+    NativeVoicePolicy {
+        surface_id: Uuid,
+    },
+    SetNativeVoicePolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::native_voice::Policy>,
+    },
+    /// Whether this installation may be spoken to at all, asked before any
+    /// audio is read. It changes nothing and admits nothing.
+    AdmitNativeVoice {
+        connection: super::NativeProof,
     },
     BeginVoice {
         connection: super::PinProof,
@@ -453,6 +478,11 @@ pub enum RuntimeResult {
     NativeCurrent(super::native_connection::ConnectionView),
     NativeClosed,
     VoicePolicy(Option<super::voice::Approval>),
+    NativeVoicePolicy(Option<super::native_voice::Approval>),
+    NativeVoiceAdmissible {
+        policy_revision: u64,
+        source_floor: PrivacyClass,
+    },
     VoiceCurrent,
     VoiceFinalized {
         privacy: PrivacyClass,
@@ -564,6 +594,11 @@ pub struct Turn {
     /// owner's permission; content-free.
     #[serde(default)]
     pub screen_context: Option<super::screen::Offered>,
+    /// This request was spoken, not typed. Provenance the runtime keeps for
+    /// the whole turn: what a person said out loud in a room and what they
+    /// typed alone are not the same event, even when the words match.
+    #[serde(default)]
+    pub spoken: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -822,6 +857,8 @@ pub struct RuntimeState {
     #[serde(default)]
     pub voice_policies: BTreeMap<Uuid, super::voice::Approval>,
     #[serde(default)]
+    pub native_voice_policies: BTreeMap<Uuid, super::native_voice::Approval>,
+    #[serde(default)]
     pub lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
     #[serde(default)]
     pub place_lookup_policies: BTreeMap<Uuid, super::lookup::BoundApproval>,
@@ -1019,6 +1056,25 @@ pub enum RuntimeData {
     VoicePolicyChanged {
         surface_id: Uuid,
         approval: super::voice::Approval,
+    },
+    NativeVoicePolicyChanged {
+        surface_id: Uuid,
+        approval: super::native_voice::Approval,
+    },
+    /// One spoken request from an installation, recorded where a typed one
+    /// records only its digest: the press it came from, the class the owner's
+    /// policy admitted it at and the class it ended up at once the transcript's
+    /// own terms joined in. The words themselves are never here.
+    NativeVoiceAdmitted {
+        fence: TurnFence,
+        policy_revision: u64,
+        source_floor: PrivacyClass,
+        capture_ms: i64,
+        samples: u32,
+        audio_digest: String,
+        transcript_digest: String,
+        classifier_version: u8,
+        privacy: PrivacyClass,
     },
     VoiceStarted {
         fence: TurnFence,
@@ -1712,6 +1768,11 @@ impl RuntimeState {
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
         self.voice_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
+        self.native_voice_policies.retain(|id, approval| {
             records
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
@@ -2554,6 +2615,34 @@ impl RuntimeState {
                 });
                 events.extend(self.reconcile(records, now));
                 RuntimeResult::VoicePolicy(Some(approval))
+            }
+            RuntimeOperation::NativeVoicePolicy { surface_id } => {
+                RuntimeResult::NativeVoicePolicy(self.native_voice_policy(records, surface_id)?)
+            }
+            RuntimeOperation::SetNativeVoicePolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, changed) = self.set_native_voice_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(changed);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::NativeVoicePolicy(Some(approval))
+            }
+            RuntimeOperation::AdmitNativeVoice { connection } => {
+                let (policy_revision, source_floor) =
+                    self.admit_native_voice(records, &connection, now)?;
+                RuntimeResult::NativeVoiceAdmissible {
+                    policy_revision,
+                    source_floor,
+                }
             }
             RuntimeOperation::BeginVoice {
                 connection,
@@ -3484,6 +3573,34 @@ impl RuntimeState {
                         }
                         r
                     }
+                    // The whole permission is rechecked here, under the same
+                    // lock that commits the turn: the press was authorized
+                    // seconds ago and the owner may have changed their mind
+                    // since.
+                    OriginProof::VoiceNative {
+                        connection,
+                        stamp,
+                        capture,
+                        transcript_digest,
+                        echo_fingerprint,
+                    } => {
+                        if !digest_valid(echo_fingerprint) || !digest_valid(transcript_digest) {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        let r =
+                            self.room_record(records, &RoomProof::Native(connection.clone()), now)?;
+                        self.validate_native_voice(records, connection, capture, now)?;
+                        if request_digest != capture.source_digest(stamp)? {
+                            return Err(RuntimeError::InvalidRequest);
+                        }
+                        if !r.approved_manifest["authority"]["mayOriginate"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|v| v == "user.request"))
+                        {
+                            return Err(RuntimeError::InvalidOrigin);
+                        }
+                        r
+                    }
                 };
                 let sequenced = match &origin {
                     OriginProof::SequencedRoom { connection, stamp } => {
@@ -3493,6 +3610,9 @@ impl RuntimeState {
                         connection, stamp, ..
                     }
                     | OriginProof::VoicePin {
+                        connection, stamp, ..
+                    } => Some((connection.surface_id, connection.incarnation, stamp)),
+                    OriginProof::VoiceNative {
                         connection, stamp, ..
                     } => Some((connection.surface_id, connection.incarnation, stamp)),
                     _ => None,
@@ -3537,10 +3657,17 @@ impl RuntimeState {
                         return Err(RuntimeError::Stale);
                     }
                 }
+                // A room that hears its own reply is the cheapest way to make
+                // this system talk to itself, and a native installation that
+                // speaks through `audio.tts` and listens through its own
+                // microphone is exactly that room.
                 if let OriginProof::Pin {
                     echo_fingerprint, ..
                 }
                 | OriginProof::SequencedPin {
+                    echo_fingerprint, ..
+                }
+                | OriginProof::VoiceNative {
                     echo_fingerprint, ..
                 } = &origin
                     && let Some(echo) = self
@@ -3626,12 +3753,14 @@ impl RuntimeState {
                     .max(PrivacyClass::SharedRoom)
                     .max(match &origin {
                         OriginProof::VoicePin { intake, .. } => intake.source_floor,
+                        OriginProof::VoiceNative { capture, .. } => capture.source_floor,
                         _ => PrivacyClass::Public,
                     });
                 self.turn = Some(Turn {
                     fence: fence.clone(),
                     origin_incarnation: match &origin {
                         OriginProof::SequencedRoom { connection, .. } => connection.incarnation(),
+                        OriginProof::VoiceNative { connection, .. } => connection.incarnation,
                         _ => record.incarnation,
                     },
                     origin_revision: record.revision,
@@ -3656,6 +3785,7 @@ impl RuntimeState {
                     },
                     outcome: None,
                     screen_context: None,
+                    spoken: matches!(origin, OriginProof::VoiceNative { .. }),
                 });
                 if let Some((surface_id, _, stamp)) = sequenced {
                     let cursor = self.ingress.get_mut(&surface_id).unwrap();
@@ -3684,6 +3814,24 @@ impl RuntimeState {
                     request_digest,
                     privacy,
                 });
+                if let OriginProof::VoiceNative {
+                    capture,
+                    transcript_digest,
+                    ..
+                } = origin
+                {
+                    events.push(RuntimeData::NativeVoiceAdmitted {
+                        fence: fence.clone(),
+                        policy_revision: capture.policy_revision,
+                        source_floor: capture.source_floor,
+                        capture_ms: capture.capture_ms,
+                        samples: capture.samples,
+                        audio_digest: capture.audio_digest,
+                        transcript_digest,
+                        classifier_version: super::runtime::INPUT_CLASSIFIER_VERSION,
+                        privacy,
+                    });
+                }
                 RuntimeResult::Begun(fence)
             }
             RuntimeOperation::CheckCognition { fence } => {

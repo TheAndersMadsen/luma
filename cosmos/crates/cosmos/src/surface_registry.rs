@@ -164,11 +164,17 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-pub const NATIVE_APPROVAL: &str = "native-device-action-v4";
+pub const NATIVE_APPROVAL: &str = "native-voice-input-v5";
+pub const LEGACY_NATIVE_ACTION_APPROVAL: &str = "native-device-action-v4";
 pub const LEGACY_NATIVE_SPEECH_APPROVAL: &str = "native-shared-speech-v3";
 pub const LEGACY_NATIVE_DISPLAY_APPROVAL: &str = "native-shared-display-v2";
 pub const MAX_NATIVE_REVISION: u64 = MAX_SEQUENCE;
 pub const NATIVE_PLATFORMS: [&str; 4] = ["macos", "linux", "android", "android_tv"];
+/// The one input channel that opens a microphone. It is an input declaration,
+/// so it carries no class of its own: what a spoken request may be admitted at
+/// is the owner's `approve-native-voice-v1` floor for that installation,
+/// itself capped by the installation's own personal declaration.
+pub const NATIVE_VOICE_INPUT: &str = "voice.push_to_talk";
 
 /// Persisted display-only approvals keep rendering shared cards until the
 /// owner reapproves them. Older text-only records are unknown.
@@ -193,6 +199,10 @@ pub fn legacy_native_speech_manifest() -> serde_json::Value {
     manifest
 }
 
+/// Persisted action approvals keep connecting, rendering, speaking and
+/// carrying out what the owner allowed, and declare no microphone until the
+/// owner reapproves at the current profile.
+///
 /// The action profile is per platform, because what a device may be asked to
 /// do differs by what its operating system can honestly report. The set of
 /// legal manifests stays closed and enumerated, and the owner reads the exact
@@ -205,7 +215,7 @@ pub fn legacy_native_speech_manifest() -> serde_json::Value {
 /// `effect_unverified` and `no_effect_isolation` are honesty fields: a client
 /// cannot prove an effect it did not observe, and neither desktop client can
 /// sandbox what it launches.
-pub fn native_manifest(platform: &str) -> serde_json::Value {
+pub fn legacy_native_action_manifest(platform: &str) -> serde_json::Value {
     let card = serde_json::json!({"maxClass": "shared_room", "shared": true});
     let acknowledged = serde_json::json!(["acknowledged", "degraded"]);
     let mut output = serde_json::json!({"visual.card": card, "audio.tts": card});
@@ -276,6 +286,30 @@ pub fn native_manifest(platform: &str) -> serde_json::Value {
     })
 }
 
+/// Every platform Cosmos publishes a manifest for has a microphone, so the
+/// current profile is the action profile plus one push-to-talk input channel
+/// and the three honesty constraints that bound it. The runtime never asks a
+/// client to listen: there is no command that opens a microphone, capture
+/// starts only at the person's own press, and the client must show it while
+/// it holds one open. None of that is verifiable server-side, which is
+/// exactly why it is declared here and attested per capture.
+pub fn native_manifest(platform: &str) -> serde_json::Value {
+    let mut manifest = legacy_native_action_manifest(platform);
+    let Some(input) = manifest["capabilities"]["input"].as_array_mut() else {
+        return manifest;
+    };
+    input.push(serde_json::json!(NATIVE_VOICE_INPUT));
+    let Some(constraints) = manifest["constraints"].as_array_mut() else {
+        return manifest;
+    };
+    constraints.extend([
+        serde_json::json!("push_to_talk_only"),
+        serde_json::json!("no_background_capture"),
+        serde_json::json!("capture_indicator_required"),
+    ]);
+    manifest
+}
+
 /// The approval profile this record's manifest byte-equals for its own
 /// platform, or `None` when the manifest is not one Cosmos published. Binding
 /// to the record's own platform is what keeps the set closed: an Android
@@ -289,6 +323,8 @@ pub fn native_approval(record: &Record) -> Option<&'static str> {
     }
     if record.approved_manifest == native_manifest(platform) {
         Some(NATIVE_APPROVAL)
+    } else if record.approved_manifest == legacy_native_action_manifest(platform) {
+        Some(LEGACY_NATIVE_ACTION_APPROVAL)
     } else if record.approved_manifest == legacy_native_speech_manifest() {
         Some(LEGACY_NATIVE_SPEECH_APPROVAL)
     } else if record.approved_manifest == legacy_native_display_manifest() {
@@ -305,8 +341,21 @@ pub fn known_native_manifest(record: &Record) -> bool {
 pub fn known_native_approval(approval: &str) -> bool {
     matches!(
         approval,
-        NATIVE_APPROVAL | LEGACY_NATIVE_SPEECH_APPROVAL | LEGACY_NATIVE_DISPLAY_APPROVAL
+        NATIVE_APPROVAL
+            | LEGACY_NATIVE_ACTION_APPROVAL
+            | LEGACY_NATIVE_SPEECH_APPROVAL
+            | LEGACY_NATIVE_DISPLAY_APPROVAL
     )
+}
+
+/// Whether this installation's approved manifest declares one input channel.
+/// A legacy profile declares no microphone, so an installation the owner has
+/// not reapproved at the current profile cannot be spoken to at all.
+pub fn native_declares_input(record: &Record, channel: &str) -> bool {
+    known_native_manifest(record)
+        && record.approved_manifest["capabilities"]["input"]
+            .as_array()
+            .is_some_and(|declared| declared.iter().any(|value| value == channel))
 }
 
 /// Whether this installation's approved manifest declares one output channel.
@@ -377,6 +426,8 @@ impl Surface {
             name: "Native device",
             approval: if self.manifest == native_manifest(platform) {
                 NATIVE_APPROVAL
+            } else if self.manifest == legacy_native_action_manifest(platform) {
+                LEGACY_NATIVE_ACTION_APPROVAL
             } else if self.manifest == legacy_native_speech_manifest() {
                 LEGACY_NATIVE_SPEECH_APPROVAL
             } else {
@@ -1251,11 +1302,92 @@ mod tests {
             tv["capabilities"]["output"]["action.play"],
             serde_json::json!({"maxClass": "shared_room", "shared": true, "risk": "low", "idempotent": true, "reportBudgetMs": 30000})
         );
-        // It never captures the owner's screen either.
+        // It never captures the owner's screen either. Its remote's
+        // microphone is admitted, because a person pressing a button on a
+        // remote is as deliberate as one pressing a key; what the room it
+        // sits in costs it is the class, not the channel. A television holds
+        // no `approve-private-display-v1` declaration, so its voice ceiling is
+        // the shared room and its floor is the shared room too.
         assert_eq!(
             tv["capabilities"]["input"],
-            serde_json::json!(["text.public", "state.visibility", "action.report"])
+            serde_json::json!([
+                "text.public",
+                "state.visibility",
+                "action.report",
+                NATIVE_VOICE_INPUT
+            ])
         );
+    }
+
+    /// Every published platform declares the microphone, and every legacy
+    /// profile declares none: an installation the owner has not reapproved
+    /// cannot be spoken to, whatever else it may still do.
+    #[test]
+    fn native_voice_input_is_declared_by_the_current_profile_alone() {
+        for platform in NATIVE_PLATFORMS {
+            let mut record = transition(
+                None,
+                0,
+                Uuid::new_v4(),
+                &Mutation::ApproveNative {
+                    enrollment_id: Uuid::new_v4(),
+                    public_key: NATIVE_KEY.into(),
+                    platform: platform.into(),
+                    expected_revision: 0,
+                },
+                100,
+            )
+            .unwrap()
+            .0;
+            assert_eq!(native_approval(&record), Some(NATIVE_APPROVAL));
+            assert!(native_declares_input(&record, NATIVE_VOICE_INPUT));
+            assert!(native_declares_input(&record, "text.public"));
+            // One input channel is all this profile adds: every output channel
+            // stays byte-identical to the action profile it succeeds.
+            assert_eq!(
+                native_manifest(platform)["capabilities"]["output"],
+                legacy_native_action_manifest(platform)["capabilities"]["output"]
+            );
+            for constraint in [
+                "push_to_talk_only",
+                "no_background_capture",
+                "capture_indicator_required",
+            ] {
+                assert!(
+                    record.approved_manifest["constraints"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!(constraint)),
+                    "{platform} {constraint}"
+                );
+            }
+            for (legacy, profile) in [
+                (
+                    legacy_native_action_manifest(platform),
+                    LEGACY_NATIVE_ACTION_APPROVAL,
+                ),
+                (
+                    legacy_native_speech_manifest(),
+                    LEGACY_NATIVE_SPEECH_APPROVAL,
+                ),
+                (
+                    legacy_native_display_manifest(),
+                    LEGACY_NATIVE_DISPLAY_APPROVAL,
+                ),
+            ] {
+                record.approved_manifest = legacy;
+                assert_eq!(native_approval(&record), Some(profile));
+                assert!(known_native_approval(profile));
+                assert!(
+                    !native_declares_input(&record, NATIVE_VOICE_INPUT),
+                    "{profile}"
+                );
+            }
+            // A v4 record still renders, speaks and acts; it just has no ear.
+            record.approved_manifest = legacy_native_action_manifest(platform);
+            assert!(native_declares(&record, "visual.card"));
+            assert!(native_declares(&record, "audio.tts"));
+        }
     }
 
     #[test]

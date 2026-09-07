@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "state": "native-device-action-definition-in-progress",
   "scope": "Owner-approved installation key, signed connection, sequenced text and foreground visibility in the shared Cosmos/Center room, with one shared-room visual card acknowledged after the installation's exact render and one shared-room spoken reply synthesized by Cosmos under the origin's speech-provider disclosure, streamed as bounded frames and acknowledged after the installation's complete playback. Native capture and physical device acceptance remain unfinished.",
-  "profile": "native-device-action-v4",
-  "legacyProfile": "native-shared-speech-v3 and native-shared-display-v2 approvals keep connecting, rendering cards and (for v3) speaking, and declare no action channel until the owner reapproves at the current revision. The challenge carries the approval the record actually holds, so publishing this profile does not stop an installation on an earlier one from connecting.",
+  "profile": "native-voice-input-v5",
+  "legacyProfile": "native-device-action-v4, native-shared-speech-v3 and native-shared-display-v2 approvals keep connecting, rendering cards, speaking and (for v4) carrying out what the owner allowed, and declare no microphone until the owner reapproves at the current revision. The challenge carries the approval the record actually holds, so publishing this profile does not stop an installation on an earlier one from connecting; it does stop it from being spoken to, because the voice permission is not writable for a manifest that declares no input channel.",
   "descriptor": {
     "maximumBytes": 1024,
     "fields": {
       "enrollmentId": "non-nil UUID",
       "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
       "platform": "macos|linux|android|android_tv",
-      "approval": "native-device-action-v4"
+      "approval": "native-voice-input-v5"
     },
     "additionalProperties": false
   },
@@ -49,7 +49,7 @@
         "enrollmentId": "non-nil UUID",
         "surfaceId": "non-nil UUID",
         "approvalRevision": "positive safe integer",
-        "approval": "the approval profile this installation's record holds: native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
+        "approval": "the approval profile this installation's record holds: native-voice-input-v5, native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
         "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
         "challengeId": "non-nil UUID",
         "nonce": "canonical unpadded base64url of 32 random bytes",
@@ -287,7 +287,8 @@
             "text.public",
             "state.visibility",
             "context.screen",
-            "action.report"
+            "action.report",
+            "voice.push_to_talk"
           ],
           "output": {
             "visual.card": {
@@ -330,7 +331,10 @@
           "visible_foreground_only",
           "no_background_output",
           "effect_unverified",
-          "no_effect_isolation"
+          "no_effect_isolation",
+          "push_to_talk_only",
+          "no_background_capture",
+          "capture_indicator_required"
         ],
         "expression": {
           "visual.card": [
@@ -375,7 +379,8 @@
             "text.public",
             "state.visibility",
             "context.screen",
-            "action.report"
+            "action.report",
+            "voice.push_to_talk"
           ],
           "output": {
             "visual.card": {
@@ -410,7 +415,10 @@
           "visible_foreground_only",
           "no_background_output",
           "effect_unverified",
-          "no_effect_isolation"
+          "no_effect_isolation",
+          "push_to_talk_only",
+          "no_background_capture",
+          "capture_indicator_required"
         ],
         "expression": {
           "visual.card": [
@@ -450,7 +458,8 @@
             "text.public",
             "state.visibility",
             "context.screen",
-            "action.report"
+            "action.report",
+            "voice.push_to_talk"
           ],
           "output": {
             "visual.card": {
@@ -492,7 +501,10 @@
           "visible_foreground_only",
           "no_background_output",
           "effect_unverified",
-          "foreground_or_assistant_session_only"
+          "foreground_or_assistant_session_only",
+          "push_to_talk_only",
+          "no_background_capture",
+          "capture_indicator_required"
         ],
         "expression": {
           "visual.card": [
@@ -535,7 +547,8 @@
           "input": [
             "text.public",
             "state.visibility",
-            "action.report"
+            "action.report",
+            "voice.push_to_talk"
           ],
           "output": {
             "visual.card": {
@@ -562,7 +575,10 @@
           "playback_unverified",
           "visible_foreground_only",
           "no_background_output",
-          "effect_unverified"
+          "effect_unverified",
+          "push_to_talk_only",
+          "no_background_capture",
+          "capture_indicator_required"
         ],
         "expression": {
           "visual.card": [

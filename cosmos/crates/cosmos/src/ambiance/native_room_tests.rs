@@ -1867,6 +1867,7 @@ async fn native_room_explicit_target_outranks_the_model_and_binds_exact_retries(
         text: "Show this on the Mac".into(),
         target,
         context: None,
+        spoken: None,
     };
     let first_stamp = browser_stamp(1, Uuid::new_v4());
     let RuntimeResult::Proposed(first) = fixture
@@ -2032,6 +2033,7 @@ async fn native_room_screen_context_reaches_cognition_only_under_the_owners_perm
         text: text.into(),
         target: None,
         context: Some(context),
+        spoken: None,
     };
     // No permission: the text never reaches cognition; the phone is told why.
     let RuntimeResult::Proposed(explained) = fixture
@@ -2726,4 +2728,600 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
     );
     assert_eq!(status(RoomProof::Native(phone.clone())).await, None);
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+}
+
+/// One synthetic push-to-talk capture: the bytes a client would have recorded
+/// while it showed that it was recording, and what it attests about them.
+fn synthetic_capture(
+    samples: u32,
+    policy_revision: u64,
+    source_floor: PrivacyClass,
+) -> native_voice::Capture {
+    native_voice::Capture {
+        attestation: native_voice::REQUIRED_ATTESTATION.to_vec(),
+        capture_ms: i64::from(samples) * 1000 / i64::from(native_voice::SAMPLE_RATE) + 1,
+        samples,
+        audio_digest: hash(&samples.to_be_bytes()),
+        policy_revision,
+        source_floor,
+    }
+}
+
+async fn set_voice_permission(
+    store: &Arc<MemoryStore>,
+    surface_id: Uuid,
+    approval_revision: u64,
+    expected_revision: u64,
+    source_floor: Option<PrivacyClass>,
+) -> Result<native_voice::Approval, RuntimeError> {
+    match store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::SetNativeVoicePolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy: source_floor.map(|source_floor| native_voice::Policy { source_floor }),
+            },
+        )
+        .await?
+    {
+        RuntimeResult::NativeVoicePolicy(Some(approval)) => Ok(approval),
+        _ => panic!("native voice approval required"),
+    }
+}
+
+async fn voice_admission(
+    store: &Arc<MemoryStore>,
+    connection: &NativeProof,
+) -> Result<(u64, PrivacyClass), RuntimeError> {
+    match store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::AdmitNativeVoice {
+                connection: connection.clone(),
+            },
+        )
+        .await?
+    {
+        RuntimeResult::NativeVoiceAdmissible {
+            policy_revision,
+            source_floor,
+        } => Ok((policy_revision, source_floor)),
+        _ => panic!("native voice admissibility required"),
+    }
+}
+
+/// Speaking to a device is the owner's decision about that one installation,
+/// and it is spent the moment the installation is reapproved. Nothing here is
+/// a microphone the runtime can open: the gate is asked before any audio is
+/// read, and audio only ever arrives because a person pressed something.
+#[tokio::test]
+async fn native_voice_admission_needs_the_owner_permission_at_the_current_revision() {
+    let model = Arc::new(SpyModel::default());
+    let fixture = fixture(model.clone()).await;
+    let (mac, _) = open_native(&fixture.store, "macos").await;
+    // Approved, connected, declaring a microphone — and still refused, because
+    // the owner has said nothing about it.
+    assert!(matches!(
+        voice_admission(&fixture.store, &mac).await,
+        Err(RuntimeError::PolicyBlocked)
+    ));
+    // The floor is never below the shared room: an unknown actor in a room of
+    // unknown occupancy does not establish public capture.
+    assert!(matches!(
+        set_voice_permission(
+            &fixture.store,
+            mac.surface_id,
+            1,
+            0,
+            Some(PrivacyClass::Public)
+        )
+        .await,
+        Err(RuntimeError::InvalidRequest)
+    ));
+    let approval = set_voice_permission(
+        &fixture.store,
+        mac.surface_id,
+        1,
+        0,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    assert_eq!((approval.approval_revision, approval.revision), (1, 1));
+    assert_eq!(
+        voice_admission(&fixture.store, &mac).await.unwrap(),
+        (1, PrivacyClass::SharedRoom)
+    );
+    // Withdrawing it is one write, and it takes effect before the next press.
+    set_voice_permission(&fixture.store, mac.surface_id, 1, 1, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        voice_admission(&fixture.store, &mac).await,
+        Err(RuntimeError::PolicyBlocked)
+    ));
+    set_voice_permission(
+        &fixture.store,
+        mac.surface_id,
+        1,
+        2,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    assert_eq!(voice_admission(&fixture.store, &mac).await.unwrap().0, 3);
+    // Revoking and reapproving the installation moves its approval revision,
+    // which drops the permission with everything else bound to it: the owner
+    // says again what this device may do, including whether it has an ear.
+    let enrollment_id = fixture
+        .store
+        .surface(PRINCIPAL, mac.surface_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .native_view()
+        .unwrap()
+        .enrollment_id;
+    fixture
+        .store
+        .mutate_surface(
+            PRINCIPAL,
+            mac.surface_id,
+            Mutation::RevokeNative {
+                expected_revision: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(voice_admission(&fixture.store, &mac).await.is_err());
+    fixture
+        .store
+        .mutate_surface(
+            PRINCIPAL,
+            mac.surface_id,
+            Mutation::ApproveNative {
+                enrollment_id,
+                public_key: "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU".into(),
+                platform: "macos".into(),
+                expected_revision: 2,
+            },
+        )
+        .await
+        .unwrap();
+    let reapproved = fixture
+        .store
+        .surface(PRINCIPAL, mac.surface_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .native_view()
+        .unwrap();
+    assert_eq!(reapproved.revision, 3);
+    assert_eq!(reapproved.approval, surface_registry::NATIVE_APPROVAL);
+    // The permission did not survive the new approval: expecting the old
+    // revision is a conflict, and nothing may be spoken until the owner
+    // allows it again for this revision.
+    assert!(matches!(
+        set_voice_permission(
+            &fixture.store,
+            mac.surface_id,
+            3,
+            3,
+            Some(PrivacyClass::SharedRoom)
+        )
+        .await,
+        Err(RuntimeError::Stale)
+    ));
+    set_voice_permission(
+        &fixture.store,
+        mac.surface_id,
+        3,
+        0,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+}
+
+/// A spoken request is one ordinary sequenced request whose provenance says it
+/// was spoken. Its identity is the press, not the words, so a retry of the
+/// same press is the same turn; the ledger carries the capture's bounds and
+/// both classes, and never a syllable of what was said.
+#[tokio::test]
+async fn native_voice_admits_a_spoken_request_and_records_its_provenance() {
+    let model = Arc::new(SpyModel::default());
+    let fixture = fixture(model.clone()).await;
+    let (mac, epoch) = open_native(&fixture.store, "macos").await;
+    set_voice_permission(
+        &fixture.store,
+        mac.surface_id,
+        1,
+        0,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    let (policy_revision, source_floor) = voice_admission(&fixture.store, &mac).await.unwrap();
+    let capture = synthetic_capture(32_000, policy_revision, source_floor);
+    let stamp = InputStamp {
+        sequence: 2,
+        instance_id: Uuid::new_v4(),
+        ..epoch.clone()
+    };
+    let RuntimeResult::Proposed(reply) = fixture
+        .runtime
+        .native_voice_transcript(
+            PRINCIPAL,
+            mac.clone(),
+            stamp.clone(),
+            capture.clone(),
+            "Tell me a public fact".into(),
+            None,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("spoken request must reach cognition")
+    };
+    assert_eq!(reply.privacy, PrivacyClass::SharedRoom);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
+    let admitted = events
+        .iter()
+        .filter_map(|event| match event {
+            ledger::LedgerEvent::Runtime(event) => match &event.data {
+                RuntimeData::NativeVoiceAdmitted { fence, .. }
+                    if fence.turn_id == reply.turn_id =>
+                {
+                    Some(event.data.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .next_back()
+        .expect("a spoken request is recorded as spoken");
+    let RuntimeData::NativeVoiceAdmitted {
+        policy_revision: logged_revision,
+        source_floor: logged_floor,
+        capture_ms,
+        samples,
+        audio_digest,
+        transcript_digest,
+        privacy,
+        ..
+    } = admitted
+    else {
+        panic!("native voice admission event required")
+    };
+    assert_eq!(logged_revision, 1);
+    assert_eq!(logged_floor, PrivacyClass::SharedRoom);
+    assert_eq!(privacy, PrivacyClass::SharedRoom);
+    assert_eq!(capture_ms, capture.capture_ms);
+    assert_eq!(samples, capture.samples);
+    assert_eq!(audio_digest, capture.audio_digest);
+    assert_eq!(transcript_digest, hash(b"Tell me a public fact"));
+    // The admitted request's digest is the press, never the transcript.
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ledger::LedgerEvent::Runtime(event)
+            if matches!(&event.data, RuntimeData::TurnBegan { turn_id, request_digest, .. }
+                if *turn_id == reply.turn_id
+                    && *request_digest == capture.source_digest_for_test(&stamp))
+    )));
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("Tell me a public fact"),
+        "what was said never enters the ledger"
+    );
+    // Replaying the same press is the same request, not a second recognition.
+    assert!(matches!(
+        fixture
+            .runtime
+            .native_voice_transcript(
+                PRINCIPAL,
+                mac.clone(),
+                stamp.clone(),
+                capture.clone(),
+                "Tell me a public fact".into(),
+                None,
+            )
+            .await,
+        Ok(RuntimeResult::Duplicate(fence)) if fence.turn_id == reply.turn_id
+    ));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    // A capture checked against a permission revision that has since moved is
+    // refused under the admission lock, not admitted at the old class.
+    set_voice_permission(
+        &fixture.store,
+        mac.surface_id,
+        1,
+        1,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    let stale = fixture
+        .runtime
+        .native_voice_transcript(
+            PRINCIPAL,
+            mac.clone(),
+            InputStamp {
+                sequence: 3,
+                instance_id: Uuid::new_v4(),
+                ..epoch.clone()
+            },
+            capture,
+            "Tell me a public fact".into(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
+
+/// The server bounds the press it will accept, in both directions, and there
+/// is nowhere in this path for a client to hand over words it wrote itself.
+#[tokio::test]
+async fn native_voice_bounds_the_capture_it_will_accept() {
+    let model = Arc::new(SpyModel::default());
+    let fixture = fixture(model.clone()).await;
+    let (mac, epoch) = open_native(&fixture.store, "macos").await;
+    set_voice_permission(
+        &fixture.store,
+        mac.surface_id,
+        1,
+        0,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    let valid = synthetic_capture(32_000, 1, PrivacyClass::SharedRoom);
+    let mut sequence = 1;
+    for invalid in [
+        // A press longer than the budget.
+        native_voice::Capture {
+            capture_ms: native_voice::MAX_CAPTURE_MS + 1,
+            samples: native_voice::MAX_SAMPLES,
+            ..valid.clone()
+        },
+        // More audio than the press it declares.
+        native_voice::Capture {
+            capture_ms: 1_000,
+            samples: 32_000,
+            ..valid.clone()
+        },
+        // More audio than the recognizer takes at all.
+        native_voice::Capture {
+            capture_ms: native_voice::MAX_CAPTURE_MS,
+            samples: native_voice::MAX_SAMPLES + 1,
+            ..valid.clone()
+        },
+        // A client that will not say it showed what it was doing.
+        native_voice::Capture {
+            attestation: vec![native_voice::Attestation::PushToTalk],
+            ..valid.clone()
+        },
+        // A capture claiming a class the owner never wrote.
+        native_voice::Capture {
+            source_floor: PrivacyClass::Private,
+            ..valid.clone()
+        },
+    ] {
+        sequence += 1;
+        let error = fixture
+            .runtime
+            .native_voice_transcript(
+                PRINCIPAL,
+                mac.clone(),
+                InputStamp {
+                    sequence,
+                    instance_id: Uuid::new_v4(),
+                    ..epoch.clone()
+                },
+                invalid,
+                "Tell me a public fact".into(),
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error.code(),
+                tonic::Code::InvalidArgument | tonic::Code::FailedPrecondition
+            ),
+            "{error:?}"
+        );
+    }
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+}
+
+/// A shared device cannot claim a private ear. The television holds no
+/// personal declaration, so both its floor and its ceiling are the shared
+/// room; the phone the owner declared personal may be spoken to at a higher
+/// class, and loses that the moment the declaration goes. Whatever the floor,
+/// the transcript's own terms still raise the turn, and a request raised above
+/// the shared room is answered on a personal surface while every shared one is
+/// suppressed — including the television that heard it.
+#[tokio::test]
+async fn native_voice_class_is_the_owner_floor_joined_with_what_was_said() {
+    let model = Arc::new(SpyModel::default());
+    let fixture = fixture(model.clone()).await;
+    let (tv, tv_epoch) = open_native(&fixture.store, "android_tv").await;
+    let (phone, _) = open_native(&fixture.store, "android").await;
+    // A television is bystander-perceivable by construction and can hold no
+    // personal declaration, so a private floor for it is not writable.
+    assert!(matches!(
+        set_voice_permission(
+            &fixture.store,
+            tv.surface_id,
+            1,
+            0,
+            Some(PrivacyClass::Private)
+        )
+        .await,
+        Err(RuntimeError::InvalidRequest)
+    ));
+    assert!(matches!(
+        set_voice_permission(
+            &fixture.store,
+            tv.surface_id,
+            1,
+            0,
+            Some(PrivacyClass::NearUser)
+        )
+        .await,
+        Err(RuntimeError::InvalidRequest)
+    ));
+    set_voice_permission(
+        &fixture.store,
+        tv.surface_id,
+        1,
+        0,
+        Some(PrivacyClass::SharedRoom),
+    )
+    .await
+    .unwrap();
+    // The phone is the owner's own, declared for private display; only then is
+    // a private floor writable for it.
+    assert!(matches!(
+        set_voice_permission(
+            &fixture.store,
+            phone.surface_id,
+            1,
+            0,
+            Some(PrivacyClass::Private)
+        )
+        .await,
+        Err(RuntimeError::InvalidRequest)
+    ));
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::SetPrivatePolicy {
+                surface_id: phone.surface_id,
+                approval_revision: 1,
+                expected_revision: 0,
+                policy: Some(personal::Policy {
+                    maximum_class: PrivacyClass::Private,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    set_voice_permission(
+        &fixture.store,
+        phone.surface_id,
+        1,
+        0,
+        Some(PrivacyClass::Private),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        voice_admission(&fixture.store, &phone).await.unwrap().1,
+        PrivacyClass::Private
+    );
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::RoomControl {
+                connection: RoomProof::Native(phone.clone()),
+                stamp: InputStamp {
+                    epoch: tv_epoch.epoch,
+                    sequence: 1,
+                    instance_id: Uuid::new_v4(),
+                },
+                control: BrowserControl::State { visible: true },
+            },
+        )
+        .await
+        .ok();
+    // Said out loud at the television, about the owner's own notes: the floor
+    // is the shared room, the words raise it to private, and the answer is
+    // built by the runtime itself and offered to the phone.
+    let (policy_revision, source_floor) = voice_admission(&fixture.store, &tv).await.unwrap();
+    assert_eq!(source_floor, PrivacyClass::SharedRoom);
+    let RuntimeResult::Proposed(private) = fixture
+        .runtime
+        .native_voice_transcript(
+            PRINCIPAL,
+            tv.clone(),
+            InputStamp {
+                sequence: 2,
+                instance_id: Uuid::new_v4(),
+                ..tv_epoch.clone()
+            },
+            synthetic_capture(32_000, policy_revision, source_floor),
+            "Read my notes back to me".into(),
+            None,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a private spoken request is answered on a personal surface")
+    };
+    assert_eq!(private.privacy, PrivacyClass::Private);
+    assert_eq!(private.surface_id, phone.surface_id);
+    assert_ne!(private.surface_id, tv.surface_id);
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        0,
+        "a private turn is answered without any provider"
+    );
+    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ledger::LedgerEvent::Runtime(event)
+            if matches!(&event.data, RuntimeData::NativeVoiceAdmitted { fence, source_floor, privacy, .. }
+                if fence.turn_id == private.turn_id
+                    && *source_floor == PrivacyClass::SharedRoom
+                    && *privacy == PrivacyClass::Private)
+    )));
+    let candidates = events
+        .iter()
+        .filter_map(|event| match event {
+            ledger::LedgerEvent::Runtime(event) => match &event.data {
+                RuntimeData::Decision {
+                    turn_id,
+                    candidates,
+                    ..
+                } if *turn_id == private.turn_id => Some(candidates.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .next_back()
+        .expect("the private decision is logged");
+    for candidate in &candidates {
+        if candidate.surface_id == tv.surface_id {
+            assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
+        }
+    }
+    // Taking the phone's personal declaration away leaves its stored private
+    // floor unusable: the next press is refused rather than admitted lower.
+    fixture
+        .store
+        .runtime(
+            PRINCIPAL,
+            RuntimeOperation::SetPrivatePolicy {
+                surface_id: phone.surface_id,
+                approval_revision: 1,
+                expected_revision: 1,
+                policy: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        voice_admission(&fixture.store, &phone).await,
+        Err(RuntimeError::PolicyBlocked)
+    ));
 }

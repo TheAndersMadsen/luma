@@ -23,6 +23,10 @@ pub struct RoomInput {
     pub text: String,
     pub target: Option<RoutingTarget>,
     pub context: Option<ScreenContext>,
+    /// Present when this text is the local recognizer's reading of one
+    /// admitted push-to-talk capture. The capture, not the words, is then the
+    /// admitted request's identity.
+    pub spoken: Option<super::native_voice::Capture>,
 }
 
 impl RoomInput {
@@ -31,19 +35,30 @@ impl RoomInput {
             text,
             target: None,
             context: None,
+            spoken: None,
         }
     }
 
     /// The admitted input's identity. Plain text keeps its own digest; an
     /// explicit destination or screen context is bound into it so an exact
-    /// retry must replay the same target and context.
-    fn digest(&self) -> String {
+    /// retry must replay the same target and context. A spoken request's
+    /// identity is its capture: two recognitions of the same press are the
+    /// same request even if the recognizer spelled them differently, and a
+    /// retry that replays the press is a duplicate rather than a new turn.
+    fn digest(&self, stamp: Option<&super::InputStamp>) -> Result<String, Status> {
+        if let (Some(capture), Some(stamp)) = (self.spoken.as_ref(), stamp) {
+            return capture
+                .source_digest(stamp)
+                .map_err(|_| Status::unavailable("voice admission unavailable"));
+        }
         if self.target.is_none() && self.context.is_none() {
-            return crate::surface_registry::hash(self.text.as_bytes());
+            return Ok(crate::surface_registry::hash(self.text.as_bytes()));
         }
         let canonical =
             serde_json::json!(["cosmos.room-input", 1, self.text, self.target, self.context]);
-        crate::surface_registry::hash(canonical.to_string().as_bytes())
+        Ok(crate::surface_registry::hash(
+            canonical.to_string().as_bytes(),
+        ))
     }
 }
 
@@ -172,6 +187,75 @@ impl AmbianceRuntime {
             }
             _ => Err(Status::unavailable("voice intake unavailable")),
         }
+    }
+
+    /// Whether this installation may be spoken to right now. Asked before a
+    /// single sample is read, so audio from an installation the owner never
+    /// allowed is refused rather than transcribed and then discarded.
+    pub(crate) async fn native_voice_admission(
+        &self,
+        principal: &str,
+        connection: &super::NativeProof,
+    ) -> Result<(u64, PrivacyClass), super::RuntimeError> {
+        self.start_maintenance();
+        let result = self
+            .store
+            .runtime(
+                principal,
+                RuntimeOperation::AdmitNativeVoice {
+                    connection: connection.clone(),
+                },
+            )
+            .await?;
+        let RuntimeResult::NativeVoiceAdmissible {
+            policy_revision,
+            source_floor,
+        } = result
+        else {
+            return Err(super::RuntimeError::Unavailable);
+        };
+        Ok((policy_revision, source_floor))
+    }
+
+    /// Admit one recognized capture as a sequenced request marked as spoken.
+    ///
+    /// Only the local-recognition adapter calls this, with its own result:
+    /// there is no route, RPC or body anywhere that accepts a transcript a
+    /// client wrote. The permission, the approval revision and the class are
+    /// all rechecked inside the admission transition, so a press authorized a
+    /// few seconds ago is still refused if the owner has changed their mind
+    /// since.
+    pub(crate) async fn native_voice_transcript(
+        &self,
+        principal: &str,
+        connection: super::NativeProof,
+        stamp: super::InputStamp,
+        capture: super::native_voice::Capture,
+        transcript: String,
+        started: Option<tokio::sync::oneshot::Sender<TurnFence>>,
+    ) -> Result<RuntimeResult, Status> {
+        self.start_maintenance();
+        if transcript.trim().is_empty() || transcript.len() > 4000 {
+            return Err(Status::invalid_argument("bounded transcript is required"));
+        }
+        let transcript_digest = crate::surface_registry::hash(transcript.as_bytes());
+        let echo_fingerprint = super::echo::fingerprint(&transcript);
+        let mut input = RoomInput::text(transcript);
+        input.spoken = Some(capture.clone());
+        self.text(
+            principal,
+            OriginProof::VoiceNative {
+                connection,
+                stamp,
+                capture,
+                transcript_digest,
+                echo_fingerprint,
+            },
+            input,
+            started,
+            None,
+        )
+        .await
     }
 
     pub fn new(
@@ -449,23 +533,37 @@ impl AmbianceRuntime {
             .map_or(PrivacyClass::Public, |context| {
                 PrivacyClass::Private.max(input_privacy(&context.text))
             })
-            .max(input_privacy(&input.text));
+            .max(input_privacy(&input.text))
+            // The owner's floor for that installation joins with the
+            // transcript's own terms exactly the way every other provenance
+            // class joins; nothing about being spoken lowers a class.
+            .max(
+                input
+                    .spoken
+                    .as_ref()
+                    .map_or(PrivacyClass::Public, |capture| capture.source_floor),
+            );
         let origin_kind = match &origin {
             OriginProof::Browser(_) => OriginKind::Browser,
             OriginProof::SequencedRoom { connection, .. } => match connection {
                 RoomProof::Browser(_) => OriginKind::Browser,
                 RoomProof::Native(_) => OriginKind::Native,
             },
+            OriginProof::VoiceNative { .. } => OriginKind::Native,
             OriginProof::Pin { .. }
             | OriginProof::SequencedPin { .. }
             | OriginProof::VoicePin { .. } => OriginKind::Pin,
         };
-        let turn_id = match &origin {
+        let stamp = match &origin {
             OriginProof::SequencedRoom { stamp, .. }
             | OriginProof::SequencedPin { stamp, .. }
-            | OriginProof::VoicePin { stamp, .. } => stamp.instance_id,
-            _ => Uuid::new_v4(),
+            | OriginProof::VoicePin { stamp, .. }
+            | OriginProof::VoiceNative { stamp, .. } => Some(stamp.clone()),
+            _ => None,
         };
+        let turn_id = stamp
+            .as_ref()
+            .map_or_else(Uuid::new_v4, |stamp| stamp.instance_id);
         let result = self
             .store
             .runtime(
@@ -474,7 +572,7 @@ impl AmbianceRuntime {
                     turn_id,
                     worker: self.worker,
                     origin,
-                    request_digest: input.digest(),
+                    request_digest: input.digest(stamp.as_ref())?,
                     privacy_floor,
                 },
             )
@@ -514,6 +612,7 @@ impl AmbianceRuntime {
             text,
             target,
             context,
+            spoken: _,
         } = input;
         self.cognize(
             principal,
