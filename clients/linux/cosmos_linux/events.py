@@ -482,7 +482,12 @@ def _invitation(value) -> Optional[Invitation]:
         raise InvalidEvent("unsupported invitation kind")
     invitation = Invitation(_uuid(record, "id"), _string(record, "origin"), _string(record, "privacy"),
                             _integer(record, "expiresAtMs"), kind)
-    if invitation.origin not in ORIGINS or invitation.privacy not in PRIVATE_LEVELS:
+    # A waiting card is personal by construction, so only a personal class can
+    # name one. A waiting task is not: an action channel is capped at the
+    # shared class unless the owner lifted this installation's ceiling, so the
+    # notice that one is waiting arrives at whatever class the action holds.
+    levels = PRIVATE_LEVELS if invitation.kind == "card" else frozenset(PRIVACY_LEVELS)
+    if invitation.origin not in ORIGINS or invitation.privacy not in levels:
         raise InvalidEvent("invalid invitation")
     return invitation
 

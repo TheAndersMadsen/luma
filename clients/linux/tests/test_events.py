@@ -112,6 +112,23 @@ class EventDecodingTest(unittest.TestCase):
         for change in ({"origin": "watch"}, {"privacy": "public"}):
             with self.assertRaises(InvalidEvent, msg=str(change)):
                 decode(encode(snapshot("invitation", connected=True, invitation={**invitation, **change})))
+        # A waiting task is not a waiting card. This computer's action channel
+        # is capped at the shared class, so every task notice the runtime can
+        # mint for it arrives there; refusing that class took the client out of
+        # the session for the ordinary case of asking while the window is behind.
+        for privacy in ("public", "shared_room", "near_user", "private"):
+            task = {**invitation, "kind": "task", "privacy": privacy}
+            event = decode(encode(snapshot("invitation", connected=True, invitation=task)))
+            self.assertEqual(event.invitation.kind, "task", privacy)
+            self.assertTrue(event.invitation.is_task, privacy)
+        with self.assertRaises(InvalidEvent):
+            decode(encode(snapshot("invitation", connected=True,
+                                   invitation={**invitation, "kind": "task", "privacy": "sensitive"})))
+        # A waiting card stays personal at every class a shared surface could name.
+        for privacy in ("public", "shared_room"):
+            with self.assertRaises(InvalidEvent, msg=privacy):
+                decode(encode(snapshot("invitation", connected=True,
+                                       invitation={**invitation, "kind": "card", "privacy": privacy})))
 
     def test_admission_and_pending_decode(self):
         event = decode(encode(snapshot(
