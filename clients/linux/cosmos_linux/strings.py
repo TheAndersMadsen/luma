@@ -16,6 +16,9 @@ WAITING_FOR_DEVICE = "Waiting for a device"
 COMPLETED = "Completed"
 CANNOT_CONFIRM = "Cannot confirm"
 DISCONNECTED = "Disconnected"
+# A device action that did not happen. One sentence on what happened, one on
+# what to do; never a reason that belongs to someone else's device.
+NOT_DONE = "Not done"
 
 # -- sub-lines: plain sentences ---------------------------------------------
 RECONNECTING = "Reconnecting…"
@@ -29,6 +32,11 @@ CANNOT_CONFIRM_DETAIL = "Nothing could show or say the reply. It was not sent ag
 SHOWN_ON = "Shown on your {device}"
 SPOKEN_ON = "Spoken on your {device}"
 WAITING_FOR = "Waiting for your {device}"
+DONE_ON = "Done on your {device}"
+ACTING_ON = "Your {device} is doing it"
+ACTING_HERE = "This computer is doing it"
+CONFIRM_HERE = "Confirm it on this computer"
+NOT_DONE_ELSEWHERE = "That did not happen. Ask again if you still want it."
 
 # Friendly names for the kinds of device Cosmos names in a status.
 DEVICE_NAMES = {
@@ -111,9 +119,61 @@ EMPTY_TITLE = "Ask anything"
 EXAMPLE_CAFES = "Find cafés near me"
 EXAMPLE_NOTES = "Show my notes about the kitchen"
 EXAMPLE_SCREEN = "What's on my screen?"
-SHORTCUTS_CONNECTED = "Ctrl+L ask · Enter send · Ctrl+Return send from anywhere · Esc close · 1–8 pick"
+SHORTCUTS_CONNECTED = ("Ctrl+L ask · Enter send · Ctrl+Return send from anywhere · Esc close · "
+                       "Ctrl+. cancel task · 1–8 pick")
 SHORTCUTS_SETUP = "Ctrl+L focus · Esc close · Ctrl+Q quit"
 PREVIEW = "Preview"
+
+# -- device actions ----------------------------------------------------------
+# Cosmos may ask this computer to open something. It says what it is doing,
+# how long it has been doing it, and afterwards only what it actually saw.
+TASK_OPENING = "Opening {label}"
+TASK_OPENED = "{label} is open on this computer."
+TASK_OPENED_PLAIN = "It is open on this computer."
+TASK_UNKNOWN = "This computer cannot confirm that {label} opened. It was not opened again."
+TASK_UNKNOWN_PLAIN = "This computer cannot confirm that it opened. It was not opened again."
+TASK_STOPPED = "It was stopped."
+TASK_STOPPED_REMEDY = "Ask again if you still want it."
+TASK_FAILED = "That did not open on this computer."
+TASK_FAILED_REMEDY = "Try again, or open it yourself."
+CANCEL_TASK_HINT = "Ctrl+."
+TASK_CLOSE_NOTE = "Closing hides this window. The task keeps running."
+
+# Why a command was refused here, and what the owner can do about it. Never a
+# reason about another device, and never a reason about privacy.
+REFUSAL_NO_HANDLER = "This computer has no application set up to open that."
+REFUSAL_NO_HANDLER_REMEDY = "Add an opener to device-actions.json in the Cosmos data folder, then ask again."
+REFUSAL_NOT_PERMITTED = "This computer is not allowed to open that."
+REFUSAL_NOT_PERMITTED_REMEDY = "Add it to device-actions.json in the Cosmos data folder, then ask again."
+REFUSAL_UNRESOLVABLE = "That document is not in the folder this computer knows by that name."
+REFUSAL_UNRESOLVABLE_REMEDY = "Check the folder in device-actions.json, then ask again."
+REFUSAL_VERSION_CHANGED = "That document changed since it was read. It was not opened."
+REFUSAL_VERSION_CHANGED_REMEDY = "Ask again to open the version this computer has."
+# The three operations this platform does not offer at all.
+UNSUPPORTED_RUN = "This computer does not run commands."
+UNSUPPORTED_ROUTE = "This computer does not start navigation."
+UNSUPPORTED_PLAY = "This computer does not play media."
+UNSUPPORTED_OTHER = "This computer cannot do that."
+UNSUPPORTED_REMEDY = "Ask for it on a device that can."
+POLICY_MISSING = "This computer is not set up to open anything yet."
+POLICY_MISSING_REMEDY = "Write device-actions.json in the Cosmos data folder to allow a site or a folder."
+POLICY_INVALID = "This computer could not read what it is allowed to open, so it will open nothing."
+POLICY_INVALID_REMEDY = "Fix device-actions.json in the Cosmos data folder, then restart Cosmos."
+
+# The ceremony. The runtime composed these words from the owner's own label;
+# this file only frames them.
+CONFIRM_TITLE = "Confirm on this computer"
+CONFIRM_QUESTION = "{verb} {subject} on this computer?"
+CONFIRM_CLASS_PRIVATE = "This is private to you."
+CONFIRM_ALLOW = "Confirm"
+CONFIRM_DECLINE = "Decline"
+CONFIRM_COUNTDOWN = "{seconds}s left"
+CONFIRM_HINT = "Enter confirms · Esc dismisses without answering"
+CONFIRM_HINT_DECLINE_ONLY = "Esc dismisses without answering"
+CONFIRM_CANNOT = "This computer cannot prove who you are, so it cannot confirm this."
+CONFIRM_DISMISSED = "Nothing was answered. The request runs out on its own."
+CONFIRM_DECLINED = "You said no."
+CONFIRM_EXPIRED = "The confirmation ran out."
 
 # -- notices: one sentence on what happened, one on what to do -----------------
 NOTICE_PREPARED = "This computer is ready. Approve it in Center to connect."
@@ -127,6 +187,9 @@ NOTICE_CARD = "A reply is on this screen."
 NOTICE_PRIVATE_CARD = "A private reply is on this screen. It stays only while this window is in front."
 NOTICE_INVITATION = "A private reply is waiting. Keep this window in front to see it."
 NOTICE_SPEAKING = "Cosmos is speaking the reply here."
+NOTICE_TASK = "Cosmos asked this computer to open something."
+NOTICE_TASK_WAITING = "Something is ready for this computer. Keep this window in front to carry it out."
+NOTICE_CONFIRM = "Cosmos needs your answer on this computer."
 NOTICE_PENDING = "The last request may or may not have gone through. Retry it before sending anything else."
 NOTICE_UNKNOWN_OUTCOME = "An earlier request has an unknown outcome. It was not sent again."
 
@@ -143,6 +206,8 @@ FAIL_CONNECTION_UNAVAILABLE = "Cosmos could not be reached. Reconnecting…"
 FAIL_UNCERTAIN_REQUEST = "The last request may or may not have gone through. Retry it before sending anything else."
 FAIL_BUSY = "Cosmos is still busy with the last action. Wait a moment, then try again."
 FAIL_FEATURE_UNAVAILABLE = "This needs a newer Cosmos client. Update the client and try again."
+FAIL_ACTIONS_UNAVAILABLE = ("This build of Cosmos cannot carry out tasks on this computer. Nothing was opened. "
+                            "Update the client.")
 FAIL_SCREEN_CONTEXT_OFF = SCREEN_CONTEXT_OFF
 
 

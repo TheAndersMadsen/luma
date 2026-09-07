@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import time
 from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Callable, Deque, Optional, Protocol
 
+from . import actions
 from . import strings as S
 from .context import ScreenContext
 from .endpoint import (
@@ -23,13 +26,17 @@ from .endpoint import (
     valid_text,
 )
 from .events import (
-    PLATFORM, Admission, Descriptor, DisplayCard, InvalidEvent, Invitation, NativeEvent, SpeechReply, TurnStatus,
-    decode,
+    PLATFORM, Admission, Confirmation, Descriptor, DisplayCard, InvalidEvent, Invitation, NativeEvent, Revoked,
+    SpeechReply, Task, TurnStatus, decode,
 )
 from .native import (
     INVALID_ARGUMENT, OK, QUEUE_FULL, UNAVAILABLE, Features, NativeError, PlatformBindings, Surface,
 )
-from .viewstate import EMPTY_LINE, TARGETS, Line, status_line
+from .policy import EMPTY_POLICY, Policy
+from .viewstate import (
+    EMPTY_LINE, TARGETS, TASK_DONE, TASK_FAILED, TASK_REFUSED, TASK_STOPPED, TASK_UNKNOWN, TASK_WORKING, Line,
+    TaskView, status_line,
+)
 
 RECONNECT_DELAYS = (1.5, 3.0, 6.0, 12.0, 30.0)
 COMMAND_DEADLINE = 90.0
@@ -67,6 +74,7 @@ class Failure(str, Enum):
     BUSY = S.FAIL_BUSY
     FEATURE_UNAVAILABLE = S.FAIL_FEATURE_UNAVAILABLE
     SCREEN_CONTEXT_OFF = S.FAIL_SCREEN_CONTEXT_OFF
+    ACTIONS_UNAVAILABLE = S.FAIL_ACTIONS_UNAVAILABLE
 
     @property
     def message(self) -> str:
@@ -86,7 +94,7 @@ _FAILURES = {
     "denied": Failure.APPROVAL_REQUIRED, "busy": Failure.BUSY,
 }
 for _code in ("no_pending_operation", "disconnected", "expired", "stale", "unavailable", "no_admission",
-              "no_display", "no_speech"):
+              "no_display", "no_speech", "no_task", "no_confirmation"):
     _FAILURES[_code] = Failure.CONNECTION_UNAVAILABLE
 
 
@@ -134,6 +142,16 @@ class State:
     context: Optional[ScreenContext] = None
     context_busy: bool = False
     features: Features = Features()
+    # One command this computer was asked to carry out, as it is going here,
+    # and the ceremony this computer is the venue for.
+    task: Optional[TaskView] = None
+    confirmation: Optional[Confirmation] = None
+    # Escape dismisses the panel and answers nothing; the request then runs out.
+    ceremony_dismissed: bool = False
+    ceremony_seconds: int = 0
+    # What this computer is allowed to open, read from the owner's own file.
+    policy_loaded: bool = False
+    policy_error: Optional[str] = None
 
     @property
     def presence(self) -> Line:
@@ -151,6 +169,10 @@ class State:
             return Line(S.DISCONNECTED, S.RECONNECTING if reconnecting else "")
         if self.has_pending:
             return Line(S.CANNOT_CONFIRM, S.NOTICE_PENDING)
+        if self.ceremony_open:
+            return Line(S.WAITING_FOR_YOU, S.CONFIRM_HERE)
+        if self.task is not None and self.task.running:
+            return Line(S.WORKING, S.ACTING_HERE)
         if self.sending:
             return Line(S.WORKING)
         if self.speaking:
@@ -189,6 +211,17 @@ class State:
     @property
     def can_cancel(self) -> bool:
         return self.can_send and self.admission is not None
+
+    @property
+    def ceremony_open(self) -> bool:
+        """A ceremony is on screen only while it has not been dismissed. Closing
+        the panel answers nothing at all."""
+        return self.confirmation is not None and not self.ceremony_dismissed
+
+    @property
+    def can_cancel_task(self) -> bool:
+        """Stopping the work this computer is doing. Closing the window is not this."""
+        return self.task is not None and self.task.running
 
     @property
     def can_disconnect(self) -> bool:
@@ -267,7 +300,11 @@ class Controller:
                  journal: JournalLike, scheduler: Scheduler, player: SpeechPlayer, boot_epoch: str,
                  server_origin: Optional[str] = None,
                  persist_server: Optional[Callable[[str], None]] = None,
-                 reconnect_delays: tuple = RECONNECT_DELAYS) -> None:
+                 reconnect_delays: tuple = RECONNECT_DELAYS,
+                 policy: Optional[Policy] = None,
+                 launcher: Optional[actions.Launcher] = None,
+                 which: Callable[[str], Optional[str]] = shutil.which,
+                 now_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
         self._factory = surface_factory
         self._identity = identity
         self._platform = PlatformAdapter(identity, journal)
@@ -276,8 +313,20 @@ class Controller:
         self._boot_epoch = boot_epoch
         self._persist_server = persist_server
         self._delays = tuple(reconnect_delays)
+        self._policy = policy if policy is not None else EMPTY_POLICY
+        self._launcher = launcher if launcher is not None else actions.ProcessLauncher()
+        self._which = which
+        self._now_ms = now_ms
+        self._ledger = actions.Ledger()
+        self._task: Optional[Task] = None
+        self._task_action: Optional[str] = None
+        self._task_launch: Optional[actions.Launch] = None
+        self._task_started = 0.0
+        self._task_reported = True
+        self._grant_id: Optional[str] = None
         self._listeners: list[Callable[[State], None]] = []
-        self._state = State(server_origin=server_origin or DEFAULT_SERVER_ORIGIN)
+        self._state = State(server_origin=server_origin or DEFAULT_SERVER_ORIGIN,
+                            policy_loaded=self._policy.loaded, policy_error=self._policy.error)
         self._surface: Optional[Surface] = None
         self._expected: Optional[str] = None
         self._deadline = 0.0
@@ -332,6 +381,7 @@ class Controller:
         self._destroy_surface()
         self._acknowledged = None
         self._played = None
+        self._reset_actions()
         self._update(
             phase=Phase.PREPARING, server_origin=origin, descriptor=None, has_pending=False,
             pending_open=False, needs_reconnect=False, can_retry=False, has_unknown_outcome=False,
@@ -339,7 +389,8 @@ class Controller:
             message="", busy=True, disconnecting=False,
             wants_connection=False, reconnect_armed=False, session_seen=False,
             status=None, status_line=EMPTY_LINE, sent_text="", sending=False, turn_open=False,
-            context=None, context_busy=False,
+            context=None, context_busy=False, task=None, confirmation=None, ceremony_dismissed=False,
+            ceremony_seconds=0,
         )
         self._create_attempts = 0
         self._try_create()
@@ -532,6 +583,190 @@ class Controller:
     def _current_display(self, action_id: str) -> bool:
         return self._state.display is not None and self._state.display.action_id == action_id
 
+    # -- device actions ------------------------------------------------------
+
+    @property
+    def policy(self) -> Policy:
+        return self._policy
+
+    def _begin_task(self, task: Task) -> None:
+        """One command, decided entirely here. Acknowledging says it is legal on
+        this computer; only what this computer then observes may be reported."""
+        self._task = task
+        self._task_action = task.action_id
+        self._task_launch = None
+        self._task_reported = False
+        self._task_started = self._scheduler.monotonic()
+        label = task.label
+        if not self._state.features.actions or self._surface is None:
+            # Without the library calls this build cannot say what it did, so it
+            # does nothing at all and says so here rather than dropping a command.
+            self._task_reported = True
+            self._update(task=TaskView(task.action_id, label, TASK_REFUSED, reason="no_handler"),
+                         failure=Failure.ACTIONS_UNAVAILABLE, message=Failure.ACTIONS_UNAVAILABLE.message)
+            return
+        retained = self._ledger.recall(task.idempotency_key, self._task_started)
+        if retained is not None:
+            # A repeat of the same command opens nothing a second time; it
+            # re-sends the report this computer already made.
+            log.info("a repeated command was answered with its existing report")
+            self._acknowledge_task(task)
+            self._send_report(task, retained, self._phase_for(retained), label)
+            return
+        decision = actions.plan(task, self._policy, self._which)
+        if not decision.bound:
+            # Never acknowledge a command this computer will not attempt.
+            self._send_report(task, actions.refusal_report(decision.refusal), TASK_REFUSED, label,
+                              reason=decision.refusal, unsupported=decision.unsupported)
+            return
+        self._task_launch = decision.launch
+        self._acknowledge_task(task)
+        self._update(task=TaskView(task.action_id, label, TASK_WORKING, elapsed=0),
+                     message=S.NOTICE_TASK, failure=None)
+        self._launcher.start(decision.launch)
+
+    def _acknowledge_task(self, task: Task) -> None:
+        self._defer("acknowledge_task", self._surface.acknowledge_task,
+                    guard=lambda: self._task_action == task.action_id and self._state.phase == Phase.CONNECTED)
+
+    @staticmethod
+    def _phase_for(report: dict) -> str:
+        return {actions.COMPLETED: TASK_DONE, actions.REFUSED: TASK_REFUSED, actions.FAILED: TASK_FAILED,
+                actions.CANCELLED: TASK_STOPPED, actions.UNKNOWN: TASK_UNKNOWN}.get(
+                    str(report.get("outcome")), TASK_UNKNOWN)
+
+    def _send_report(self, task: Task, report: dict, phase: str, label: str,
+                     reason: Optional[str] = None, unsupported: Optional[str] = None) -> None:
+        """Exactly one report per command, and only what this computer saw."""
+        self._task_reported = True
+        self._task_launch = None
+        self._ledger.remember(task.idempotency_key, report, self._scheduler.monotonic())
+        elapsed = int(max(0.0, self._scheduler.monotonic() - self._task_started))
+        self._update(task=TaskView(task.action_id, label, phase, elapsed=elapsed, reason=reason,
+                                   unsupported=unsupported))
+        if self._surface is None:
+            return
+        payload = actions.report_bytes(report)
+        action_id = task.action_id
+        self._defer("report", lambda: self._surface.report(payload),
+                    guard=lambda: self._task_action == action_id and self._state.phase == Phase.CONNECTED)
+
+    def _collect_launch(self) -> None:
+        """What the launcher saw, folded into the one report this command gets."""
+        observation = self._launcher.poll()
+        task = self._task
+        if observation is None or self._task_reported or task is None or self._task_launch is None:
+            return
+        report = actions.report_for(self._task_launch, observation)
+        self._send_report(task, report, self._phase_for(report), task.label)
+
+    def _stop_task(self, reason: str) -> None:
+        """The runtime revoked it, or the owner cancelled it. Stop what can be
+        stopped; the launcher then says what it saw, and ``cancelled`` is only
+        for what this computer can prove."""
+        if self._task_action is None or self._task_reported:
+            return
+        log.info("stopping the running command (%s)", reason)
+        self._launcher.stop()
+
+    def cancel_task(self) -> bool:
+        """"Cancel task" is explicit and separate from closing the window."""
+        if not self._state.can_cancel_task:
+            return False
+        self._stop_task("cancelled here")
+        return True
+
+    def confirm(self) -> bool:
+        """Answer the ceremony with what this desktop can actually prove: that
+        someone was at this window and pressed the key."""
+        confirmation = self._state.confirmation
+        if confirmation is None or self._surface is None or self._state.ceremony_dismissed:
+            return False
+        if confirmation.attestation != "foreground_tap":
+            # A keypress here is not device-owner authentication and never
+            # stands in for it.
+            return False
+        self._defer("grant", lambda: self._surface.grant(True, "foreground_tap"),
+                    guard=lambda: self._state.phase == Phase.CONNECTED)
+        self._update(message=S.NOTICE_TASK)
+        return True
+
+    def decline(self) -> bool:
+        """Declining is one control away and weighs exactly as much as confirming."""
+        if self._state.confirmation is None or self._surface is None:
+            return False
+        self._defer("grant", lambda: self._surface.grant(False, None),
+                    guard=lambda: self._state.phase == Phase.CONNECTED)
+        self._update(message=S.CONFIRM_DECLINED)
+        return True
+
+    def dismiss_ceremony(self) -> bool:
+        """Escape hides the ceremony and answers nothing; it then runs out on its
+        own, which denies by default."""
+        if not self._state.ceremony_open:
+            return False
+        self._update(ceremony_dismissed=True, message=S.CONFIRM_DISMISSED)
+        return True
+
+    def _fold_action(self, event: NativeEvent) -> None:
+        """Everything the snapshot says about commands and ceremonies."""
+        revoked: Optional[Revoked] = event.revoked
+        if (revoked is not None and self._task_action == revoked.action_id and not self._task_reported):
+            self._stop_task(revoked.reason)
+        task = event.task
+        if task is not None and task.action_id != self._task_action:
+            self._begin_task(task)
+        else:
+            self._collect_launch()
+        confirmation = event.confirmation
+        if confirmation is not None and not self._words_bind(confirmation):
+            # The answer must bind to the exact sentence the owner read. If the
+            # words and the digest disagree, this computer shows no ceremony at
+            # all and the request runs out, which denies by default.
+            log.warning("a confirmation's words did not match its digest; it was not shown")
+            confirmation = None
+        grant = confirmation.grant_id if confirmation is not None else None
+        dismissed = self._state.ceremony_dismissed and grant == self._grant_id
+        self._grant_id = grant
+        seconds = 0
+        if confirmation is not None:
+            seconds = max(0, (confirmation.expires_at_ms - self._now_ms() + 999) // 1000)
+        self._update(confirmation=confirmation, ceremony_dismissed=dismissed, ceremony_seconds=int(seconds))
+
+    @staticmethod
+    def _words_bind(confirmation: Confirmation) -> bool:
+        """The sentence on screen, hashed the way Cosmos hashed it."""
+        description = confirmation.description
+        return actions.confirmation_digest({
+            "verb": description.verb, "subject": description.subject,
+            "deviceKind": description.device_kind, "effect": description.effect,
+            "class": description.privacy_class,
+        }) == confirmation.description_digest
+
+    def _tick_action(self) -> None:
+        """The clocks the cards read: elapsed time and the ceremony countdown."""
+        state = self._state
+        changes = {}
+        if state.task is not None and state.task.running:
+            elapsed = int(max(0.0, self._scheduler.monotonic() - self._task_started))
+            if elapsed != state.task.elapsed:
+                changes["task"] = replace(state.task, elapsed=elapsed)
+        if state.confirmation is not None:
+            seconds = max(0, (state.confirmation.expires_at_ms - self._now_ms() + 999) // 1000)
+            if int(seconds) != state.ceremony_seconds:
+                changes["ceremony_seconds"] = int(seconds)
+        if changes:
+            self._update(**changes)
+
+    def _reset_actions(self) -> None:
+        if self._task_action is not None or self._launcher.busy:
+            self._launcher.stop()
+        self._task = None
+        self._task_action = None
+        self._task_launch = None
+        self._task_reported = True
+        self._grant_id = None
+
     def shutdown(self) -> None:
         self._cancel_reconnect()
         if self._create_handle is not None:
@@ -539,13 +774,15 @@ class Controller:
             self._create_handle = None
         self._wants_connection = False
         self._stop_playback()
+        self._reset_actions()
         self._deferred.clear()
         self._expected = None
         self._on_settled = None
         self._destroy_surface()
         self._update(phase=Phase.DISCONNECTED, busy=False, disconnecting=False, wants_connection=False,
                      reconnect_armed=False, visible=False, display=None, speech=None, speaking=False,
-                     sending=False, turn_open=False, status=None, status_line=EMPTY_LINE, context_busy=False)
+                     sending=False, turn_open=False, status=None, status_line=EMPTY_LINE, context_busy=False,
+                     confirmation=None, ceremony_dismissed=False, ceremony_seconds=0)
 
     def _destroy_surface(self) -> None:
         surface, self._surface = self._surface, None
@@ -619,6 +856,8 @@ class Controller:
                     self._blocked(Failure.INVALID_RESPONSE)
                     break
                 self._fold(event)
+            self._collect_launch()
+            self._tick_action()
             self._check_deadline()
             self._run_deferred()
         self._schedule_reconnect()
@@ -666,6 +905,11 @@ class Controller:
                 failure = Failure.IDENTITY_UNAVAILABLE
             elif callback == "storage":
                 failure = Failure.STORAGE_BLOCKED if event.error == "persistence" else Failure.STORAGE_UNAVAILABLE
+        if event.error in ("no_task", "no_confirmation"):
+            # The runtime withdrew the command or the ceremony before this
+            # answer reached it. There is nothing left to say and nothing wrong
+            # with the connection.
+            failure = None
         storage_blocked = failure in (Failure.STORAGE_BLOCKED, Failure.STORAGE_UNAVAILABLE)
         has_pending = event.pending is not None or event.pending_open or storage_blocked
         if failure == Failure.CONNECTION_UNAVAILABLE and has_pending:
@@ -723,6 +967,7 @@ class Controller:
             invitation=event.invitation, failure=failure, message=message,
             wants_connection=self._wants_connection, status=event.status, status_line=line, turn_open=turn_open,
         )
+        self._fold_action(event)
         if event.operation == self._expected:
             self._settle(event, event.ok and failure is None)
         self._sync_playback(event.speech)
@@ -747,7 +992,11 @@ class Controller:
         if event.operation == "display" and event.display is not None:
             return S.NOTICE_PRIVATE_CARD if event.display.private else S.NOTICE_CARD
         if event.operation == "invitation" and event.invitation is not None:
-            return S.NOTICE_INVITATION
+            return S.NOTICE_TASK_WAITING if event.invitation.is_task else S.NOTICE_INVITATION
+        if event.operation == "task" and event.task is not None:
+            return S.NOTICE_TASK
+        if event.operation == "confirmation" and event.confirmation is not None:
+            return S.NOTICE_CONFIRM
         if event.operation == "status" and event.status is not None:
             return ""
         return previous

@@ -30,8 +30,13 @@ ApplicationWindow {
     // Set while a menu is open so Escape dismisses the menu instead of the window.
     property bool popupOpen: false
 
-    // Closing the window never cancels a task; the turn continues and the icon shows Working.
+    // Closing the window never cancels a task; the turn continues and the icon
+    // shows Working. While a ceremony is on screen it owns the keyboard — a
+    // modal popup takes every key, including these — so Enter and Escape reach
+    // the ceremony and nothing here.
     Shortcut { sequence: "Escape"; enabled: !window.popupOpen; onActivated: backend.hideWindow() }
+    // "Cancel task" is explicit and separate from closing the window.
+    Shortcut { sequence: "Ctrl+."; enabled: s.canCancelTask; onActivated: backend.cancelTask() }
     Shortcut { sequence: "Ctrl+Q"; onActivated: backend.quit() }
     Shortcut { sequence: "Ctrl+L"; onActivated: if (views.item && views.item.focusPrimary) views.item.focusPrimary() }
     Shortcut {

@@ -79,6 +79,41 @@ def speech_reply(action_id: str = SPEECH_ID, byte_length: int = 5) -> dict:
             "byteLength": byte_length}
 
 
+TASK_ID = "2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d"
+GRANT_ID = "e5aa1b2c-3d4e-4f5a-8b6c-7d8e9f0a1b2c"
+
+
+def open_task(operation: Optional[dict] = None, action_id: str = TASK_ID, key: str = "d" * 64,
+              privacy: str = "private", channel: str = "action.open") -> dict:
+    """One `action.open` command, with the digest the runtime would have bound."""
+    from cosmos_linux.actions import content_digest
+    operation = operation if operation is not None else {
+        "kind": "open", "locator": {"scheme": "https", "url": "https://github.com/owner/repo/pull/412"},
+        "label": "PR 412",
+    }
+    return {"actionId": action_id, "turnId": TURN_ID, "generation": 3, "channel": channel,
+            "contentDigest": content_digest(operation) or DIGEST, "idempotencyKey": key,
+            "operation": operation, "expiresAtMs": 1_900_000_000_000, "reportByMs": 1_900_000_010_000,
+            "privacy": privacy}
+
+
+def confirmation(attestation: str = "foreground_tap", expires_at_ms: int = 1_900_000_030_000,
+                 digest: Optional[str] = None) -> dict:
+    """One ceremony whose digest binds its own words, the way the runtime mints it."""
+    from cosmos_linux.actions import confirmation_digest
+    description = {"kind": "device_action", "verb": "open", "subject": "state.rs", "deviceKind": "linux",
+                   "effect": "opens that document on this computer", "class": "private"}
+    return {"grantId": GRANT_ID, "actionId": TASK_ID, "turnId": TURN_ID, "generation": 3,
+            "description": description,
+            "descriptionDigest": digest if digest is not None else confirmation_digest(description),
+            "risk": "moderate", "attestation": attestation, "privacy": "private",
+            "expiresAtMs": expires_at_ms}
+
+
+def revoked(reason: str = "cancelled", action_id: str = TASK_ID) -> dict:
+    return {"actionId": action_id, "reason": reason}
+
+
 def admission(turn_id: str = TURN_ID) -> dict:
     return {"turnId": turn_id, "generation": 2, "duplicate": False}
 
@@ -108,7 +143,7 @@ class FakeSurface:
     """Records commands and hands out queued snapshots like the C worker would."""
 
     instances: list = []
-    features = Features(targets=True, context=True)
+    features = Features(targets=True, context=True, actions=True)
 
     def __init__(self, config: bytes, platform) -> None:
         self.config = json.loads(config.decode("utf-8"))
@@ -162,6 +197,21 @@ class FakeSurface:
 
     def acknowledge_speech(self) -> int:
         return self._command("acknowledge_speech")
+
+    def acknowledge_task(self) -> int:
+        if not self.features.actions:
+            return UNAVAILABLE
+        return self._command("acknowledge_task")
+
+    def report(self, report: bytes) -> int:
+        if not self.features.actions:
+            return UNAVAILABLE
+        return self._command("report", json.loads(bytes(report).decode("utf-8")))
+
+    def grant(self, granted: bool, attestation) -> int:
+        if not self.features.actions:
+            return UNAVAILABLE
+        return self._command("grant", granted, attestation)
 
     def disconnect(self) -> int:
         return self._command("disconnect")
@@ -235,3 +285,36 @@ class FakePlayer:
     def stop(self) -> None:
         self.stopped += 1
         self._finish = None
+
+
+class FakeLauncher:
+    """A launcher that starts nothing and reports exactly what a test says it saw."""
+
+    def __init__(self) -> None:
+        self.started: list = []
+        self.stopped = 0
+        self._result = None
+        self._busy = False
+
+    @property
+    def busy(self) -> bool:
+        return self._busy
+
+    def start(self, launch) -> None:
+        self.started.append(launch)
+        self._busy = True
+
+    def observe(self, observation) -> None:
+        self._result = observation
+        self._busy = False
+
+    def poll(self):
+        result, self._result = self._result, None
+        return result
+
+    def stop(self) -> None:
+        self.stopped += 1
+        if self._busy:
+            from cosmos_linux.actions import STOPPED, Observation
+            self._result = Observation(STOPPED)
+            self._busy = False

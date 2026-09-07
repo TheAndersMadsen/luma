@@ -16,25 +16,37 @@ from .native import MAX_SPEECH_BYTES, MAX_TEXT_BYTES
 
 # Mirrors PROFILE in the Rust client (surface-client wire.rs). The descriptor the
 # library reports is verified against it; a different profile is an invalid response.
-APPROVAL_PROFILE = "native-shared-speech-v3"
+APPROVAL_PROFILE = "native-device-action-v4"
 PLATFORM = "linux"
 OPERATIONS = frozenset({
-    "prepare", "connect", "send_text", "retry_pending", "cancel", "set_visible", "acknowledge",
-    "acknowledge_speech", "display", "speech", "invitation", "status", "disconnect", "heartbeat",
+    "prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending", "cancel",
+    "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task", "report", "progress", "grant",
+    "display", "speech", "invitation", "status", "task", "confirmation", "disconnect", "heartbeat",
 })
 PRIVACY_LEVELS = ("public", "shared_room", "near_user", "private")
 PRIVATE_LEVELS = frozenset({"near_user", "private"})
 # A status is expressed at the turn's class capped by this origin's ceiling.
 STATUS_PRIVACY_LEVELS = frozenset({"public", "shared_room", "near_user", "private", "sensitive"})
-TURN_STATES = frozenset({"working", "waiting", "shown", "spoken", "nowhere", "unknown"})
+TURN_STATES = frozenset({"working", "waiting", "confirming", "acting", "shown", "spoken", "done", "refused",
+                         "nowhere", "unknown"})
 ORIGINS = frozenset({"pin", "browser", "macos", "linux", "android", "android_tv"})
 SURFACE_PLATFORMS = frozenset({"browser", "macos", "linux", "android", "android_tv"})
+# The action channels the runtime may name. Only `action.open` is on this
+# platform's manifest; the rest are decoded so they can be refused by name.
+ACTION_CHANNELS = frozenset({"action.open", "action.route", "action.play", "action.run"})
+OPERATION_KINDS = frozenset({"open", "route", "play", "run"})
+LOCATOR_SCHEMES = frozenset({"https", "app", "file"})
+POSITION_KINDS = frozenset({"line", "page", "fragment"})
+INVITATION_KINDS = frozenset({"card", "task"})
+RISKS = frozenset({"low", "moderate", "high"})
+ATTESTATIONS = frozenset({"foreground_tap", "device_owner_auth"})
+REVOKE_REASONS = frozenset({"cancelled", "preempted", "superseded", "expired", "revalidation_failed"})
 MIN_CHOICES = 2
 MAX_CHOICES = 8
 MAX_CHOICE_TITLE_BYTES = 120
 MAX_CHOICE_ITEM_TITLE_BYTES = 80
 MAX_CHOICE_DETAIL_BYTES = 200
-PENDING_KINDS = frozenset({"text", "heartbeat", "cancel", "state", "acknowledge"})
+PENDING_KINDS = frozenset({"text", "heartbeat", "cancel", "state", "acknowledge", "report", "grant"})
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 BASE64URL_KEY = re.compile(r"^[A-Za-z0-9_-]{87}$")
@@ -127,12 +139,76 @@ class TurnStatus:
 
 @dataclass(frozen=True)
 class Invitation:
-    """A private card is waiting for this installation. It carries no content."""
+    """A private card, or a command, is waiting for this installation. Either
+    way it carries no content: only the kind of surface that asked."""
 
     id: str
     origin: str
     privacy: str
     expires_at_ms: int
+    kind: str = "card"
+
+    @property
+    def is_task(self) -> bool:
+        return self.kind == "task"
+
+
+@dataclass(frozen=True)
+class Task:
+    """One command this installation was asked to carry out. Every field was
+    minted by the runtime; this client re-verifies all of it before acting."""
+
+    action_id: str
+    turn_id: str
+    generation: int
+    channel: str
+    content_digest: str
+    idempotency_key: str
+    operation: dict
+    expires_at_ms: int
+    report_by_ms: int
+    privacy: str
+
+    @property
+    def label(self) -> str:
+        return str(self.operation.get("label") or "")
+
+
+@dataclass(frozen=True)
+class Description:
+    """The runtime's own words for the effect. Rendered from this client's own
+    strings file; no JSON ever reaches a person."""
+
+    verb: str
+    subject: str
+    device_kind: str
+    effect: str
+    privacy_class: str
+
+
+@dataclass(frozen=True)
+class Confirmation:
+    """One ceremony this installation is the venue for. Declining weighs exactly
+    as much as accepting, and dismissing the panel answers nothing at all."""
+
+    grant_id: str
+    action_id: str
+    turn_id: str
+    generation: int
+    description: Description
+    description_digest: str
+    risk: str
+    attestation: str
+    privacy: str
+    expires_at_ms: int
+
+
+@dataclass(frozen=True)
+class Revoked:
+    """The command the runtime told this installation to stop, and why."""
+
+    action_id: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -164,6 +240,9 @@ class NativeEvent:
     events_skipped: int
     invitation: Optional[Invitation] = None
     status: Optional[TurnStatus] = None
+    task: Optional[Task] = None
+    confirmation: Optional[Confirmation] = None
+    revoked: Optional[Revoked] = None
 
     @property
     def ok(self) -> bool:
@@ -382,11 +461,137 @@ def _invitation(value) -> Optional[Invitation]:
     if value is None:
         return None
     record = _record(value, "invitation")
+    kind = record.get("kind", "card")
+    if kind not in INVITATION_KINDS:
+        raise InvalidEvent("unsupported invitation kind")
     invitation = Invitation(_uuid(record, "id"), _string(record, "origin"), _string(record, "privacy"),
-                            _integer(record, "expiresAtMs"))
+                            _integer(record, "expiresAtMs"), kind)
     if invitation.origin not in ORIGINS or invitation.privacy not in PRIVATE_LEVELS:
         raise InvalidEvent("invalid invitation")
     return invitation
+
+
+def _locator(value) -> dict:
+    record = _record(value, "locator")
+    scheme = _string(record, "scheme")
+    if scheme not in LOCATOR_SCHEMES:
+        raise InvalidEvent("unsupported locator scheme")
+    expected = {"https": {"scheme", "url"}, "app": {"scheme", "id"}, "file": {"scheme", "rootId", "relative"}}
+    if set(record) != expected[scheme]:
+        raise InvalidEvent("locator with unexpected fields")
+    for key in expected[scheme] - {"scheme"}:
+        if not _string(record, key):
+            raise InvalidEvent("empty locator field")
+    return dict(record)
+
+
+def _position(value) -> Optional[dict]:
+    if value is None:
+        return None
+    record = _record(value, "position")
+    kind = _string(record, "kind")
+    if kind not in POSITION_KINDS:
+        raise InvalidEvent("unsupported position kind")
+    if kind == "fragment":
+        if set(record) != {"kind", "value"} or not _string(record, "value"):
+            raise InvalidEvent("invalid fragment position")
+    else:
+        if set(record) != {"kind", kind}:
+            raise InvalidEvent("invalid position")
+        _integer(record, kind)
+    return dict(record)
+
+
+def _operation(value) -> dict:
+    """The bound command. `open` is checked in full because this platform carries
+    it out; the others are checked only far enough to be refused by name."""
+    record = _record(value, "operation")
+    kind = _string(record, "kind")
+    if kind not in OPERATION_KINDS:
+        raise InvalidEvent("unsupported operation")
+    if kind != "open":
+        return dict(record)
+    if set(record) - {"kind", "locator", "version", "position", "label"}:
+        raise InvalidEvent("open operation with unexpected fields")
+    version = record.get("version")
+    if version is not None and (not isinstance(version, str) or not HEX64.match(version)):
+        raise InvalidEvent("document version is not lowercase hex")
+    operation = {"kind": "open", "locator": _locator(record.get("locator")),
+                 "label": _text(_string(record, "label"), "action label")}
+    if version is not None:
+        operation["version"] = version
+    position = _position(record.get("position"))
+    if position is not None:
+        operation["position"] = position
+    return operation
+
+
+def _task(value) -> Optional[Task]:
+    if value is None:
+        return None
+    record = _record(value, "task")
+    channel = _string(record, "channel")
+    if channel not in ACTION_CHANNELS:
+        raise InvalidEvent("unsupported action channel")
+    privacy = _string(record, "privacy")
+    if privacy not in PRIVACY_LEVELS:
+        raise InvalidEvent("unsupported task privacy")
+    task = Task(
+        action_id=_uuid(record, "actionId"), turn_id=_uuid(record, "turnId"),
+        generation=_integer(record, "generation"), channel=channel,
+        content_digest=_string(record, "contentDigest"), idempotency_key=_string(record, "idempotencyKey"),
+        operation=_operation(record.get("operation")), expires_at_ms=_integer(record, "expiresAtMs"),
+        report_by_ms=_integer(record, "reportByMs"), privacy=privacy,
+    )
+    if not HEX64.match(task.content_digest) or not HEX64.match(task.idempotency_key):
+        raise InvalidEvent("task digests are not lowercase hex")
+    return task
+
+
+def _description(value) -> Description:
+    record = _record(value, "description")
+    if _string(record, "kind") != "device_action":
+        raise InvalidEvent("unsupported confirmation description")
+    privacy = _string(record, "class")
+    if privacy not in PRIVACY_LEVELS:
+        raise InvalidEvent("unsupported confirmation class")
+    return Description(
+        verb=_text(_string(record, "verb"), "confirmation verb"),
+        subject=_text(_string(record, "subject"), "confirmation subject"),
+        device_kind=_string(record, "deviceKind"),
+        effect=_text(_string(record, "effect"), "confirmation effect"),
+        privacy_class=privacy,
+    )
+
+
+def _confirmation(value) -> Optional[Confirmation]:
+    if value is None:
+        return None
+    record = _record(value, "confirmation")
+    risk = _string(record, "risk")
+    attestation = _string(record, "attestation")
+    privacy = _string(record, "privacy")
+    if risk not in RISKS or attestation not in ATTESTATIONS or privacy not in PRIVACY_LEVELS:
+        raise InvalidEvent("invalid confirmation")
+    confirmation = Confirmation(
+        grant_id=_uuid(record, "grantId"), action_id=_uuid(record, "actionId"), turn_id=_uuid(record, "turnId"),
+        generation=_integer(record, "generation"), description=_description(record.get("description")),
+        description_digest=_string(record, "descriptionDigest"), risk=risk, attestation=attestation,
+        privacy=privacy, expires_at_ms=_integer(record, "expiresAtMs"),
+    )
+    if not HEX64.match(confirmation.description_digest):
+        raise InvalidEvent("confirmation digest is not lowercase hex")
+    return confirmation
+
+
+def _revoked(value) -> Optional[Revoked]:
+    if value is None:
+        return None
+    record = _record(value, "revoked")
+    reason = _string(record, "reason")
+    if reason not in REVOKE_REASONS:
+        raise InvalidEvent("unsupported revoke reason")
+    return Revoked(_uuid(record, "actionId"), reason)
 
 
 def _speech(value) -> Optional[SpeechReply]:
@@ -434,4 +639,7 @@ def decode(raw: bytes) -> NativeEvent:
         events_skipped=_integer(record, "eventsSkipped", 0),
         invitation=_invitation(record.get("invitation")) if connected else None,
         status=_status(record.get("status")) if connected else None,
+        task=_task(record.get("task")) if connected else None,
+        confirmation=_confirmation(record.get("confirmation")) if connected else None,
+        revoked=_revoked(record.get("revoked")) if connected else None,
     )

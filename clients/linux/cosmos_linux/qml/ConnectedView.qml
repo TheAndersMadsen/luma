@@ -10,6 +10,7 @@ Item {
     property var s: backend.state
     property string sentText: ""
     property bool choicesShown: s.display != null && s.display.kind === "choices"
+    property bool ceremonyShown: s.ceremony != null
 
     function focusPrimary() { prompt.forceActiveFocus(); prompt.selectAll() }
 
@@ -34,9 +35,22 @@ Item {
     }
     onChoicesShownChanged: if (choicesShown && prompt.text.length === 0) panel.focusChoices()
 
+    // The ceremony is its own card, above everything, and it is answered only
+    // by a deliberate action.
+    ConfirmDialog {
+        id: ceremony
+        ceremony: s.ceremony
+        parent: Overlay.overlay
+    }
+    onCeremonyShownChanged: ceremonyShown ? ceremony.open() : ceremony.close()
+    Component.onDestruction: ceremony.close()
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 10
+
+        // What this computer is doing about a command, or what it did.
+        TaskCard { task: s.task }
 
         CosmosPanel {
             id: panel
@@ -83,7 +97,7 @@ Item {
             CosmosButton {
                 text: S.CANCEL_TASK
                 implicitHeight: 30
-                visible: s.canCancel && (s.turnOpen || s.sentText.length > 0)
+                visible: !s.canCancelTask && s.canCancel && (s.turnOpen || s.sentText.length > 0)
                 onClicked: backend.cancel()
             }
             CosmosButton {
@@ -183,6 +197,15 @@ Item {
             Label {
                 Layout.fillWidth: true
                 text: s.keyNotice
+                color: theme.secondary
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+            // What this computer is allowed to open, said once and plainly.
+            Label {
+                Layout.fillWidth: true
+                visible: s.policyNotice.length > 0
+                text: s.policyNotice
                 color: theme.secondary
                 font.pixelSize: 12
                 wrapMode: Text.Wrap

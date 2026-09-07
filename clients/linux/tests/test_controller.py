@@ -76,7 +76,7 @@ class PrepareTest(ControllerHarness):
         self.assertEqual(self.persisted, ["https://center.andersmadsen.dk"])
         self.assertFalse(self.state.busy)
         self.assertEqual(self.state.message, S.NOTICE_PREPARED)
-        self.assertEqual(self.state.features, Features(targets=True, context=True))
+        self.assertEqual(self.state.features, Features(targets=True, context=True, actions=True))
 
     def test_prepare_stays_busy_until_its_snapshot_folds(self):
         self.controller.prepare("https://center.andersmadsen.dk")

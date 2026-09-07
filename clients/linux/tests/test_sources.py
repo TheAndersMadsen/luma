@@ -1,4 +1,5 @@
 """Every module compiles, and the Qt-free modules import without Qt."""
+import json
 import os
 import py_compile
 import sys
@@ -12,7 +13,7 @@ PACKAGE = Path(__file__).resolve().parent.parent / "cosmos_linux"
 class SourcesTest(unittest.TestCase):
     def test_every_module_compiles(self):
         modules = sorted(PACKAGE.glob("*.py"))
-        self.assertGreaterEqual(len(modules), 13)
+        self.assertGreaterEqual(len(modules), 15)
         with tempfile.TemporaryDirectory() as temporary:
             for module in modules:
                 py_compile.compile(str(module), cfile=os.path.join(temporary, module.name + "c"), doraise=True)
@@ -22,7 +23,8 @@ class SourcesTest(unittest.TestCase):
         for relative in ("qml/Main.qml", "qml/SetupView.qml", "qml/ApprovalView.qml", "qml/ConnectedView.qml",
                          "qml/CosmosPanel.qml", "qml/CosmosWaveform.qml", "qml/CosmosButton.qml", "qml/Chip.qml",
                          "qml/ChoiceList.qml", "qml/DestinationPicker.qml", "qml/Disclosure.qml",
-                         "qml/PresenceLine.qml", "assets/cosmos-logo.png", "assets/nebula-bottom.png",
+                         "qml/PresenceLine.qml", "qml/TaskCard.qml", "qml/ConfirmDialog.qml",
+                         "assets/cosmos-logo.png", "assets/nebula-bottom.png",
                          "assets/panel-frame.png", "assets/design-tokens.json", "assets/KIT-LICENSE.md"):
             self.assertTrue((PACKAGE / relative).is_file(), relative)
         licence = (PACKAGE / "assets" / "KIT-LICENSE.md").read_text(encoding="utf-8")
@@ -34,9 +36,11 @@ class SourcesTest(unittest.TestCase):
         import cosmos_linux.context  # noqa: F401
         import cosmos_linux.controller as controller
         import cosmos_linux.events as events
+        import cosmos_linux.actions  # noqa: F401
         import cosmos_linux.native as native
+        import cosmos_linux.policy as policy
         import cosmos_linux.strings  # noqa: F401
-        import cosmos_linux.viewstate  # noqa: F401
+        import cosmos_linux.viewstate as viewstate
         self.assertNotIn("PySide6", sys.modules)
         self.assertEqual(app.view_for(controller.State(), False, False), "setup")
         preview = app.preview_state("connected")
@@ -58,6 +62,16 @@ class SourcesTest(unittest.TestCase):
                          'Data from <a href="https://maps.google.com/">Google Maps</a>')
         self.assertEqual(app.credit_line_html([events.CreditPart("text", "<b>&")]), "&lt;b&gt;&amp;")
         self.assertEqual(native.MAX_EVENT_BYTES, 16384)
+        # Every preview the check renders is a real state, the new cards included.
+        self.assertEqual(app.preview_state("task").task.phase, "working")
+        self.assertEqual(app.preview_state("refused").task.phase, "refused")
+        self.assertIsNotNone(app.preview_state("ceremony").confirmation)
+        self.assertTrue(app.preview_state("ceremony").ceremony_open)
+        # A preview is a state the controller would accept: its words bind.
+        self.assertTrue(controller.Controller._words_bind(app.preview_state("ceremony").confirmation))
+        self.assertFalse(viewstate.ceremony(app.preview_state("ceremony-locked").confirmation, 21).can_confirm)
+        # The example the CLI prints is a policy this client would act on.
+        self.assertTrue(policy.parse(json.loads(policy.example_document())).loaded)
 
 
 if __name__ == "__main__":

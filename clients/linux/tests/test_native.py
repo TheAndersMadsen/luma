@@ -236,6 +236,18 @@ class NativeSmokeTest(unittest.TestCase):
                 self.assertEqual(surface.send_text_to("hello", "plan9"), native.INVALID_ARGUMENT)
             else:
                 self.assertEqual(surface.send_text_to("hello", "macos"), native.UNAVAILABLE)
+            self.assertTrue(self.library.features.actions,
+                            "this library predates the device-action calls")
+            # The three calls exist and bound input is refused before anything
+            # is enqueued; there is no task or ceremony on a prepared surface.
+            self.assertEqual(surface.report(b""), native.INVALID_ARGUMENT)
+            self.assertEqual(surface.report(b'{"outcome":"nonsense"}'), native.INVALID_ARGUMENT)
+            self.assertEqual(surface.grant(True, None), native.INVALID_ARGUMENT)
+            self.assertEqual(surface.grant(True, "not_an_attestation"), native.INVALID_ARGUMENT)
+            self.assertEqual(surface.acknowledge_task(), native.OK)
+            self.assertEqual(surface.report(
+                b'{"outcome":"unknown","evidence":{"kind":"open","opened":false}}'), native.OK)
+            self.assertEqual(surface.grant(False, None), native.OK)
         finally:
             self.assertEqual(surface.destroy(), native.OK)
             self.assertEqual(surface.destroy(), native.OK)

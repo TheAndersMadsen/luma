@@ -14,7 +14,7 @@ class EventDecodingTest(unittest.TestCase):
         self.assertEqual(event.operation, "prepare")
         self.assertTrue(event.ok)
         self.assertEqual(event.descriptor.platform, "linux")
-        self.assertEqual(event.descriptor.approval, "native-shared-speech-v3")
+        self.assertEqual(event.descriptor.approval, "native-device-action-v4")
         self.assertTrue(event.needs_reconnect)
         self.assertIsNone(event.display)
 

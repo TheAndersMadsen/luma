@@ -17,10 +17,12 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import replace
 from html import escape
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import actions
 from . import context as screen_context
 from . import strings as S
 from . import viewstate
@@ -30,19 +32,22 @@ from .endpoint import (
     fingerprint_of_encoded, group_fingerprint,
 )
 from .events import (
-    APPROVAL_PROFILE, PLATFORM, ChoiceItem, CreditPart, Descriptor, DisplayCard, PlaceItem, SpeechReply, TurnStatus,
+    APPROVAL_PROFILE, PLATFORM, ChoiceItem, Confirmation, CreditPart, Descriptor, Description, DisplayCard,
+    PlaceItem, SpeechReply, TurnStatus,
 )
 from .identity import APP_ID, IdentityError, InstallationStore, default_data_dir, open_identity
 from .journal import AlreadyRunning, InstallationLease, JournalStore
 from .native import Features, Surface, load_library
+from .policy import example_document as example_policy, load as load_policy, policy_path
 from .qr import approval_qr_data_url
-from .viewstate import Line
+from .viewstate import TASK_REFUSED, TASK_WORKING, Line, TaskView
 
 APP_NAME = S.APP_NAME
 PACKAGE_DIR = Path(__file__).resolve().parent
 POLL_INTERVAL_MS = 200
 SCREENSHOT_DELAY_MS = 900
-VIEWS = ("setup", "approval", "connected", "empty", "working", "choices", "reconnecting")
+VIEWS = ("setup", "approval", "connected", "empty", "working", "choices", "reconnecting", "task", "refused",
+         "ceremony", "ceremony-locked")
 CENTER_DEVICES_PATH = "/settings/account/surfaces"
 # The kit's graphite palette; the light variant keeps the same roles for a light desktop.
 LIGHT_COLORS = {
@@ -212,6 +217,42 @@ def preview_state(kind: str) -> State:
         return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
                      session_seen=True, features=features, sent_text="Find cafés near me", sending=True,
                      context=screen_context.ScreenContext(app="Chrome", text="Copenhagen coffee guide"))
+    if kind in ("task", "refused"):
+        # A command Cosmos asked this computer to carry out: what is happening,
+        # how long it has been happening, and afterwards only what was seen.
+        task = (TaskView("2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d", "state.rs", TASK_WORKING, elapsed=14)
+                if kind == "task"
+                else TaskView("2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d", "state.rs", TASK_REFUSED,
+                              reason="unresolvable"))
+        status = TurnStatus(turn_id="1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", generation=4,
+                            state="acting" if kind == "task" else "refused", surface_platform=PLATFORM,
+                            privacy="private")
+        return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
+                     session_seen=True, features=replace(features, actions=True), task=task, status=status,
+                     status_line=viewstate.status_line(status, Line()),
+                     sent_text="Continue on my PC", message=S.NOTICE_TASK, policy_loaded=True)
+    if kind in ("ceremony", "ceremony-locked"):
+        # The ceremony: the owner's own words for the effect, two equal choices,
+        # a visible countdown. Enter confirms, Escape answers nothing.
+        description = Description(verb="open", subject="state.rs", device_kind="linux",
+                                  effect="opens that document on this computer", privacy_class="private")
+        confirmation = Confirmation(
+            grant_id="e5aa1b2c-3d4e-4f5a-8b6c-7d8e9f0a1b2c", action_id="2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d",
+            turn_id="1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", generation=4, description=description,
+            # The preview binds its own words, exactly as a real request must.
+            description_digest=actions.confirmation_digest({
+                "verb": description.verb, "subject": description.subject,
+                "deviceKind": description.device_kind, "effect": description.effect,
+                "class": description.privacy_class}),
+            risk="moderate", privacy="private", expires_at_ms=30_000,
+            # A request needing evidence this desktop cannot produce: confirming
+            # is not offered at all, and declining still is.
+            attestation="foreground_tap" if kind == "ceremony" else "device_owner_auth",
+        )
+        return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
+                     session_seen=True, features=replace(features, actions=True), confirmation=confirmation,
+                     ceremony_seconds=21, sent_text="Continue on my PC", message=S.NOTICE_CONFIRM,
+                     policy_loaded=True)
     if kind == "choices":
         choices = DisplayCard(
             action_id="0d3b5f2e-8a4c-4f1a-9b6d-2e7c8a9f0b1c", turn_id="1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
@@ -319,12 +360,17 @@ def make_backend_class():
                 waveform = "thinking"
             elif state.phase == Phase.BLOCKED or presence.title == S.CANNOT_CONFIRM:
                 waveform = "error"
+            elif presence.title == S.NOT_DONE:
+                waveform = "error"
             elif presence.title in (S.WAITING_FOR_YOU, S.WAITING_FOR_DEVICE):
                 waveform = "listening"
             else:
                 waveform = "idle"
             destination = viewstate.destination_for(state.target)
             context = state.context
+            card = viewstate.task_card(state.task)
+            ceremony = viewstate.ceremony(state.confirmation if state.ceremony_open else None,
+                                          state.ceremony_seconds)
             return {
                 "view": view_for(state, has_surface, self._editing_server),
                 "phase": state.phase.value,
@@ -371,12 +417,31 @@ def make_backend_class():
                 "hasPending": state.has_pending or state.pending_open,
                 "unknownOutcome": state.has_unknown_outcome,
                 "display": self._display(state.display),
+                "task": ({"title": card.title, "detail": card.detail, "remedy": card.remedy,
+                          "elapsed": card.elapsed, "cancellable": card.cancellable, "tone": card.tone}
+                         if card is not None else None),
+                "ceremony": ({"question": ceremony.question, "effect": ceremony.effect, "note": ceremony.note,
+                              "countdown": ceremony.countdown, "seconds": ceremony.seconds,
+                              "canConfirm": ceremony.can_confirm, "cannotReason": ceremony.cannot_reason}
+                             if ceremony is not None else None),
+                "canCancelTask": state.can_cancel_task,
+                "policyReady": state.policy_loaded and state.policy_error is None,
+                "policyNotice": self._policy_notice(state),
                 "speech": ({"actionId": state.speech.action_id, "text": state.speech.text}
                            if state.speech is not None else None),
                 "invitation": state.invitation is not None,
                 "reducedMotion": self._reduced_motion,
                 "preview": self._preview is not None,
             }
+
+        @staticmethod
+        def _policy_notice(state: State) -> str:
+            """What this computer is allowed to open, said once, plainly."""
+            if state.policy_error is not None:
+                return S.POLICY_INVALID + " " + S.POLICY_INVALID_REMEDY
+            if not state.policy_loaded:
+                return S.POLICY_MISSING + " " + S.POLICY_MISSING_REMEDY
+            return ""
 
         @staticmethod
         def _display(card: Optional[DisplayCard]) -> Optional[dict]:
@@ -493,6 +558,40 @@ def make_backend_class():
             return open_in_browser(self._snapshot.get("centerDevicesUrl", ""))
 
         @Slot(result=bool)
+        def cancelTask(self) -> bool:
+            """Stop the work this computer is doing. Closing the window is not this."""
+            live = self._live()
+            return bool(live is not None and live.cancel_task())
+
+        @Slot(result=bool)
+        def confirmTask(self) -> bool:
+            live = self._live()
+            return bool(live is not None and live.confirm())
+
+        @Slot(result=bool)
+        def declineTask(self) -> bool:
+            live = self._live()
+            return bool(live is not None and live.decline())
+
+        @Slot(str, result=bool)
+        def ceremonyKey(self, name: str) -> bool:
+            """One key, one rule: Enter confirms, Escape dismisses without
+            answering, everything else does nothing at all."""
+            ceremony = viewstate.ceremony(self._current().confirmation, 0)
+            decision = viewstate.ceremony_key(name, ceremony is not None and ceremony.can_confirm)
+            if decision == viewstate.CONFIRM:
+                return self.confirmTask()
+            if decision == viewstate.DISMISS:
+                return self.dismissCeremony()
+            return False
+
+        @Slot(result=bool)
+        def dismissCeremony(self) -> bool:
+            """Escape hides the ceremony and answers nothing at all."""
+            live = self._live()
+            return bool(live is not None and live.dismiss_ceremony())
+
+        @Slot(result=bool)
         def cancel(self) -> bool:
             controller = self._live()
             return controller.cancel() if controller is not None else False
@@ -576,6 +675,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--screenshot-delay", type=int, default=SCREENSHOT_DELAY_MS,
                         help="milliseconds to wait before the screenshot")
     parser.add_argument("--no-auto-prepare", action="store_true", help="wait on the setup view even with a stored installation")
+    parser.add_argument("--example-policy", action="store_true",
+                        help="print an example device-actions.json and exit")
     parser.add_argument("--verbose", action="store_true", help="debug logging on stderr")
     return parser.parse_args(argv)
 
@@ -584,6 +685,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
     logging.basicConfig(level=logging.DEBUG if arguments.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
+    if arguments.example_policy:
+        # What this computer may be asked to open is the owner's own file. It is
+        # missing by default, and a missing file means "open nothing".
+        data_dir = arguments.data_dir or default_data_dir()
+        print(f"# {policy_path(data_dir)}")
+        print(example_policy())
+        return 0
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     try:
         from PySide6.QtCore import QTimer, QUrl
@@ -646,13 +754,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         except InvalidServer:
             initial = DEFAULT_SERVER_ORIGIN
         player_holder: dict = {}
+        # What this computer may be asked to open, read from the owner's own
+        # file. A missing file allows nothing.
+        device_policy = load_policy(policy_path(data_dir))
         controller = Controller(
             surface_factory=lambda config, platform: Surface(library, config, platform),
             identity=identity, journal=journal, scheduler=QtScheduler(), player=_player(player_holder),
             boot_epoch=epoch, server_origin=initial,
             persist_server=lambda origin: store.set("serverOrigin", origin),
+            policy=device_policy,
         )
         log.info("installation %s (%s)", identity.enrollment_id, identity.storage)
+        if device_policy.error is not None:
+            log.warning("device actions are disabled: %s", device_policy.error)
+        elif not device_policy.loaded:
+            log.info("no device-action policy at %s; this computer will open nothing",
+                     policy_path(data_dir))
 
     Backend = make_backend_class()
     backend = Backend(controller, key_notice, reduced_motion, preview=preview,
