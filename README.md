@@ -182,18 +182,19 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.15` and deployed at
+The current server preview is published as `v0.2.0-ambiance.18` and deployed at
 `https://center.andersmadsen.dk/`, reporting release
-`61c76b4bc889a787150d098a181f387205dd6dd2` and environment `production`. That
+`bf2f1cd69d849bba3c7222018de664e635358d53` and environment `production`. That
 release was built on the workstation after GitHub Actions minutes ran out: the
 Cosmos and Center images were built and pushed locally, the other three images
 were reused from `v0.2.0-ambiance.10`, and its GitHub release carries no
-sigstore bundle. It carries private replies routed to the owner's personal
-device, the Devices page, live native presence, the LiveKit node address, the
-provider proposal normalizer (lookups win over unsourced answers), the shared
-client's automatic heartbeat retry, privacy-class guidance in the cognition
-prompt (a remembered public place keeps its class) and explained
-class-denied lookups.
+sigstore bundle. It carries the request's own destination, the origin's
+outcome-gated status, screen context behind an owner permission, numbered
+choice lists, the owner's ledger read behind the Activity page, and device
+actions: the per-platform approval profiles, the two owner permissions, the
+confirmation ceremony and reports believed only from the device that acted.
+The three releases before it (`.16` reporting `e26f5f9`, `.17` reporting
+`ff978c6`) each passed the same production verification.
 The signed operator, public discovery, OIDC and configured Pin certificate chain
 passed production verification. The upgrade preserved the configured profiles,
 connections and nonblank credentials. Web lookup's exact-commit CI and built
