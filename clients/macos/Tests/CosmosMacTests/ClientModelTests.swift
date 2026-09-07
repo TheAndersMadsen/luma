@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @testable import CosmosMac
 
-private func fixtureDescriptor() throws -> PublicDescriptor {
+func fixtureDescriptor() throws -> PublicDescriptor {
     // SEC1 P-256 generator: public material, validated by the real descriptor.
     let hex = "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
     let bytes = stride(from: 0, to: hex.count, by: 2).map { offset in
@@ -16,7 +16,7 @@ private func fixtureDescriptor() throws -> PublicDescriptor {
     )
 }
 
-private func fixtureAdmission(duplicate: Bool = false) throws -> TextAdmission {
+func fixtureAdmission(duplicate: Bool = false) throws -> TextAdmission {
     try TextAdmission(turnID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
                       generation: 1, duplicate: duplicate)
 }
@@ -42,13 +42,15 @@ private final class ResultGate<Value> {
 }
 
 @MainActor
-private final class MockClientBridge: ClientBridge {
+final class MockClientBridge: ClientBridge {
     var snapshot: ClientSnapshot
     var onChange: ((ClientSnapshot) -> Void)?
+    var capabilities = ClientCapabilities(targets: true, context: true)
     let descriptor: PublicDescriptor
     var prepareServers: [ServerEndpoint] = []
     var connectCalls = 0
-    var sentTexts: [String] = []
+    var sentRequests: [TextRequest] = []
+    var sentTexts: [String] { sentRequests.map(\.text) }
     var retryCalls = 0
     var cancelledAdmissions: [TextAdmission] = []
     var visibilityReports: [Bool] = []
@@ -82,9 +84,9 @@ private final class MockClientBridge: ClientBridge {
         if let connectHandler { try await connectHandler(); return }
         publish(ClientSnapshot(phase: .connected))
     }
-    func send(text: String) async throws -> TextAdmission {
-        sentTexts.append(text)
-        if let sendHandler { return try await sendHandler(text) }
+    func send(_ request: TextRequest) async throws -> TextAdmission {
+        sentRequests.append(request)
+        if let sendHandler { return try await sendHandler(request.text) }
         let admission = try fixtureAdmission()
         publish(ClientSnapshot(phase: .connected, admission: admission))
         return admission
@@ -383,7 +385,8 @@ final class ClientModelTests: XCTestCase {
         XCTAssertEqual(client.sentTexts, ["  Public request with its exact whitespace\n"])
         XCTAssertEqual(model.draft, "")
         XCTAssertEqual(model.snapshot.admission, try fixtureAdmission())
-        XCTAssertEqual(model.message, "Request admitted by Cosmos. The response appears on the approved display it selects.")
+        XCTAssertEqual(model.message, "", "a plain request needs no notice; the Now line already said it")
+        XCTAssertNil(model.notice)
         model.cancel()
         await finished(model)
         XCTAssertEqual(client.cancelledAdmissions, [try fixtureAdmission()])
@@ -636,5 +639,111 @@ final class ClientModelTests: XCTestCase {
         model.setVisible(false)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(client.visibilityReports, [true, true, false])
+    }
+
+    // MARK: Acknowledging the owner before the wire does
+
+    /// The typed line becomes the Now line the instant it is sent, the send control
+    /// says it is in flight, and a second click cannot start a second request.
+    @MainActor
+    func testSendingShowsTheNowLineImmediatelyAndOnlyOnce() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        XCTAssertNil(model.nowLine)
+        XCTAssertFalse(model.sending)
+
+        let gate = ResultGate<TextAdmission>()
+        client.sendHandler = { _ in await gate.wait() }
+        model.draft = "  Find caf\u{e9}s near me  "
+        model.send()
+        // Nothing has been awaited yet: the acknowledgement is already on screen.
+        XCTAssertEqual(model.nowLine, "Find caf\u{e9}s near me")
+        XCTAssertTrue(model.sending)
+        XCTAssertFalse(model.canSend, "a second click cannot start a second request")
+        XCTAssertEqual(client.sentRequests.count, 0, "the Now line is up before the wire is touched")
+        model.send()
+        gate.resolve(try fixtureAdmission())
+        await finished(model)
+        XCTAssertEqual(client.sentRequests.count, 1, "the second click sent nothing")
+        XCTAssertFalse(model.sending)
+        XCTAssertEqual(model.draft, "")
+        XCTAssertEqual(model.nowLine, "Find caf\u{e9}s near me", "the question stays until a reply arrives")
+
+        // A reply delivered on this Mac replaces the question.
+        let card = try DisplayCard(actionID: UUID(), turnID: UUID(), generation: 1,
+                                   contentDigest: String(repeating: "a", count: 64),
+                                   expiresAtMs: 1, content: .text("Two nearby."))
+        client.publish(ClientSnapshot(phase: .connected, display: card))
+        XCTAssertNil(model.nowLine)
+    }
+
+    /// Picking an option sends that option's own title, exactly as the TV does. The
+    /// numbering belongs to the runtime; the client never invents an answer.
+    @MainActor
+    func testPickingAChoiceSendsItsTitleAsTheNextRequest() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        XCTAssertFalse(model.awaitingChoice)
+        XCTAssertFalse(model.choose(0), "there is nothing to pick")
+
+        let items = [ChoiceItem(id: "a", title: "Arrival", detail: "2016"),
+                     ChoiceItem(id: "b", title: "Dune", detail: "2021")]
+        let card = try DisplayCard(actionID: UUID(), turnID: UUID(), generation: 1,
+                                   contentDigest: String(repeating: "b", count: 64),
+                                   expiresAtMs: 1, content: .choices(title: "Tonight", items: items))
+        client.publish(ClientSnapshot(phase: .connected, display: card))
+        XCTAssertTrue(model.awaitingChoice)
+        XCTAssertEqual(model.presence, .waiting, "an unanswered question is what the menu bar shows")
+        XCTAssertFalse(model.choose(2), "an option Cosmos did not offer is never sent")
+        XCTAssertFalse(model.choose(-1))
+        XCTAssertTrue(model.choose(1))
+        XCTAssertEqual(model.nowLine, "Dune")
+        await finished(model)
+        XCTAssertEqual(client.sentRequests, [TextRequest(text: "Dune")])
+        XCTAssertEqual(client.sentRequests.first?.target, nil, "a pick carries no destination")
+        XCTAssertEqual(client.sentRequests.first?.context, nil, "a pick carries no attached text")
+    }
+
+    /// "Connected" appears for a moment and then fades; a settled connection is quiet.
+    @MainActor
+    func testConnectedConfirmationAppearsThenFades() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        XCTAssertEqual(model.connectionNote, "Disconnected")
+        model.connect()
+        await finished(model)
+        XCTAssertTrue(model.justConnected)
+        XCTAssertEqual(model.connectionNote, "Connected")
+        XCTAssertEqual(model.presence, .quiet, "a settled connection says nothing from the menu bar")
+        model.disconnect()
+        await finished(model)
+        XCTAssertFalse(model.justConnected)
+        XCTAssertNil(model.nowLine)
+    }
+
+    /// The glyph follows the turn: work in progress, then quiet again.
+    @MainActor
+    func testPresenceFollowsTheTurnWithoutThePanel() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        XCTAssertEqual(model.presence, .quiet)
+        client.publish(ClientSnapshot(phase: .connected, status: try TurnStatus(
+            turnID: UUID(), generation: 1, state: .working, surfacePlatform: nil, privacy: "shared_room")))
+        XCTAssertEqual(model.presence, .working)
+        client.publish(ClientSnapshot(phase: .connected, status: try TurnStatus(
+            turnID: UUID(), generation: 1, state: .waiting, surfacePlatform: "macos", privacy: "shared_room")))
+        XCTAssertEqual(model.presence, .waiting)
+        client.publish(ClientSnapshot(phase: .connected, status: try TurnStatus(
+            turnID: UUID(), generation: 1, state: .waiting, surfacePlatform: "android", privacy: "shared_room")))
+        XCTAssertEqual(model.presence, .quiet, "a device Cosmos is waiting for is not the owner's cue")
+        client.publish(ClientSnapshot(phase: .connected, status: try TurnStatus(
+            turnID: UUID(), generation: 1, state: .shown, surfacePlatform: "macos", privacy: "shared_room")))
+        XCTAssertEqual(model.presence, .quiet)
     }
 }

@@ -7,6 +7,7 @@ final class RustSurfaceBridge: ClientBridge {
         didSet { onChange?(snapshot) }
     }
     var onChange: ((ClientSnapshot) -> Void)?
+    let capabilities = OptionalSymbols.capabilities
 
     private let worker = NativeWorker()
     private let epoch: UUID
@@ -71,13 +72,16 @@ final class RustSurfaceBridge: ClientBridge {
         _ = try await perform(.connect)
     }
 
-    func send(text: String) async throws -> TextAdmission {
+    func send(_ request: TextRequest) async throws -> TextAdmission {
         guard snapshot.phase == .connected, !snapshot.needsReconnect else {
             throw ClientFailure.connectionUnavailable
         }
         guard !snapshot.hasPending, !snapshot.pendingOpen else { throw ClientFailure.uncertainRequest }
-        guard ClientModel.validText(text) else { throw ClientFailure.invalidText }
-        let event = try await perform(.sendText, text: text)
+        guard ClientModel.validText(request.text) else { throw ClientFailure.invalidText }
+        guard request.target == nil || capabilities.targets, request.context == nil || capabilities.context else {
+            throw ClientFailure.featureUnavailable
+        }
+        let event = try await perform(.sendText, request: request)
         guard let admission = try event.admission?.verified() else {
             record(ClientFailure.invalidResponse)
             throw ClientFailure.invalidResponse
@@ -181,17 +185,17 @@ final class RustSurfaceBridge: ClientBridge {
         onChange = nil
     }
 
-    private func perform(_ command: NativeCommand, text: String? = nil, visible: Bool? = nil,
+    private func perform(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil,
                          allowDisconnect: Bool = false) async throws -> NativeEvent {
         guard !busy, !closing, !disconnecting || allowDisconnect else { throw ClientFailure.busy }
         busy = true
-        expectedOperation = command.rawValue
+        expectedOperation = command.operation(for: request)
         completion = nil
         if command == .connect { snapshot.phase = .connecting }
         snapshot.failure = nil
         defer { finishOperation() }
         do {
-            try await worker.enqueue(command, text: text, visible: visible)
+            try await worker.enqueue(command, request: request, visible: visible)
             return try await awaitOutcome()
         } catch {
             record(error)
@@ -262,9 +266,10 @@ final class RustSurfaceBridge: ClientBridge {
             canRetry: storageBlocked || ((event.pending?.canRetry ?? false) && !event.needsReconnect),
             hasUnknownOutcome: event.lastUnknown != nil,
             visible: event.visible,
-            display: event.connected ? try event.display?.verified() : nil,
+            display: event.connected ? event.display : nil,
             speech: event.connected ? try event.speech?.verified() : nil,
-            waiting: event.connected ? try event.invitation?.verified() : nil
+            waiting: event.connected ? try event.invitation?.verified() : nil,
+            status: event.connected ? event.status : nil
         )
         if event.operation == expectedOperation { completion = event }
     }

@@ -81,9 +81,25 @@ public struct PlaceItem: Equatable, Sendable {
     }
 }
 
+/// One option in a choices card. Cosmos numbers them in order; the id is what the
+/// owner's answer refers back to.
+public struct ChoiceItem: Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let detail: String
+
+    public init(id: String, title: String, detail: String) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+    }
+}
+
 public enum DisplayContent: Equatable, Sendable {
     case text(String)
     case places(query: String, items: [PlaceItem], credits: [[CreditPart]])
+    /// A titled list of two to eight options, shown numbered in Cosmos's order.
+    case choices(title: String, items: [ChoiceItem])
 }
 
 /// The exact card Cosmos delivered. The native client already verified its digest and
@@ -150,6 +166,69 @@ public struct SpeechReply: Equatable, Sendable {
     }
 }
 
+public enum TurnState: String, CaseIterable, Sendable {
+    case working, waiting, shown, spoken, nowhere, unknown
+}
+
+/// Cosmos's own account of where the latest request stands. The panel repeats it
+/// with fixed wording and never infers an outcome the runtime has not reported.
+public struct TurnStatus: Equatable, Sendable {
+    public static let platforms = ["pin", "browser", "macos", "linux", "android", "android_tv"]
+
+    public let turnID: UUID
+    public let generation: UInt64
+    public let state: TurnState
+    /// The kind of surface the state concerns, when Cosmos named one.
+    public let surfacePlatform: String?
+    public let privacy: String
+
+    public init(turnID: UUID, generation: UInt64, state: TurnState, surfacePlatform: String?, privacy: String) throws {
+        guard turnID != DisplayCard.nilUUID, generation > 0, generation <= 9_007_199_254_740_991,
+              ["public", "shared_room", "near_user", "private"].contains(privacy),
+              surfacePlatform.map({ !$0.isEmpty && $0.utf8.count <= 32
+                  && $0.allSatisfy { ($0.isLowercase && $0.isLetter) || $0 == "_" } }) ?? true else {
+            throw ClientFailure.invalidResponse
+        }
+        self.turnID = turnID
+        self.generation = generation
+        self.state = state
+        self.surfacePlatform = surfacePlatform
+        self.privacy = privacy
+    }
+}
+
+/// One explicit request: public text, the context the owner attached on purpose and
+/// the kind of device to continue on. Cosmos decides where the reply actually goes.
+public struct TextRequest: Equatable, Sendable {
+    public static let targets = ["browser", "macos", "linux", "android", "android_tv"]
+
+    public let text: String
+    public let context: ContextChip?
+    public let target: String?
+
+    public init(text: String, context: ContextChip? = nil, target: String? = nil) {
+        self.text = text
+        self.context = context
+        self.target = target
+    }
+}
+
+/// Which of the newer shared-library calls this build can make. A missing call is
+/// reported as unavailable; it is never approximated with the plain text call.
+public struct ClientCapabilities: Equatable, Sendable {
+    /// cosmos_surface_send_text_to: a request with a destination kind.
+    public let targets: Bool
+    /// cosmos_surface_send_text_with_context: a request with attached local text.
+    public let context: Bool
+
+    public init(targets: Bool = false, context: Bool = false) {
+        self.targets = targets
+        self.context = context
+    }
+
+    public static let none = ClientCapabilities()
+}
+
 /// A private card is waiting for this installation. Cosmos delivers it through the
 /// normal card path once the app reports its unlocked foreground visible.
 public struct WaitingReply: Equatable, Sendable {
@@ -183,13 +262,15 @@ public struct ClientSnapshot: Equatable, Sendable {
     public var speech: SpeechReply?
     /// A private card waiting for this installation's unlocked foreground; it carries no content.
     public var waiting: WaitingReply?
+    /// Cosmos's latest report on the current turn, if it sent one.
+    public var status: TurnStatus?
 
     public init(phase: ClientPhase = .disconnected, hasPending: Bool = false,
                 admission: TextAdmission? = nil, failure: ClientFailure? = nil,
                 pendingOpen: Bool = false, needsReconnect: Bool = false,
                 canRetry: Bool = false, hasUnknownOutcome: Bool = false,
                 visible: Bool = false, display: DisplayCard? = nil, speech: SpeechReply? = nil,
-                waiting: WaitingReply? = nil) {
+                waiting: WaitingReply? = nil, status: TurnStatus? = nil) {
         self.phase = phase
         self.hasPending = hasPending
         self.pendingOpen = pendingOpen
@@ -202,6 +283,7 @@ public struct ClientSnapshot: Equatable, Sendable {
         self.display = display
         self.speech = speech
         self.waiting = waiting
+        self.status = status
     }
 }
 
@@ -209,6 +291,7 @@ public struct ClientSnapshot: Equatable, Sendable {
 public enum ClientFailure: Error, Equatable, Sendable {
     case invalidServer, invalidText, invalidResponse, identityUnavailable, storageUnavailable
     case storageBlocked, approvalRequired, connectionUnavailable, uncertainRequest, busy
+    case featureUnavailable
 
     public var message: String {
         switch self {
@@ -222,6 +305,47 @@ public enum ClientFailure: Error, Equatable, Sendable {
         case .connectionUnavailable: "The Cosmos connection could not be confirmed."
         case .uncertainRequest: "The request outcome is unknown. Retry the exact pending request before sending another."
         case .busy: "Wait for the current operation to finish."
+        case .featureUnavailable: "That option is not available in this build of Cosmos. The request was not sent."
+        }
+    }
+
+    /// The same fact as two short sentences: what happened, and what to do about it.
+    /// Anything technical — a Keychain rule, a path — stays in `detail`, which the
+    /// panel shows only behind the Details disclosure.
+    public var notice: Notice {
+        switch self {
+        case .invalidServer:
+            Notice(happened: "That is not a Center address.",
+                   next: "Enter an https:// address with nothing after the host.", isFailure: true)
+        case .invalidText:
+            Notice(happened: "That request is too long to send.",
+                   next: "Keep it under 4,000 characters.", isFailure: true)
+        case .invalidResponse:
+            Notice(happened: "Cosmos sent something this Mac could not verify.",
+                   next: "Update Cosmos and try again.", isFailure: true)
+        case .identityUnavailable:
+            Notice(happened: "This Mac's key could not be opened.",
+                   next: "Reset the installation and set this Mac up again.",
+                   detail: message, isFailure: true)
+        case .storageUnavailable:
+            Notice(happened: "Protected storage is unavailable.",
+                   next: "Unlock your Keychain, then try again.", isFailure: true)
+        case .storageBlocked:
+            Notice(happened: "The last request could not be saved.",
+                   next: "Retry it before sending anything else.", isFailure: true)
+        case .approvalRequired:
+            Notice(happened: "This Mac is not approved yet.",
+                   next: "Approve it in Center to connect.", isFailure: true)
+        case .connectionUnavailable:
+            Notice(happened: "Cosmos could not be reached.", next: Words.reconnecting, isFailure: true)
+        case .uncertainRequest:
+            Notice(happened: "The last request may or may not have gone through.",
+                   next: "Retry it before sending anything else.")
+        case .busy:
+            Notice(happened: "Cosmos is still finishing the last action.",
+                   next: "Wait a moment, then try again.")
+        case .featureUnavailable:
+            Notice(happened: "This needs a newer Cosmos.", next: "Update Cosmos and try again.", isFailure: true)
         }
     }
 }
@@ -230,9 +354,11 @@ public enum ClientFailure: Error, Equatable, Sendable {
 public protocol ClientBridge: AnyObject {
     var snapshot: ClientSnapshot { get }
     var onChange: ((ClientSnapshot) -> Void)? { get set }
+    /// Fixed for the life of the process: which newer library calls exist.
+    var capabilities: ClientCapabilities { get }
     func prepare(server: ServerEndpoint) async throws -> PublicDescriptor
     func connect() async throws
-    func send(text: String) async throws -> TextAdmission
+    func send(_ request: TextRequest) async throws -> TextAdmission
     func retryPending() async throws
     func cancel(admission: TextAdmission) async throws
     /// Report this app's own foreground visibility; retained across reconnects.

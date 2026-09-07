@@ -6,8 +6,18 @@ import Foundation
 public final class ClientModel: ObservableObject {
     @Published public var serverInput: String
     @Published public var draft = ""
+    /// Where the next request asks to continue. Sent as a plain kind of device;
+    /// Cosmos decides whether any such display gets the reply. Resets after a send.
+    @Published public var destination: Destination = .thisMac
+    /// Text the owner attached to the next request through an explicit action.
+    @Published public private(set) var context: ContextChip?
     @Published public private(set) var snapshot: ClientSnapshot {
-        didSet { syncPlayback(); scheduleReconnect() }
+        didSet {
+            // A reply that arrived on this Mac says more than the question does.
+            if snapshot.display != nil || snapshot.speech != nil { nowLine = nil }
+            syncPlayback()
+            scheduleReconnect()
+        }
     }
     /// True only while the current reply's exact audio is playing.
     @Published public private(set) var speaking = false
@@ -23,8 +33,19 @@ public final class ClientModel: ObservableObject {
     /// Whether the panel itself is on screen; the waveform only moves while it is.
     @Published public private(set) var panelVisible = false
     @Published private var disconnectInFlight = false
+    /// The request the owner just sent, shown as the Now line the moment they send it
+    /// and cleared once a reply lands on this Mac. It is what they typed, verbatim.
+    @Published public private(set) var nowLine: String?
+    /// True for a moment after a connection is confirmed, so "Connected" can appear
+    /// and then fade instead of standing there forever.
+    @Published public private(set) var justConnected = false
+    /// True when the last capture failed only because Accessibility is off, so the
+    /// panel can offer the one button that fixes it.
+    @Published public private(set) var accessibilityBlocked = false
+    private var connectedNote: Task<Void, Never>?
 
     private let client: any ClientBridge
+    private let contextProvider: any ContextProvider
     private var operation: Task<Void, Never>?
     private var operationGeneration: UInt64 = 0
     private var pendingDraft: String?
@@ -44,8 +65,10 @@ public final class ClientModel: ObservableObject {
     private let reconnectDelays: [Duration]
 
     public init(client: any ClientBridge, initialServerOrigin: String,
+                contextProvider: (any ContextProvider)? = nil,
                 reconnectDelays: [Duration] = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12), .seconds(30)]) {
         self.client = client
+        self.contextProvider = contextProvider ?? SystemContextProvider()
         self.reconnectDelays = reconnectDelays
         serverInput = initialServerOrigin
         snapshot = client.snapshot
@@ -63,10 +86,16 @@ public final class ClientModel: ObservableObject {
             && (snapshot.needsReconnect || snapshot.pendingOpen
                 || (!snapshot.hasPending && [.prepared, .disconnected].contains(snapshot.phase)))
     }
-    public var canSend: Bool {
+    /// Everything a request needs except its text: one connected room, nothing in
+    /// flight and no unresolved operation.
+    public var canSubmit: Bool {
         !busy && !snapshot.hasPending && !snapshot.pendingOpen && !snapshot.needsReconnect
-            && snapshot.phase == .connected && Self.validText(draft)
+            && snapshot.phase == .connected
     }
+    public var canSend: Bool { canSubmit && Self.validText(draft) }
+    /// A request is on the wire right now: the send control says so, and nothing
+    /// the owner can press starts a second one.
+    public var sending: Bool { busy && pendingDraft != nil }
     public var canCancel: Bool {
         !busy && !snapshot.hasPending && !snapshot.pendingOpen && !snapshot.needsReconnect
             && snapshot.phase == .connected && snapshot.admission != nil
@@ -87,14 +116,49 @@ public final class ClientModel: ObservableObject {
             && (snapshot.needsReconnect || snapshot.pendingOpen)
     }
     public var stage: PanelStage {
-        PanelState.stage(hasDescriptor: descriptor != nil, phase: snapshot.phase, rejoining: rejoining)
+        PanelState.stage(hasDescriptor: descriptor != nil, phase: snapshot.phase, rejoining: rejoining,
+                         retained: snapshot.needsReconnect || snapshot.pendingOpen)
     }
     public var connectionStatus: ConnectionStatus {
         if disconnectInFlight { return .disconnecting }
         return PanelState.status(phase: snapshot.phase, rejoining: rejoining)
     }
     public var waveformPhase: CosmosPhase {
-        PanelState.waveform(speaking: speaking, busy: busy, rejoining: rejoining, failed: snapshot.failure != nil)
+        // A request that has left but has no status yet is still work in progress.
+        let working = snapshot.status?.state == .working || (nowLine != nil && snapshot.status == nil)
+        return PanelState.waveform(speaking: speaking, busy: busy, rejoining: rejoining,
+                                   failed: snapshot.failure != nil, working: working)
+    }
+    /// Cosmos's report on the current turn in the panel's fixed words, while one is current.
+    public var statusLine: StatusLine? { snapshot.status.map(PanelState.statusLine) }
+    /// Which newer library calls this build can make; fixed for the process.
+    public var capabilities: ClientCapabilities { client.capabilities }
+    /// The quiet line under the header: "Reconnecting…", a fading "Connected", or nothing.
+    public var connectionNote: String? {
+        PanelState.connectionNote(connectionStatus, justConnected: justConnected)
+    }
+    /// How many options the current choice list offers, or nil when there is none.
+    public var choiceCount: Int? {
+        if case .choices(_, let items)? = snapshot.display?.content { return items.count }
+        return nil
+    }
+    /// A choice list on this Mac that the owner has not answered yet.
+    public var awaitingChoice: Bool { choiceCount != nil }
+    /// What the menu-bar glyph shows without the panel being open.
+    public var presence: MenuPresence {
+        let waitingHere = awaitingChoice
+            || (snapshot.status?.state == .waiting && snapshot.status?.surfacePlatform == "macos")
+        return PanelState.presence(phase: waveformPhase, waitingHere: waitingHere)
+    }
+    /// Whether Cosmos may read a selection at all on this Mac.
+    public var canReadSelection: Bool { capabilities.context && contextProvider.canReadSelection }
+    /// The panel's own notice for the current message: what happened, what to do.
+    public var notice: Notice? {
+        if accessibilityBlocked {
+            return Notice(happened: Words.accessibilityOff, next: Words.accessibilityAction,
+                          detail: Self.accessibilityDetail)
+        }
+        return PanelState.notice(message)
     }
 
     public var statusText: String {
@@ -157,6 +221,20 @@ public final class ClientModel: ObservableObject {
             guard !Task.isCancelled else { return }
             if wantedVisible { try? await client.setVisible(true) }
             message = Self.connectedMessage
+            noteConnected()
+        }
+    }
+
+    /// "Connected" stands for a moment and then fades; a settled connection says
+    /// nothing at all, which is what quiet presence means.
+    private func noteConnected() {
+        justConnected = true
+        connectedNote?.cancel()
+        connectedNote = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard let self, !Task.isCancelled else { return }
+            justConnected = false
+            connectedNote = nil
         }
     }
 
@@ -187,21 +265,118 @@ public final class ClientModel: ObservableObject {
                 self.reconnectAttempt = 0
                 if self.wantedVisible { try? await self.client.setVisible(true) }
                 self.message = Self.connectedMessage
+                self.noteConnected()
             }
         }
     }
 
     public func send() {
         guard canSend else { return }
-        let text = draft
-        pendingDraft = text
+        // A destination or attached text is never dropped silently: without the
+        // library call that carries it, the request is not sent at all.
+        if destination.target != nil, !capabilities.targets { message = Self.targetsUnavailableMessage; return }
+        if context != nil, !capabilities.context { message = Self.contextUnavailableMessage; return }
+        let request = TextRequest(text: draft, context: context, target: destination.target)
+        let requested = destination
+        pendingDraft = request.text
         admissionBeforeSend = snapshot.admission?.turnID
+        // Acknowledge the click before the wire does: the typed line is the Now line
+        // from this instant, and the send control says it is in flight.
+        nowLine = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
         run { [self] in
-            _ = try await client.send(text: text)
+            _ = try await client.send(request)
             guard !Task.isCancelled else { return }
-            if draft == text { draft = "" }
+            if draft == request.text { draft = "" }
+            if context == request.context { context = nil }
+            if destination == requested { destination = .thisMac }
             pendingDraft = nil
-            message = "Request admitted by Cosmos. The response appears on the approved display it selects."
+            message = Self.admittedMessage(context: request.context, destination: requested)
+        }
+    }
+
+    /// Picks one option from the current choices card. The client sends the item's
+    /// title as the next request, exactly as the TV and the phone do; the numbering
+    /// and its meaning belong to the runtime.
+    @discardableResult
+    public func choose(_ index: Int) -> Bool {
+        guard case .choices(_, let items)? = snapshot.display?.content,
+              items.indices.contains(index), canSubmit else { return false }
+        let title = items[index].title
+        guard Self.validText(title) else { return false }
+        let request = TextRequest(text: title)
+        pendingDraft = title
+        admissionBeforeSend = snapshot.admission?.turnID
+        nowLine = title
+        run { [self] in
+            _ = try await client.send(request)
+            guard !Task.isCancelled else { return }
+            pendingDraft = nil
+            message = Self.admittedMessage(context: nil, destination: .thisMac)
+        }
+        return true
+    }
+
+    /// A plain request needs no notice: the Now line and the state above it already
+    /// say Cosmos has it. Only an attached selection or another destination adds
+    /// something the owner cannot see for themselves.
+    nonisolated static func admittedMessage(context: ContextChip?, destination: Destination) -> String {
+        if let context {
+            return "Cosmos has your request with your \(context.source.label.lowercased()) from \(context.app). The reply stays on this Mac."
+        }
+        if destination != .thisMac {
+            return "Cosmos has your request, to continue on \(destination.label)."
+        }
+        return ""
+    }
+
+    nonisolated static let targetsUnavailableMessage =
+        "Continuing on another device is not available in this build of Cosmos. The request was not sent; choose This Mac to send it."
+    nonisolated static let contextUnavailableMessage =
+        "Attaching selected or clipboard text is not available in this build of Cosmos."
+    /// One sentence on what happened and one on what to do; the panel puts the button
+    /// that opens the pane next to it. The application's own path is technical detail
+    /// and lives behind Details.
+    nonisolated static let accessibilityMessage = "\(Words.accessibilityOff) \(Words.accessibilityAction)"
+    nonisolated static var accessibilityDetail: String {
+        "Add Cosmos with the + button in that pane. This build is at \(Bundle.main.bundleURL.path)."
+    }
+
+    /// Reads the selection from the application the owner was using. Only this
+    /// explicit action reads another application, and only through Accessibility.
+    public func useSelection() {
+        guard capabilities.context else { message = Self.contextUnavailableMessage; return }
+        attach(contextProvider.selectedText(), source: .selection)
+    }
+
+    /// Reads the pasteboard. Only this explicit action ever does.
+    public func useClipboard() {
+        guard capabilities.context else { message = Self.contextUnavailableMessage; return }
+        attach(contextProvider.clipboardText(), source: .clipboard)
+    }
+
+    public func clearContext() { context = nil }
+
+    private func attach(_ capture: ContextCapture, source: ContextSource) {
+        accessibilityBlocked = false
+        switch capture {
+        case .text(let app, let text):
+            guard let chip = ContextChip(source: source, app: app, text: text) else {
+                message = source == .selection ? "The selection in \(app) holds no text." : "The clipboard holds no text."
+                return
+            }
+            context = chip
+            message = chip.truncated
+                ? "Using the first \(ContextChip.formatBytes(ContextChip.maximumBytes)) of the \(source.label.lowercased()) from \(app)."
+                : ""
+        case .empty(let app):
+            message = source == .selection
+                ? "No selected text was found in \(app). Select text there, or use the clipboard instead."
+                : "The clipboard holds no text."
+        case .noApplication:
+            message = "Switch to the app with the text you want, then come back and use its selection."
+        case .permissionMissing:
+            accessibilityBlocked = true
+            message = Self.accessibilityMessage
         }
     }
 
@@ -239,6 +414,9 @@ public final class ClientModel: ObservableObject {
         guard canDisconnect else { return }
         wantsConnection = false
         reconnect?.cancel(); reconnect = nil
+        connectedNote?.cancel(); connectedNote = nil
+        justConnected = false
+        nowLine = nil
         operationGeneration &+= 1
         let generation = operationGeneration
         operation?.cancel()
@@ -355,6 +533,7 @@ public final class ClientModel: ObservableObject {
         let generation = operationGeneration
         busy = true
         message = ""
+        accessibilityBlocked = false
         operation = Task { [weak self] in
             guard let self else { return }
             guard generation == operationGeneration, !Task.isCancelled else { return }

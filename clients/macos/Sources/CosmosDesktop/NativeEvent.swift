@@ -45,87 +45,6 @@ struct NativeEvent: Decodable, Sendable {
         }
     }
 
-    struct Credit: Decodable, Sendable {
-        let kind: String
-        let text: String
-        let href: String?
-
-        func verified() throws -> CreditPart {
-            switch kind {
-            case "text" where href == nil: return .text(text)
-            case "link":
-                guard let href, href.hasPrefix("https://"), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      URL(string: href)?.scheme == "https" else { throw ClientFailure.invalidResponse }
-                return .link(text: text, href: href)
-            default: throw ClientFailure.invalidResponse
-            }
-        }
-    }
-
-    struct Place: Decodable, Sendable {
-        let placeId: String
-        let name: String
-        let address: String
-        let sourceUrl: String?
-
-        func verified() throws -> PlaceItem {
-            guard !placeId.isEmpty, !name.isEmpty, !address.isEmpty,
-                  sourceUrl.map({ $0.hasPrefix("https://") && URL(string: $0) != nil }) ?? true else {
-                throw ClientFailure.invalidResponse
-            }
-            return PlaceItem(placeID: placeId, name: name, address: address, sourceURL: sourceUrl)
-        }
-    }
-
-    struct Content: Decodable, Sendable {
-        let kind: String
-        let text: String?
-        let query: String?
-        let items: [Place]?
-        let attributions: [String]?
-    }
-
-    struct Display: Decodable, Sendable {
-        let actionId: UUID
-        let turnId: UUID
-        let generation: UInt64
-        let contentDigest: String
-        let expiresAtMs: Int64
-        let content: Content
-        let credits: [[Credit]]
-        let privacy: String?
-
-        func verified() throws -> DisplayCard {
-            let privacy = self.privacy ?? "shared_room"
-            guard ["public", "shared_room", "near_user", "private"].contains(privacy) else {
-                throw ClientFailure.invalidResponse
-            }
-            let body: DisplayContent
-            switch content.kind {
-            case "text":
-                guard let text = content.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      text.utf8.count <= 4000, !text.contains("\0"), content.query == nil,
-                      content.items == nil, content.attributions == nil, credits.isEmpty else {
-                    throw ClientFailure.invalidResponse
-                }
-                body = .text(text)
-            case "places":
-                guard let query = content.query, !query.isEmpty, let items = content.items, items.count <= 4,
-                      let attributions = content.attributions, attributions.count == credits.count,
-                      attributions.count <= 16, content.text == nil else {
-                    throw ClientFailure.invalidResponse
-                }
-                body = .places(query: query, items: try items.map { try $0.verified() },
-                               credits: try credits.map { try $0.map { try $0.verified() } })
-            default:
-                throw ClientFailure.invalidResponse
-            }
-            return try DisplayCard(actionID: actionId, turnID: turnId, generation: generation,
-                                   contentDigest: contentDigest, expiresAtMs: expiresAtMs, content: body,
-                                   privacy: privacy)
-        }
-    }
-
     /// A private card waiting for this installation: no content, only the class,
     /// the kind of surface that asked and the expiry.
     struct Invitation: Decodable, Sendable {
@@ -173,17 +92,21 @@ struct NativeEvent: Decodable, Sendable {
     let needsReconnect: Bool
     let admission: Admission?
     let visible: Bool
-    let display: Display?
+    /// Verified while decoding: kind, bounds, credit grammar and privacy class.
+    let display: DisplayCard?
     let speech: Speech?
     let invitation: Invitation?
+    /// Cosmos's report on the current turn; absent from older library builds.
+    let status: TurnStatus?
     let eventsSkipped: UInt64
 
     static func decode(_ bytes: Data) throws -> NativeEvent {
         do {
             let event = try JSONDecoder().decode(Self.self, from: bytes)
             guard event.version == 1, event.kind == "state",
-                  ["prepare", "connect", "send_text", "retry_pending", "cancel", "set_visible", "acknowledge",
-                   "acknowledge_speech", "display", "speech", "invitation", "disconnect", "heartbeat"].contains(event.operation),
+                  ["prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending",
+                   "cancel", "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "invitation",
+                   "status", "disconnect", "heartbeat"].contains(event.operation),
                   ["ok", "error"].contains(event.outcome),
                   (event.outcome == "ok") == (event.error == nil),
                   event.error.map({ $0.utf8.count <= 64 }) ?? true else {
@@ -193,7 +116,6 @@ struct NativeEvent: Decodable, Sendable {
             try event.lastUnknown?.validate()
             _ = try event.admission?.verified()
             _ = try event.descriptor?.verified()
-            _ = try event.display?.verified()
             _ = try event.speech?.verified()
             _ = try event.invitation?.verified()
             return event

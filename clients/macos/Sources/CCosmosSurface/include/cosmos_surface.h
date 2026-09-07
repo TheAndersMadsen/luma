@@ -22,6 +22,8 @@ enum {
     COSMOS_SURFACE_CALLBACK_NOT_FOUND = 1,
     COSMOS_SURFACE_MAX_CONFIG_BYTES = 2048,
     COSMOS_SURFACE_MAX_TEXT_BYTES = 4000,
+    COSMOS_SURFACE_MAX_CONTEXT_APP_BYTES = 64,
+    COSMOS_SURFACE_MAX_CONTEXT_BYTES = 8000,
     COSMOS_SURFACE_MAX_JOURNAL_BYTES = 32768,
     COSMOS_SURFACE_MAX_EVENT_BYTES = 16384,
     COSMOS_SURFACE_MAX_SPEECH_BYTES = 1048576
@@ -78,6 +80,29 @@ int32_t cosmos_surface_create(const uint8_t *config, size_t config_length,
 int32_t cosmos_surface_connect(CosmosSurface *surface);
 int32_t cosmos_surface_send_text(CosmosSurface *surface, const uint8_t *text,
                                 size_t text_length);
+/* Send text with the request's own explicit destination: target is NULL with
+ * target_length 0 for none, or exactly "macos", "linux", "android" or
+ * "android_tv" (UTF-8, no NUL). Cosmos weighs it exactly like a hint from
+ * cognition and the client's wins when both exist; it never makes a hidden or
+ * unapproved screen eligible. Any other target is INVALID_ARGUMENT. An exact
+ * retry replays the same target. */
+int32_t cosmos_surface_send_text_to(CosmosSurface *surface, const uint8_t *text,
+                                   size_t text_length, const uint8_t *target,
+                                   size_t target_length);
+/* Send text with bounded text from this installation's own screen: app (1 to
+ * MAX_CONTEXT_APP_BYTES) and context (1 to MAX_CONTEXT_BYTES) are required
+ * non-blank UTF-8; target as for send_text_to. The turn becomes private: the
+ * reply can appear only on a personal surface the owner declared in Center,
+ * and the screen text reaches cognition only under the owner's screen-context
+ * permission for this installation; without it Cosmos shows why on a personal
+ * surface and sends the text nowhere. Text plus escaped context must fit the
+ * 12 KiB transport envelope; otherwise the operation reports invalid_input.
+ * Screen text is journaled with the request until its receipt. */
+int32_t cosmos_surface_send_text_with_context(CosmosSurface *surface,
+                                             const uint8_t *text, size_t text_length,
+                                             const uint8_t *app, size_t app_length,
+                                             const uint8_t *context, size_t context_length,
+                                             const uint8_t *target, size_t target_length);
 int32_t cosmos_surface_retry_pending(CosmosSurface *surface);
 int32_t cosmos_surface_cancel(CosmosSurface *surface);
 /* Report the platform's own foreground visibility (0 or 1). Cosmos treats a
@@ -101,9 +126,9 @@ int32_t cosmos_surface_speech_audio(CosmosSurface *surface, uint8_t *output,
 int32_t cosmos_surface_disconnect(CosmosSurface *surface);
 
 /* Nonblocking safe JSON snapshot, UTF-8 bytes without a trailing NUL:
- * {version:1,kind:"state",operation:"prepare|connect|send_text|retry_pending|
- * cancel|set_visible|acknowledge|acknowledge_speech|display|speech|invitation|
- * disconnect|heartbeat",
+ * {version:1,kind:"state",operation:"prepare|connect|send_text|send_text_to|
+ * send_text_with_context|retry_pending|cancel|set_visible|acknowledge|
+ * acknowledge_speech|display|speech|invitation|status|disconnect|heartbeat",
  * outcome:"ok|error",error:null|STATIC_CODE,
  * connected:bool,pendingOpen:bool,needsReconnect:bool,
  * descriptor:null|PUBLIC_DESCRIPTOR,
@@ -115,14 +140,31 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
  * display:null|{actionId:UUID,turnId:UUID,generation:integer,
  * contentDigest:HEX64,expiresAtMs:integer,
  * content:{kind:"text",text:STRING}|{kind:"places",query:STRING,
- * items:[{placeId,name,address,sourceUrl:null|HTTPS}],attributions:[STRING]},
+ * items:[{placeId,name,address,sourceUrl:null|HTTPS}],attributions:[STRING]}
+ * |{kind:"choices",title:STRING,items:[{id:"1".."8",title:STRING,detail:STRING}]},
  * credits:[[{kind:"text",text}|{kind:"link",text,href:HTTPS}]],
  * privacy:"public|shared_room|near_user|private"},
  * speech:null|{actionId:UUID,turnId:UUID,generation:integer,contentDigest:HEX64,
  * expiresAtMs:integer,text:STRING,format:"audio/mpeg",byteLength:integer},
  * invitation:null|{id:UUID,origin:"pin|browser|macos|linux|android|android_tv",
  * privacy:"near_user|private",expiresAtMs:integer},
+ * status:null|{turnId:UUID,generation:integer,
+ * state:"working|waiting|shown|spoken|nowhere|unknown",
+ * surfacePlatform:null|"pin|browser|macos|linux|android|android_tv",
+ * privacy:"public|shared_room|near_user|private"},
  * eventsSkipped:N}
+ * A "choices" card is a numbered list of two to eight options; render every
+ * id, title and detail verbatim in order. A later request may name an item
+ * by its number ("play trailer for number two").
+ * A "status" operation reports what Cosmos committed about the turn this
+ * installation originated: working (begun), waiting (an action is proposed
+ * or dispatched to a surface of the named kind), shown or spoken (that
+ * action was acknowledged there), nowhere (nothing could take it) or unknown
+ * (outcome unknown). It carries no content and no reason: privacy
+ * suppression, capability misses and ordinary re-routing look identical, so
+ * express it as understated "heard, handled elsewhere" and nothing more.
+ * privacy is the class the status is expressed at, never above this
+ * installation's own ceiling. A terminal state ends the turn's status frames.
  * An "invitation" operation reports that a private card is waiting for this
  * installation, or that the offer was withdrawn. It carries no content: show
  * a generic prompt (a notification may say only that something is ready) and

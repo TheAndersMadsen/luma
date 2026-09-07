@@ -119,6 +119,40 @@ private let writeJournal: CosmosSurfaceWrite = { pointer, bytes, length in
 enum NativeCommand: String, Sendable {
     case connect, sendText = "send_text", retryPending = "retry_pending", cancel
     case setVisible = "set_visible", acknowledge, acknowledgeSpeech = "acknowledge_speech", disconnect
+
+    /// The operation name the library reports for this command's completion. A
+    /// request with a destination or attached text is its own operation.
+    func operation(for request: TextRequest?) -> String {
+        guard self == .sendText, let request else { return rawValue }
+        if request.context != nil { return "send_text_with_context" }
+        if request.target != nil { return "send_text_to" }
+        return rawValue
+    }
+}
+
+/// Newer library calls, looked up by name once the library is loaded. A build of the
+/// library without them leaves the matching feature reported as unavailable; the
+/// app never substitutes the plain text call for a request that carries more.
+enum OptionalSymbols {
+    typealias SendTextTo = @convention(c) (
+        OpaquePointer?, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
+    ) -> Int32
+    typealias SendTextWithContext = @convention(c) (
+        OpaquePointer?, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
+        UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
+    ) -> Int32
+
+    static let sendTextTo: SendTextTo? = resolve("cosmos_surface_send_text_to")
+    static let sendTextWithContext: SendTextWithContext? = resolve("cosmos_surface_send_text_with_context")
+
+    static let capabilities = ClientCapabilities(targets: sendTextTo != nil, context: sendTextWithContext != nil)
+
+    private static func resolve<Function>(_ name: String) -> Function? {
+        // RTLD_DEFAULT: the shared library is linked into this executable, so its
+        // exports are in the default search scope without another dlopen.
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) else { return nil }
+        return unsafeBitCast(symbol, to: Function.self)
+    }
 }
 
 /// All handle operations, including destruction, are serialized away from AppKit.
@@ -172,7 +206,7 @@ actor NativeWorker {
         return descriptor
     }
 
-    func enqueue(_ command: NativeCommand, text: String? = nil, visible: Bool? = nil) throws {
+    func enqueue(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil) throws {
         guard let handle else { throw ClientFailure.connectionUnavailable }
         let status: Int32
         switch command {
@@ -183,20 +217,66 @@ actor NativeWorker {
         case .acknowledge: status = cosmos_surface_acknowledge(handle)
         case .acknowledgeSpeech: status = cosmos_surface_acknowledge_speech(handle)
         case .sendText:
-            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  !text.contains("\0"),
-                  text.utf8.count <= Int(COSMOS_SURFACE_MAX_TEXT_BYTES) else {
+            guard let request, !request.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !request.text.contains("\0"),
+                  request.text.utf8.count <= Int(COSMOS_SURFACE_MAX_TEXT_BYTES) else {
                 throw ClientFailure.invalidText
             }
-            status = Data(text.utf8).withUnsafeBytes { bytes in
-                cosmos_surface_send_text(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
-            }
+            status = try Self.sendText(handle, request)
         case .retryPending: status = cosmos_surface_retry_pending(handle)
         case .cancel: status = cosmos_surface_cancel(handle)
         case .disconnect: status = cosmos_surface_disconnect(handle)
         }
         guard status == COSMOS_SURFACE_OK else {
             throw status == COSMOS_SURFACE_QUEUE_FULL ? ClientFailure.busy : .connectionUnavailable
+        }
+    }
+
+    /// Plain text uses the original call. A destination needs send_text_to and
+    /// attached context needs send_text_with_context; each is a distinct wire shape
+    /// and a library without the call rejects the request rather than narrowing it.
+    private static func sendText(_ handle: OpaquePointer, _ request: TextRequest) throws -> Int32 {
+        let text = Data(request.text.utf8)
+        // Empty byte strings still hand the C side a valid pointer with length 0.
+        func bytes(_ value: String) -> Data { value.isEmpty ? Data([0]) : Data(value.utf8) }
+        let targetText = request.target ?? ""
+        guard targetText.isEmpty || TextRequest.targets.contains(targetText) else { throw ClientFailure.invalidText }
+        let target = bytes(targetText)
+        let targetLength = targetText.utf8.count
+        if let context = request.context {
+            guard let call = OptionalSymbols.sendTextWithContext else { throw ClientFailure.featureUnavailable }
+            guard (1...ContextChip.maximumAppBytes).contains(context.app.utf8.count),
+                  (1...ContextChip.maximumBytes).contains(context.text.utf8.count),
+                  !context.app.contains("\0"), !context.text.contains("\0") else {
+                throw ClientFailure.invalidText
+            }
+            let app = Data(context.app.utf8)
+            let body = Data(context.text.utf8)
+            return text.withUnsafeBytes { text in
+                app.withUnsafeBytes { app in
+                    body.withUnsafeBytes { body in
+                        target.withUnsafeBytes { target in
+                            call(handle,
+                                 text.bindMemory(to: UInt8.self).baseAddress, text.count,
+                                 app.bindMemory(to: UInt8.self).baseAddress, app.count,
+                                 body.bindMemory(to: UInt8.self).baseAddress, body.count,
+                                 target.bindMemory(to: UInt8.self).baseAddress, targetLength)
+                        }
+                    }
+                }
+            }
+        }
+        if request.target != nil {
+            guard let call = OptionalSymbols.sendTextTo else { throw ClientFailure.featureUnavailable }
+            return text.withUnsafeBytes { text in
+                target.withUnsafeBytes { target in
+                    call(handle, text.bindMemory(to: UInt8.self).baseAddress, text.count,
+                         target.bindMemory(to: UInt8.self).baseAddress, targetLength)
+                }
+            }
+        }
+        return text.withUnsafeBytes { bytes in
+            cosmos_surface_send_text(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
         }
     }
 
