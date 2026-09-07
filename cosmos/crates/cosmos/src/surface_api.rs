@@ -99,6 +99,10 @@ fn routes(api: ApiState) -> Router {
             get(private_policy).post(set_private_policy),
         )
         .route(
+            "/surface-api/v1/surfaces/:surface_id/screen-context",
+            get(screen_context_policy).post(set_screen_context_policy),
+        )
+        .route(
             "/surface-api/v1/pins/:surface_id/local-voice",
             get(voice_policy).post(set_voice_policy),
         )
@@ -433,6 +437,25 @@ where
     Option::deserialize(deserializer)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScreenContextApproval {
+    approval: String,
+    approval_revision: u64,
+    expected_revision: u64,
+    #[serde(deserialize_with = "required_screen_policy")]
+    policy: Option<crate::ambiance::screen::Policy>,
+}
+
+fn required_screen_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::ambiance::screen::Policy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
 const LOCAL_VOICE_APPROVAL: &str = "approve-local-voice-intake-v1";
 
 #[derive(Deserialize)]
@@ -744,6 +767,61 @@ async fn set_private_policy(
         )
         .await?;
     let crate::ambiance::RuntimeResult::PrivatePolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+async fn screen_context_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::ScreenContextPolicy {
+                surface_id: id(&surface_id)?,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::ScreenContextPolicy(approval) = result else {
+        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
+    };
+    Ok(Json(json!({"approval": approval})))
+}
+
+/// The owner's statement that one native installation's own screen text may
+/// be offered to cognition with a request. The reply is private and can be
+/// shown only on a personal surface; the permission binds to the
+/// installation's current approval revision.
+async fn set_screen_context_policy(
+    State(api): State<ApiState>,
+    Path(surface_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<ScreenContextApproval>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let surface_id = id(&surface_id)?;
+    let request = body(request)?;
+    if request.approval != crate::ambiance::screen::OWNER_APPROVAL {
+        return Err(invalid());
+    }
+    let result = api
+        .store
+        .runtime(
+            &principal,
+            crate::ambiance::RuntimeOperation::SetScreenContextPolicy {
+                surface_id,
+                approval_revision: request.approval_revision,
+                expected_revision: request.expected_revision,
+                policy: request.policy,
+            },
+        )
+        .await?;
+    let crate::ambiance::RuntimeResult::ScreenContextPolicy(approval) = result else {
         return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "unavailable"));
     };
     Ok(Json(json!({"approval": approval})))
@@ -1527,6 +1605,222 @@ mod tests {
                 .await
                 .0,
             StatusCode::OK
+        );
+    }
+
+    /// The owner's screen-context permission is a native-only statement about
+    /// one installation, bound to its approval revision: strict body,
+    /// exactly one policy class, compare-and-swap revisions, owner isolation,
+    /// and loss on revocation or reapproval.
+    #[tokio::test]
+    async fn ambiance_screen_context_http_native_only_schema_cas_and_revocation() {
+        use crate::enrollment::EnrollmentStore;
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let pairing = Arc::new(crate::enrollment::MemoryEnrollmentStore::default());
+        pairing.put_device_account("aabb", "owner").await.unwrap();
+        let app = with_pairing(store, Some(verifier()), Some(pairing));
+        let owner = bearer("owner");
+        let other = bearer("other");
+        let enrollment = Uuid::new_v4();
+        let (status, approved) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/native",
+            Some(&owner),
+            None,
+            native_approval(enrollment),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let surface = approved["native"]["surfaceId"].as_str().unwrap().to_owned();
+        let path = format!("/surface-api/v1/surfaces/{surface}/screen-context");
+        let grant = json!({
+            "approval": crate::ambiance::screen::OWNER_APPROVAL,
+            "approvalRevision": 1, "expectedRevision": 0,
+            "policy": {"maximumClass": "private"}
+        });
+        for authorization in [None, Some("Bearer invalid")] {
+            for method in ["GET", "POST"] {
+                assert_eq!(
+                    call(&app, method, &path, authorization, None, grant.clone())
+                        .await
+                        .0,
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+        }
+        for method in ["GET", "POST"] {
+            assert_eq!(
+                call(&app, method, &path, Some(&other), None, grant.clone())
+                    .await
+                    .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"approval": null})
+        );
+        // A Pin is not a native installation and never holds this permission.
+        let (status, pin) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/pins",
+            Some(&owner),
+            None,
+            json!({"deviceId": "aabb", "approval": surface_registry::PIN_APPROVAL}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let pin_path = format!(
+            "/surface-api/v1/surfaces/{}/screen-context",
+            pin["pin"]["surfaceId"].as_str().unwrap()
+        );
+        for method in ["GET", "POST"] {
+            assert_eq!(
+                call(&app, method, &pin_path, Some(&owner), None, grant.clone())
+                    .await
+                    .0,
+                StatusCode::NOT_FOUND
+            );
+        }
+        let mut missing = grant.clone();
+        missing.as_object_mut().unwrap().remove("policy");
+        let mut extra = grant.clone();
+        extra["principal"] = "other".into();
+        let mut shared = grant.clone();
+        shared["policy"]["maximumClass"] = "shared_room".into();
+        let mut near = grant.clone();
+        near["policy"]["maximumClass"] = "near_user".into();
+        let mut sensitive = grant.clone();
+        sensitive["policy"]["maximumClass"] = "sensitive".into();
+        let mut nested = grant.clone();
+        nested["policy"]["apps"] = json!(["Settings"]);
+        let mut wrong = grant.clone();
+        wrong["approval"] = crate::ambiance::personal::OWNER_APPROVAL.into();
+        let mut oversized = grant.clone();
+        oversized["approval"] = "x".repeat(2048).into();
+        for invalid in [
+            missing, extra, shared, near, sensitive, nested, wrong, oversized,
+        ] {
+            assert_eq!(
+                call(&app, "POST", &path, Some(&owner), None, invalid)
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let (status, saved) = call(&app, "POST", &path, Some(&owner), None, grant.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            saved,
+            json!({"approval": {"approvalRevision": 1, "revision": 1, "policy": {"maximumClass": "private"}}})
+        );
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, grant.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        let mut stale = grant.clone();
+        stale["approvalRevision"] = 2.into();
+        stale["expectedRevision"] = 1.into();
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, stale).await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            saved
+        );
+        // The private-display permission is a separate statement; neither
+        // implies the other.
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                &format!("/surface-api/v1/surfaces/{surface}/private-display"),
+                Some(&owner),
+                None,
+                json!(null)
+            )
+            .await
+            .1,
+            json!({"approval": null})
+        );
+        let mut revoke = grant.clone();
+        revoke["expectedRevision"] = 1.into();
+        revoke["policy"] = serde_json::Value::Null;
+        let (status, revoked) = call(&app, "POST", &path, Some(&owner), None, revoke).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(revoked["approval"]["revision"], 2);
+        assert!(revoked["approval"]["policy"].is_null());
+        let mut regrant = grant.clone();
+        regrant["expectedRevision"] = 2.into();
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, regrant)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // Revoking the installation drops the permission with it, and the
+        // reapproved installation starts without one at its new revision.
+        assert_eq!(
+            call(
+                &app,
+                "DELETE",
+                &format!("/surface-api/v1/native/{surface}"),
+                Some(&owner),
+                None,
+                json!({"expectedRevision": 1})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        let mut reapproval = native_approval(enrollment);
+        reapproval["expectedRevision"] = 2.into();
+        let (status, reapproved) = call(
+            &app,
+            "POST",
+            "/surface-api/v1/native",
+            Some(&owner),
+            None,
+            reapproval,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(reapproved["native"]["revision"], 3);
+        assert_eq!(
+            call(&app, "GET", &path, Some(&owner), None, json!(null))
+                .await
+                .1,
+            json!({"approval": null})
+        );
+        assert_eq!(
+            call(&app, "POST", &path, Some(&owner), None, grant.clone())
+                .await
+                .0,
+            StatusCode::CONFLICT,
+            "a grant for the old revision is stale"
+        );
+        let mut current = grant;
+        current["approvalRevision"] = 3.into();
+        let (status, saved) = call(&app, "POST", &path, Some(&owner), None, current).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            saved,
+            json!({"approval": {"approvalRevision": 3, "revision": 1, "policy": {"maximumClass": "private"}}})
         );
     }
 

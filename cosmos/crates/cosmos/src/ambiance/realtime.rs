@@ -175,7 +175,7 @@ pub(super) fn validate_input(messages: &[ChatMessage], tools: &[ToolDef]) -> Res
         || messages[0].content.is_empty()
         || messages[0].content.len() > 8192
         || messages[1].content.trim().is_empty()
-        || messages[1].content.len() > 4000
+        || messages[1].content.len() > super::runtime::MAX_COGNITION_INPUT_BYTES
         || tools.len() != 1
         || tools[0].name != "propose_information"
         || tools[0].description.len() > 4096

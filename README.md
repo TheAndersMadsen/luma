@@ -348,6 +348,25 @@ screen" it hears for any card acknowledged elsewhere. Owner listing and
 deletion of what was offered, and private sources beyond notes, are later
 increments.
 
+A phone, Mac or Linux PC may also use what is on its own screen. In Center,
+each such device's Manage panel offers **Use what's on the screen**: when the
+owner asks about what is on that device's screen, Cosmos may read the visible
+text once and send it to the assistant model, and the reply is private to that
+device. The permission is one owner statement per installation, read before it
+is written and confirmed by Cosmos at the next revision, and it is never
+offered for a TV or a browser. Set up the usual permissions turns it on for
+phones only.
+
+**Settings → Account → Activity** lists recent turns from the runtime ledger,
+newest first: when and from which kind of device each was asked ("Asked from
+your phone"), what happened to the reply ("Shown on your Mac", "Spoken on your
+Ai Pin", "Private reply on your phone", "Nowhere to show it", "Cancelled",
+"Cannot confirm"), and a Why disclosure naming each candidate device with its
+blocker in plain words, the routing hint and the request's class. The ledger
+holds no request text or reply content, so the page shows none; an empty or
+unreadable ledger says so. The page is rendered on the server and reads
+without JavaScript.
+
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
 `android_tv`) only from explicit request text such as "show this on the TV".
 Policy treats it as the paper's hint: it adds a bounded rank component to
@@ -374,6 +393,63 @@ client and Center native-surface tests plus the full Cosmos and Center checks.
 It proves runtime authority, receiver identity and exact digests with a
 MemoryStore and synthetic cognition, not a physical screen, real occupancy or
 the macOS app's actual render on a device.
+
+A native client can now name the destination itself. The room input message
+carries an optional `target` (`browser`, `macos`, `linux`, `android` or
+`android_tv`) that is the request's own explicit hint: it weighs exactly like
+cognition's target, outranks it when both exist, is logged as the decision's
+hint, and can no more revive a hidden or unapproved screen than the model's
+can. The shared client exposes `send_text_to`, the C ABI
+`cosmos_surface_send_text_to` and JNI `sendTextTo`; the target is journaled
+with the request so an exact retry replays it, and the same sequence with a
+different target is refused as a different request.
+
+The origin now hears what became of its turn, and nothing more. The room
+coordinator sends the native member that originated a turn a `status` frame
+once per committed state change: `working` when the turn begins, `waiting`
+while an action is proposed or dispatched to a surface of a named kind,
+`shown` or `spoken` once that surface acknowledged it, `nowhere` when nothing
+could take it, `unknown` when delivery deadlines ran out. The frame names the
+kind of device only, never a surface identity, content or a reason, and its
+class is capped by the origin's own ceiling: a private card shown on the phone
+reaches a shared Mac as "shown on an android surface" at the shared class,
+and a privacy-refused request looks exactly like one with no visible screen.
+That is the paper's "heard, handled elsewhere": suppression, capability misses
+and ordinary re-routing are indistinguishable on a shared surface. The shared
+client exposes `status_changes`/`turn_status`, and the C and JNI snapshots
+carry `status` with operation `status`. Browsers receive no status frames.
+
+Screen context is the owner's own data and follows the private policy. A native
+installation may send bounded text from its own screen (`context: {kind:
+"screen", app, text}`, at most 64 and 8000 UTF-8 bytes) with a request; the
+turn starts at the `private` class, needs a personal surface declared for that
+class, and the reply is routed like any private card: only personal surfaces,
+never speech, every shared surface suppressed. The text reaches cognition only
+if the origin installation holds the owner's screen-context permission at its
+current approval revision (`approve-screen-context-v1` under Devices, route
+`/surface-api/v1/surfaces/:surfaceId/screen-context`, native only), and then
+as a delimited untrusted block after the user's request that the prompt names
+as data, never instructions; the ledger records `screen_context_offered` with
+the app digest and byte count and never the text. Without the permission the
+runtime proposes a private card explaining that screen context must be
+allowed for this device in Center, and the text goes nowhere. Sensitive
+screen text is refused before cognition, lookups derived from a private turn
+are refused by the existing lookup ceilings, and the shared client exposes
+`send_text_with_context`, `cosmos_surface_send_text_with_context` and JNI
+`sendTextWithContext`.
+
+"Find a good film for tonight" on the TV now produces a numbered choice list.
+Cognition proposes `choice_list` (a title and two to eight items with a title
+and detail) as its own branch; the runtime numbers the items `1`..`8`, binds
+the card to the digest of `["cosmos.choice-list", 1, title, [[id, title,
+detail], ...]]`, renders it as content kind `choices` and routes it like any
+card. When the shown list is acknowledged at or below the shared class, the
+runtime remembers its title and numbered titles as recent context of kind
+`choices` for ten minutes and offers the next turn one sentence naming them, so
+"play trailer for number two" resolves into a web lookup for "<title> trailer"
+under the origin's own lookup permission or an informational answer. Nothing
+is played yet; media playback on the Shield remains a separate increment, and a
+private list is never remembered.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:
@@ -2008,6 +2084,27 @@ encrypted in app-private storage, reports the foreground activity as visible
 and acknowledges each delivered card once it is composed. It offers to become
 the default digital assistant so the panel opens over the current app.
 
+Held as the assistant (`dk.andersmadsen.cosmos.android/.assist.CosmosInteractionService`,
+a `VoiceInteractionService` with an assist-only session; the `ACTION_ASSIST`
+activity stays as the fallback for devices that grant the role to an activity),
+long-pressing Home opens the same panel over the current app with the screen the
+owner was looking at: the session reads the visible text nodes of the assist
+structure once, skipping password fields, de-duplicated in order and bounded to
+8,000 bytes, and shows an honest chip, **Using: Gmail screen**, with the line
+that this is the text on screen when Cosmos opened and that the reply stays on
+this phone. Removing the chip sends the request bare; a locked screen or absent
+assist data gets one calm line instead of a chip; the fallback activity says the
+role is needed and offers it. No screenshots are read and no audio is captured;
+the recognition service the role requires refuses every request. Beside the ask
+field, **Continue on** offers This phone (no target), Mac, Linux PC, TV or
+Browser as plain labels; Cosmos decides eligibility. Above it, the status line
+follows the turn in fixed words: Working, Waiting for a device (or for your Mac
+when the platform is known), Shown on / Spoken on your Mac, Linux PC, phone, TV,
+browser or Ai Pin, Nowhere to show it, and Cannot confirm, which adds that the
+request was not sent again and is never styled as an error. A build whose native
+library predates screen text or targets refuses those two locally with the same
+calm notice and sends nothing.
+
 The phone shows one calm screen per state, drawn with the owner's Android kit
 (bottom nebula, crescent wordmark, NinePatch response panel, seven-bar
 waveform): **Set up this phone** names the server and prepares the
@@ -2033,8 +2130,13 @@ carries the white waveform while the request is sent and the typed question
 while Cosmos works; the reply returns the content to full screen as a bottom
 subtitle, two lines at most, with More opening a paged full-size view. Cosmos
 retires the reply; Back closes the paged view, then the ask field, then the
-reply. Cards above shared_room never appear on the TV. Set-up and approval keep
-their status line, QR code and one D-pad button on the same graphite stage.
+reply. A `choices` card, the film suggestions of the first scenario, fills the
+content slot instead: a row of two to eight large cards, each with its number,
+the crescent mark and its title, the focused one lifted inside a glow ring with
+its detail underneath; OK sends that title as the next request with no target,
+and Ask in the band takes the follow-up ("play trailer for number two", typed
+for now). Cards above shared_room never appear on the TV. Set-up and approval
+keep their status line, QR code and one D-pad button on the same graphite stage.
 Debug builds also honour
 `adb shell am start -n dk.andersmadsen.cosmos.android/.MainActivity --es cosmos.layout tv`
 so the TV layout can be checked on a phone in landscape; release builds ignore
@@ -2046,8 +2148,30 @@ verifies its signature; neither command launches or installs the app.
 Distribution signing, notarization and physical permission/lifecycle acceptance
 remain separate. The client accepts explicitly submitted public text, renders
 shared cards and plays Cosmos-synthesized spoken replies once the installation
-is approved at the speech profile; document capture and handoff are later
-capability increments, and installation approval does not grant them.
+is approved at the speech profile; installation approval grants nothing beyond
+that.
+
+The connected panel adds three bounded pieces. "Use selection" (⇧⌘U, also in
+the menu-bar menu) reads the current selection of the app the owner was using
+through the Accessibility API and only when macOS has granted Cosmos that
+permission; without it the panel explains where to add Cosmos in System
+Settings and never opens that pane or prompts on its own. "Use clipboard" is
+the only path that reads the pasteboard. Either shows a removable chip,
+"Using: Selected text · 1.2 KB", capped at 8,000 UTF-8 bytes; sending with it
+uses `cosmos_surface_send_text_with_context` with the source app's name, and
+the panel says the reply stays private to this Mac. "Continue on" offers This
+Mac (the default, no target), Phone, Linux PC, TV and Browser as plain kinds
+of device; a choice other than This Mac is sent as the request's `target`
+through `cosmos_surface_send_text_to` and resets after the send. The response
+card repeats Cosmos's `status` report in fixed words (Working; Waiting for
+your phone / your TV / your Linux PC / your browser / your Ai Pin / this Mac;
+Shown on…; Spoken on…; Nowhere to show it; Cannot confirm, with "I can't
+confirm whether that request was handled. It was not sent again.") as
+information, never as an error, and renders a `choices` card as a numbered
+list under its title; a private card keeps its "Private reply" label. The two
+newer library calls are looked up by name at launch, so against a library
+without them the panel reports the feature as not available in this build and
+sends nothing rather than narrowing the request to plain text.
 
 Approval no longer needs pasted JSON. Each client offers "Approve in Center",
 a link to the surfaces page carrying its public descriptor as a fragment, and

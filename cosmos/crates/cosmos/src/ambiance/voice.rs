@@ -181,8 +181,12 @@ impl LocalVoice {
             .cognize(
                 principal,
                 self.fence.clone(),
-                transcript,
-                privacy,
+                super::runtime::Request {
+                    text: transcript,
+                    privacy_floor: privacy,
+                    hint: None,
+                    context: None,
+                },
                 Some(&self.authenticated),
                 false,
             )

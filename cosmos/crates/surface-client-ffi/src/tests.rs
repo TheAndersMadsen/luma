@@ -63,6 +63,194 @@ fn public_configuration_accepts_swift_uuid_case_and_rejects_authority_fields() {
 }
 
 #[test]
+fn snapshots_project_choice_cards_and_turn_status_without_surface_identity() {
+    use cosmos_surface_client::{ChoiceItem, DisplayContent, Privacy, SurfacePlatform, TurnState};
+    let card = Display {
+        action_id: Uuid::from_u128(7),
+        turn_id: Uuid::from_u128(8),
+        generation: 2,
+        content_digest: "ab".repeat(32),
+        content: DisplayContent::Choices {
+            title: "Films for tonight".into(),
+            items: vec![
+                ChoiceItem {
+                    id: "1".into(),
+                    title: "Arrival".into(),
+                    detail: "2016".into(),
+                },
+                ChoiceItem {
+                    id: "2".into(),
+                    title: "Heat".into(),
+                    detail: String::new(),
+                },
+            ],
+        },
+        expires_at_ms: 60_000,
+        privacy: Privacy::SharedRoom,
+    };
+    assert_eq!(
+        display(Some(&card)),
+        json!({
+            "actionId": Uuid::from_u128(7).to_string(),
+            "turnId": Uuid::from_u128(8).to_string(),
+            "generation": 2,
+            "contentDigest": "ab".repeat(32),
+            "expiresAtMs": 60_000,
+            "content": {"kind": "choices", "title": "Films for tonight", "items": [
+                {"id": "1", "title": "Arrival", "detail": "2016"},
+                {"id": "2", "title": "Heat", "detail": ""},
+            ]},
+            "credits": [],
+            "privacy": "shared_room",
+        })
+    );
+    let turn = TurnStatus {
+        turn_id: Uuid::from_u128(8),
+        generation: 2,
+        state: TurnState::Shown,
+        surface: Some(SurfacePlatform::AndroidTv),
+        privacy: Privacy::Public,
+    };
+    assert_eq!(
+        status(Some(&turn)),
+        json!({
+            "turnId": Uuid::from_u128(8).to_string(),
+            "generation": 2,
+            "state": "shown",
+            "surfacePlatform": "android_tv",
+            "privacy": "public",
+        })
+    );
+    let working = TurnStatus {
+        state: TurnState::Working,
+        surface: None,
+        ..turn
+    };
+    assert_eq!(status(Some(&working))["state"], "working");
+    assert!(status(Some(&working))["surfacePlatform"].is_null());
+    assert!(status(None).is_null());
+    let empty = snapshot(None, &Value::Null, "status", None);
+    assert!(empty["status"].is_null());
+    assert_eq!(empty["operation"], "status");
+}
+
+#[test]
+fn bound_text_target_and_context_arguments_are_checked_before_queueing() {
+    assert_eq!(parse_target(None), Ok(None));
+    assert_eq!(parse_target(Some(b"")), Ok(None));
+    assert_eq!(
+        parse_target(Some(b"android_tv")),
+        Ok(Some(Platform::AndroidTv))
+    );
+    assert_eq!(parse_target(Some(b"macos")), Ok(Some(Platform::Macos)));
+    for invalid in [
+        &b"browser"[..],
+        b"pin",
+        b"ANDROID",
+        b"android_tv\0",
+        b"\xff",
+    ] {
+        assert_eq!(parse_target(Some(invalid)), Err(INVALID_ARGUMENT));
+    }
+    assert_eq!(parse_text(b"hello").as_deref(), Ok("hello"));
+    for invalid in [&b""[..], b" \n", b"\xff", &vec![b'x'; MAX_TEXT + 1]] {
+        assert_eq!(parse_text(invalid), Err(INVALID_ARGUMENT));
+    }
+    let context = parse_context(b"Settings", b"Wi-Fi\nConnected").unwrap();
+    assert_eq!(
+        (context.app.as_str(), context.text.as_str()),
+        ("Settings", "Wi-Fi\nConnected")
+    );
+    for (app, text) in [
+        (&b""[..], &b"x"[..]),
+        (b" ", b"x"),
+        (b"App", b""),
+        (b"App", b" "),
+        (b"\xff", b"x"),
+        (b"App", b"\xff"),
+        (&vec![b'a'; MAX_CONTEXT_APP + 1][..], b"x"),
+        (b"App", &vec![b'x'; MAX_CONTEXT + 1][..]),
+    ] {
+        assert_eq!(parse_context(app, text).map(|_| ()), Err(INVALID_ARGUMENT));
+    }
+    let (mut handle, _receiver) = queued_handle();
+    let pointer = (&mut *handle) as *mut CosmosSurface;
+    let text = b"Play trailer for number two";
+    assert_eq!(
+        unsafe { cosmos_surface_send_text_to(pointer, text.as_ptr(), text.len(), ptr::null(), 0) },
+        OK
+    );
+    assert_eq!(
+        unsafe {
+            cosmos_surface_send_text_to(
+                pointer,
+                text.as_ptr(),
+                text.len(),
+                b"android_tv".as_ptr(),
+                10,
+            )
+        },
+        OK
+    );
+    assert_eq!(
+        unsafe {
+            cosmos_surface_send_text_to(pointer, text.as_ptr(), text.len(), b"browser".as_ptr(), 7)
+        },
+        INVALID_ARGUMENT
+    );
+    let app = b"Settings";
+    let context = b"Wi-Fi";
+    assert_eq!(
+        unsafe {
+            cosmos_surface_send_text_with_context(
+                pointer,
+                text.as_ptr(),
+                text.len(),
+                app.as_ptr(),
+                app.len(),
+                context.as_ptr(),
+                context.len(),
+                ptr::null(),
+                0,
+            )
+        },
+        OK
+    );
+    assert_eq!(
+        unsafe {
+            cosmos_surface_send_text_with_context(
+                pointer,
+                text.as_ptr(),
+                text.len(),
+                ptr::null(),
+                0,
+                context.as_ptr(),
+                context.len(),
+                ptr::null(),
+                0,
+            )
+        },
+        INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe {
+            cosmos_surface_send_text_with_context(
+                pointer,
+                text.as_ptr(),
+                text.len(),
+                app.as_ptr(),
+                app.len(),
+                context.as_ptr(),
+                context.len(),
+                b"pin".as_ptr(),
+                3,
+            )
+        },
+        INVALID_ARGUMENT
+    );
+}
+
+#[test]
 fn failed_create_clears_the_output_without_retaining_callback_context() {
     let mut output = ptr::dangling_mut::<CosmosSurface>();
     let callback = callbacks(missing, ptr::null_mut());

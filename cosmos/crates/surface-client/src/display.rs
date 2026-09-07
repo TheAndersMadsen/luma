@@ -10,6 +10,11 @@ const MAX_PLACE_ITEMS: usize = 4;
 const MAX_ATTRIBUTIONS: usize = 16;
 const MAX_ATTRIBUTION_BYTES: usize = 2048;
 const MAX_PLACES_BYTES: usize = 8192;
+const MIN_CHOICES: usize = 2;
+const MAX_CHOICES: usize = 8;
+const MAX_CHOICE_TITLE_BYTES: usize = 120;
+const MAX_CHOICE_ITEM_TITLE_BYTES: usize = 80;
+const MAX_CHOICE_DETAIL_BYTES: usize = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -18,6 +23,16 @@ pub struct PlaceItem {
     pub name: String,
     pub address: String,
     pub source_url: Option<String>,
+}
+
+/// One numbered option of a choice list; `id` is `1`..`8` in list order and
+/// is what a later "number two" refers to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChoiceItem {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +46,88 @@ pub enum DisplayContent {
         items: Vec<PlaceItem>,
         attributions: Vec<String>,
     },
+    Choices {
+        title: String,
+        items: Vec<ChoiceItem>,
+    },
+}
+
+/// The outcome-gated state of this installation's own current turn. It
+/// names the kind of surface involved, never which one, and never a reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnState {
+    Working,
+    Waiting,
+    Shown,
+    Spoken,
+    Nowhere,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfacePlatform {
+    Pin,
+    Browser,
+    Macos,
+    Linux,
+    Android,
+    AndroidTv,
+}
+
+impl SurfacePlatform {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pin => "pin",
+            Self::Browser => "browser",
+            Self::Macos => "macos",
+            Self::Linux => "linux",
+            Self::Android => "android",
+            Self::AndroidTv => "android_tv",
+        }
+    }
+}
+
+/// What the runtime committed about the turn this installation originated:
+/// "heard, handled elsewhere" and nothing more. `privacy` is the class the
+/// status is expressed at, never above this installation's own ceiling.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnStatus {
+    pub turn_id: Uuid,
+    pub generation: u64,
+    pub state: TurnState,
+    pub surface: Option<SurfacePlatform>,
+    pub privacy: Privacy,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StatusSurface {
+    platform: SurfacePlatform,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StatusFrame {
+    version: u8,
+    turn_id: Uuid,
+    generation: u64,
+    state: TurnState,
+    #[serde(deserialize_with = "explicit_surface")]
+    surface: Option<StatusSurface>,
+    privacy: Privacy,
+}
+
+/// `surface` is null when no surface is involved, and a frame that omits the
+/// field is a different shape the runtime never sends: read it explicitly so a
+/// missing key is rejected rather than read as "no surface".
+fn explicit_surface<'de, D>(deserializer: D) -> Result<Option<StatusSurface>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
 }
 
 /// The class the runtime routed content at. A platform treats anything above
@@ -139,6 +236,11 @@ enum Frame {
         stamp: Stamp,
         invitation: Option<InvitationFrame>,
     },
+    Status {
+        version: u8,
+        stamp: Stamp,
+        status: StatusFrame,
+    },
 }
 
 pub(crate) enum Incoming {
@@ -146,6 +248,7 @@ pub(crate) enum Incoming {
     Clear(Uuid),
     Speak(crate::speech::SpeechFrame),
     Invite(Option<Invitation>),
+    Status(TurnStatus),
 }
 
 /// The exact bound connection this frame must name.
@@ -160,7 +263,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Byte-for-byte the runtime's binding: text hashes its bytes, a place card
-/// hashes its canonical tuple including every raw credit string.
+/// hashes its canonical tuple including every raw credit string, a choice
+/// list hashes its title and numbered items.
 pub fn content_digest(content: &DisplayContent) -> String {
     match content {
         DisplayContent::Text { text } => sha256_hex(text.as_bytes()),
@@ -179,7 +283,19 @@ pub fn content_digest(content: &DisplayContent) -> String {
                 serde_json::json!(["cosmos.place-address-card", 1, query, items, attributions]);
             sha256_hex(canonical.to_string().as_bytes())
         }
+        DisplayContent::Choices { title, items } => {
+            let items: Vec<_> = items
+                .iter()
+                .map(|item| serde_json::json!([item.id, item.title, item.detail]))
+                .collect();
+            let canonical = serde_json::json!(["cosmos.choice-list", 1, title, items]);
+            sha256_hex(canonical.to_string().as_bytes())
+        }
     }
+}
+
+fn choice_text(value: &str, maximum: usize) -> bool {
+    !value.trim().is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
 }
 
 fn forbidden(character: char) -> bool {
@@ -420,6 +536,16 @@ fn valid_content(content: &DisplayContent) -> bool {
                     .iter()
                     .all(|credit| parse_attribution(credit).is_ok())
         }
+        DisplayContent::Choices { title, items } => {
+            choice_text(title, MAX_CHOICE_TITLE_BYTES)
+                && (MIN_CHOICES..=MAX_CHOICES).contains(&items.len())
+                && items.iter().enumerate().all(|(index, item)| {
+                    item.id == (index + 1).to_string()
+                        && choice_text(&item.title, MAX_CHOICE_ITEM_TITLE_BYTES)
+                        && item.detail.len() <= MAX_CHOICE_DETAIL_BYTES
+                        && !item.detail.chars().any(char::is_control)
+                })
+        }
     }
 }
 
@@ -514,6 +640,32 @@ pub(crate) fn parse_frame(
                 }
             };
             (Incoming::Invite(invitation), stamp)
+        }
+        Frame::Status {
+            version,
+            stamp,
+            status,
+        } => {
+            if version != 1
+                || !valid_stamp(&stamp)
+                || status.version != 1
+                || status.turn_id.is_nil()
+                || status.generation == 0
+                || status.generation > MAX_SEQUENCE
+                || status.privacy == Privacy::Sensitive
+            {
+                return Err(Error::InvalidResponse);
+            }
+            (
+                Incoming::Status(TurnStatus {
+                    turn_id: status.turn_id,
+                    generation: status.generation,
+                    state: status.state,
+                    surface: status.surface.map(|surface| surface.platform),
+                    privacy: status.privacy,
+                }),
+                stamp,
+            )
         }
         Frame::Clear {
             version,
@@ -693,6 +845,161 @@ mod tests {
             &content_digest(&rejected),
         );
         assert!(parse_frame(&frame, expected(), 1_000_000_000).is_err());
+    }
+
+    #[test]
+    fn choice_frames_bind_the_numbered_list_digest_and_reject_unbounded_lists() {
+        let content = DisplayContent::Choices {
+            title: "Films for tonight".into(),
+            items: vec![
+                ChoiceItem {
+                    id: "1".into(),
+                    title: "The Lighthouse".into(),
+                    detail: "2019, psychological drama".into(),
+                },
+                ChoiceItem {
+                    id: "2".into(),
+                    title: "Arrival".into(),
+                    detail: String::new(),
+                },
+            ],
+        };
+        // The same canonical tuple Cosmos hashes: title, then [id, title, detail].
+        let canonical = serde_json::json!([
+            "cosmos.choice-list",
+            1,
+            "Films for tonight",
+            [
+                ["1", "The Lighthouse", "2019, psychological drama"],
+                ["2", "Arrival", ""]
+            ]
+        ]);
+        assert_eq!(
+            content_digest(&content),
+            sha256_hex(canonical.to_string().as_bytes())
+        );
+        let frame = render(
+            serde_json::to_value(&content).unwrap(),
+            &content_digest(&content),
+        );
+        let (incoming, _) = parse_frame(&frame, expected(), 1_000_000_000).unwrap();
+        let Incoming::Render(display) = incoming else {
+            panic!("render expected")
+        };
+        assert_eq!(display.content, content);
+        let DisplayContent::Choices { items, .. } = &content else {
+            unreachable!()
+        };
+        let mutate = |f: &dyn Fn(&mut String, &mut Vec<ChoiceItem>)| {
+            let mut title = "Films for tonight".to_owned();
+            let mut items = items.clone();
+            f(&mut title, &mut items);
+            let rejected = DisplayContent::Choices { title, items };
+            let frame = render(
+                serde_json::to_value(&rejected).unwrap(),
+                &content_digest(&rejected),
+            );
+            parse_frame(&frame, expected(), 1_000_000_000).is_err()
+        };
+        assert!(mutate(&|_, items| items.truncate(1)), "one item");
+        assert!(
+            mutate(&|_, items| {
+                for index in 3..=9 {
+                    items.push(ChoiceItem {
+                        id: index.to_string(),
+                        title: "More".into(),
+                        detail: String::new(),
+                    });
+                }
+            }),
+            "nine items"
+        );
+        assert!(mutate(&|_, items| items[1].id = "3".into()), "gap in ids");
+        assert!(mutate(&|title, _| *title = "x".repeat(121)), "long title");
+        assert!(mutate(&|title, _| *title = "  ".into()), "blank title");
+        assert!(
+            mutate(&|_, items| items[0].title = "x".repeat(81)),
+            "long item"
+        );
+        assert!(
+            mutate(&|_, items| items[0].detail = "x".repeat(201)),
+            "long detail"
+        );
+        assert!(
+            mutate(&|_, items| items[0].detail = "a\u{0007}b".into()),
+            "control"
+        );
+        assert!(
+            !mutate(&|_, items| items[0].detail = "x".repeat(200)),
+            "bounded detail"
+        );
+        let unknown = render(
+            serde_json::json!({"kind":"menu","title":"x","items":[]}),
+            &sha256_hex(b"x"),
+        );
+        assert!(parse_frame(&unknown, expected(), 1_000_000_000).is_err());
+    }
+
+    #[test]
+    fn status_frames_name_only_the_kind_of_surface_and_reject_unknown_states() {
+        let stamp = serde_json::json!({"epoch": Uuid::from_u128(9), "sequence": 5, "instanceId": Uuid::from_u128(12)});
+        let status = |body: serde_json::Value| {
+            serde_json::json!({"version": 1, "kind": "status", "stamp": stamp, "status": body})
+                .to_string()
+        };
+        let shown = status(serde_json::json!({
+            "version": 1, "turnId": Uuid::from_u128(8), "generation": 2,
+            "state": "shown", "surface": {"platform": "android"}, "privacy": "shared_room",
+        }));
+        let (incoming, reply) = parse_frame(&shown, expected(), 1_000_000_000).unwrap();
+        let Incoming::Status(parsed) = incoming else {
+            panic!("status expected")
+        };
+        assert_eq!(
+            parsed,
+            TurnStatus {
+                turn_id: Uuid::from_u128(8),
+                generation: 2,
+                state: TurnState::Shown,
+                surface: Some(SurfacePlatform::Android),
+                privacy: Privacy::SharedRoom,
+            }
+        );
+        assert_eq!(
+            reply,
+            serde_json::json!({"version":1,"kind":"received","stamp":stamp}).to_string()
+        );
+        let working = status(serde_json::json!({
+            "version": 1, "turnId": Uuid::from_u128(8), "generation": 2,
+            "state": "working", "surface": null, "privacy": "public",
+        }));
+        assert!(matches!(
+            parse_frame(&working, expected(), 1_000_000_000),
+            Ok((
+                Incoming::Status(TurnStatus {
+                    state: TurnState::Working,
+                    surface: None,
+                    ..
+                }),
+                _
+            ))
+        ));
+        for invalid in [
+            serde_json::json!({"version": 2, "turnId": Uuid::from_u128(8), "generation": 2, "state": "shown", "surface": null, "privacy": "public"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::nil(), "generation": 2, "state": "shown", "surface": null, "privacy": "public"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 0, "state": "shown", "surface": null, "privacy": "public"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 2, "state": "privacy_blocked", "surface": null, "privacy": "public"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 2, "state": "shown", "surface": {"platform": "ios"}, "privacy": "public"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 2, "state": "shown", "surface": {"platform": "android", "surfaceId": Uuid::from_u128(3)}, "privacy": "public"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 2, "state": "shown", "surface": null, "privacy": "sensitive"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 2, "state": "shown", "surface": null, "privacy": "public", "reason": "blocked"}),
+            serde_json::json!({"version": 1, "turnId": Uuid::from_u128(8), "generation": 2, "state": "shown", "privacy": "public"}),
+        ] {
+            assert!(
+                parse_frame(&status(invalid.clone()), expected(), 1_000_000_000).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

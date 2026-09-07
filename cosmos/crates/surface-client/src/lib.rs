@@ -11,11 +11,14 @@ mod transport;
 mod wire;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-pub use display::{AttributionPart, Display, DisplayContent, Invitation, PlaceItem, Privacy};
+pub use display::{
+    AttributionPart, ChoiceItem, Display, DisplayContent, Invitation, PlaceItem, Privacy,
+    SurfacePlatform, TurnState, TurnStatus,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 pub use speech::Speech;
-use state::{Journal, PendingOpen, RpcMessage};
+use state::{ContextKind, ContextWire, Journal, PendingOpen, RpcMessage};
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -24,6 +27,9 @@ use uuid::Uuid;
 
 pub const MAX_JOURNAL_BYTES: usize = 32 * 1024;
 pub const MAX_TEXT_BYTES: usize = 4000;
+/// Screen context bounds, byte-for-byte the runtime's.
+pub const MAX_CONTEXT_APP_BYTES: usize = 64;
+pub const MAX_CONTEXT_BYTES: usize = 8000;
 const MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
 const RECEIPT_MS: i64 = 300_000;
 const LEASE_MS: i64 = 45_000;
@@ -35,6 +41,38 @@ pub enum Platform {
     Linux,
     Android,
     AndroidTv,
+}
+
+impl Platform {
+    /// The wire spelling, also accepted as an explicit request target.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Macos => "macos",
+            Self::Linux => "linux",
+            Self::Android => "android",
+            Self::AndroidTv => "android_tv",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "macos" => Self::Macos,
+            "linux" => Self::Linux,
+            "android" => Self::Android,
+            "android_tv" => Self::AndroidTv,
+            _ => return None,
+        })
+    }
+}
+
+/// Bounded text from this installation's own screen, sent with one request.
+/// It makes the turn private: the reply can appear only on a personal
+/// surface, and the text reaches cognition only under the owner's
+/// screen-context permission for this installation. No Debug: screen text.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ScreenContext {
+    pub app: String,
+    pub text: String,
 }
 
 #[derive(Clone)]
@@ -160,6 +198,8 @@ pub struct Status {
     pub invitation: Option<Invitation>,
     /// The foreground visibility Cosmos last accepted for this connection.
     pub visible: bool,
+    /// The committed status of this installation's own current turn.
+    pub turn_status: Option<TurnStatus>,
 }
 
 /// Callback-free transport completion. Retain this scope outside an owned
@@ -193,6 +233,7 @@ pub struct Client {
     display: tokio::sync::watch::Sender<Option<Display>>,
     speech: tokio::sync::watch::Sender<Option<Speech>>,
     invitation: tokio::sync::watch::Sender<Option<Invitation>>,
+    turn_status: tokio::sync::watch::Sender<Option<TurnStatus>>,
     visible: bool,
 }
 
@@ -259,6 +300,7 @@ impl Client {
             display: tokio::sync::watch::channel(None).0,
             speech: tokio::sync::watch::channel(None).0,
             invitation: tokio::sync::watch::channel(None).0,
+            turn_status: tokio::sync::watch::channel(None).0,
             visible: false,
         })
     }
@@ -268,6 +310,18 @@ impl Client {
     /// reports its unlocked foreground visible to receive the card.
     pub fn invitation_changes(&self) -> tokio::sync::watch::Receiver<Option<Invitation>> {
         self.invitation.subscribe()
+    }
+
+    /// Wakes when the runtime reports a new committed state for the turn
+    /// this installation originated: working, waiting, shown or spoken on
+    /// some kind of surface, nowhere, or unknown. It is outcome evidence the
+    /// ledger already holds, never a reason and never content.
+    pub fn status_changes(&self) -> tokio::sync::watch::Receiver<Option<TurnStatus>> {
+        self.turn_status.subscribe()
+    }
+
+    pub fn turn_status(&self) -> Option<TurnStatus> {
+        self.status().turn_status
     }
 
     pub fn invitation(&self) -> Option<Invitation> {
@@ -316,6 +370,7 @@ impl Client {
         self.display.send_replace(None);
         self.speech.send_replace(None);
         self.invitation.send_replace(None);
+        self.turn_status.send_replace(None);
         self.visible = false;
         tokio::time::timeout(Duration::from_secs(2), self.cleanup.finish())
             .await
@@ -365,6 +420,7 @@ impl Client {
                 .clone()
                 .filter(|invitation| connected && now < invitation.expires_at_ms),
             visible: connected && self.visible,
+            turn_status: self.turn_status.borrow().clone().filter(|_| connected),
         }
     }
 
@@ -489,6 +545,7 @@ impl Client {
         self.display.send_replace(None);
         self.speech.send_replace(None);
         self.invitation.send_replace(None);
+        self.turn_status.send_replace(None);
         self.visible = false;
         self.session = Some(
             transport::Connection::connect(
@@ -499,6 +556,7 @@ impl Client {
                     display: self.display.clone(),
                     speech: self.speech.clone(),
                     invitation: self.invitation.clone(),
+                    status: self.turn_status.clone(),
                 },
             )
             .await?,
@@ -696,8 +754,49 @@ impl Client {
     }
 
     pub async fn send_text(&mut self, text: &str) -> Result<Admission, Error> {
+        self.send_input(text, None, None).await
+    }
+
+    /// Send the current text with the request's own explicit destination:
+    /// the kind of approved screen the user named. Cosmos weighs it exactly
+    /// like a hint from cognition, and the client's wins when both exist.
+    pub async fn send_text_to(
+        &mut self,
+        text: &str,
+        target: Option<Platform>,
+    ) -> Result<Admission, Error> {
+        self.send_input(text, target, None).await
+    }
+
+    /// Send the current text with bounded text from this installation's own
+    /// screen. The turn becomes private; the reply can appear only on a
+    /// personal surface, and the screen text reaches cognition only under the
+    /// owner's screen-context permission for this installation.
+    pub async fn send_text_with_context(
+        &mut self,
+        text: &str,
+        context: ScreenContext,
+        target: Option<Platform>,
+    ) -> Result<Admission, Error> {
+        self.send_input(text, target, Some(context)).await
+    }
+
+    async fn send_input(
+        &mut self,
+        text: &str,
+        target: Option<Platform>,
+        context: Option<ScreenContext>,
+    ) -> Result<Admission, Error> {
         self.flush()?;
         if text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
+            return Err(Error::InvalidInput);
+        }
+        let context = context.map(|context| ContextWire {
+            kind: ContextKind::Screen,
+            app: context.app,
+            text: context.text,
+        });
+        if context.as_ref().is_some_and(|context| !context.valid()) {
             return Err(Error::InvalidInput);
         }
         let stamp = self.stamp(Uuid::new_v4())?;
@@ -705,6 +804,8 @@ impl Client {
             .submit(RpcMessage::Input {
                 stamp,
                 text: text.to_owned(),
+                target,
+                context,
             })
             .await?
         {

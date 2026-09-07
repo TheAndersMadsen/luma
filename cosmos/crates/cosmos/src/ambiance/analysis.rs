@@ -53,6 +53,48 @@ fn text_intent<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+/// One entry of a proposed choice list; the runtime numbers the entries.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChoiceRequest {
+    title: String,
+    #[serde(default)]
+    detail: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChoiceListRequest {
+    title: String,
+    items: Vec<ChoiceRequest>,
+}
+
+/// A choice list is a visual card of two to eight numbered options. Ids are
+/// assigned here in order, never by the model, and every bound is checked
+/// before the proposal exists.
+fn choice_list<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<SemanticIntent, D::Error> {
+    let request = ChoiceListRequest::deserialize(deserializer)?;
+    let intent = SemanticIntent::ChoiceList {
+        title: request.title,
+        items: request
+            .items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| super::policy::Choice {
+                id: (index + 1).to_string(),
+                title: item.title,
+                detail: item.detail,
+            })
+            .collect(),
+    };
+    if !intent.valid() {
+        return Err(serde::de::Error::custom("invalid bounded choice list"));
+    }
+    Ok(intent)
+}
+
 /// A target names the kind of approved screen the current text explicitly
 /// asked for. Cosmos weighs it among eligible surfaces only; it never selects
 /// a surface, grants a capability or reveals which surfaces exist.
@@ -62,6 +104,14 @@ pub enum Proposal {
     Information {
         #[serde(deserialize_with = "text_intent")]
         intent: SemanticIntent,
+        #[serde(default = "conservative_privacy")]
+        privacy: PrivacyClass,
+        #[serde(default)]
+        target: Option<RoutingTarget>,
+    },
+    Choices {
+        #[serde(deserialize_with = "choice_list")]
+        choice_list: SemanticIntent,
         #[serde(default = "conservative_privacy")]
         privacy: PrivacyClass,
         #[serde(default)]
@@ -101,6 +151,7 @@ impl Proposal {
     pub fn target(&self) -> Option<RoutingTarget> {
         match self {
             Self::Information { target, .. }
+            | Self::Choices { target, .. }
             | Self::Analysis { target, .. }
             | Self::Lookup { target, .. }
             | Self::Places { target, .. } => *target,
@@ -114,7 +165,7 @@ pub fn proposal_tool() -> ToolDef {
     let lookup_request = json!({"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512}}});
     ToolDef {
         name: "propose_information".into(),
-        description: "Propose informational text, one bounded larger-model analysis, one web lookup, or one named-place address lookup of the current request. Supply exactly one of intent, analysis, web_lookup or place_lookup; omit the others. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome.".into(),
+        description: "Propose informational text, one numbered choice list, one bounded larger-model analysis, one web lookup, or one named-place address lookup of the current request. Supply exactly one of intent, choice_list, analysis, web_lookup or place_lookup; omit the others. Use choice_list when the user asks for options to pick from (for example films for tonight): a short title and two to eight items with a title and a short detail each; Cosmos numbers them and shows them on a screen, so a later request can name one by number. Each lookup requires the origin's separate provider permission. Web lookup returns a sourced visual card; named-place lookup returns a transient name/address card with attribution. Propose only the query, never a provider, location permission, content reference or claimed result. Add target only when the current text explicitly names the kind of screen to use (the TV, the phone, the Mac, the Linux desktop or the browser); Cosmos weighs it among approved eligible screens and may still choose another. No option grants device authority or proves an outcome.".into(),
         // Provider function schemas prohibit root unions. Optional branches
         // describe the shapes; Proposal's strict parser enforces XOR before
         // any runtime work, including against a provider that ignores the schema.
@@ -123,6 +174,10 @@ pub fn proposal_tool() -> ToolDef {
                 {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"enum":["informational_speech"]},"text":{"type":"string","minLength":1,"maxLength":4000}}},
                 {"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{"kind":{"enum":["visual_text_card"]},"text":{"type":"string","minLength":1,"maxLength":4000}}}
             ]},
+            "choice_list":{"type":"object","additionalProperties":false,"required":["title","items"],"properties":{
+                "title":{"type":"string","minLength":1,"maxLength":120},
+                "items":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["title","detail"],"properties":{"title":{"type":"string","minLength":1,"maxLength":80},"detail":{"type":"string","maxLength":200}}}}
+            }},
             "analysis":{"type":"object","additionalProperties":false,"required":["question","channel"],"properties":{"question":{"type":"string","minLength":1,"maxLength":1000},"channel":{"type":"string","enum":["visual.card","audio.tts"]}}},
             "web_lookup":lookup_request.clone(),
             "place_lookup":lookup_request,
@@ -440,6 +495,128 @@ mod tests {
     }
 
     #[test]
+    fn ambiance_choice_list_proposals_are_numbered_by_the_runtime_and_strictly_bounded() {
+        let Proposal::Choices {
+            choice_list,
+            privacy,
+            target,
+        } = serde_json::from_value(json!({
+            "choice_list": {"title": "Films for tonight", "items": [
+                {"title": "The Lighthouse", "detail": "2019, psychological drama"},
+                {"title": "Arrival"},
+            ]},
+            "privacy": "public",
+            "target": "android_tv",
+        }))
+        .unwrap()
+        else {
+            panic!("choice list proposal")
+        };
+        assert_eq!(privacy, PrivacyClass::Public);
+        assert_eq!(target, Some(RoutingTarget::AndroidTv));
+        let SemanticIntent::ChoiceList { title, items } = &choice_list else {
+            panic!("choice list intent")
+        };
+        assert_eq!(title, "Films for tonight");
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| (item.id.as_str(), item.title.as_str(), item.detail.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "The Lighthouse", "2019, psychological drama"),
+                ("2", "Arrival", "")
+            ]
+        );
+        assert!(choice_list.valid());
+        assert_eq!(choice_list.channel(), Channel::VisualCard);
+        assert_eq!(
+            choice_list.content_digest(),
+            crate::surface_registry::hash(
+                json!([
+                    "cosmos.choice-list",
+                    1,
+                    "Films for tonight",
+                    [
+                        ["1", "The Lighthouse", "2019, psychological drama"],
+                        ["2", "Arrival", ""]
+                    ]
+                ])
+                .to_string()
+                .as_bytes()
+            )
+        );
+        assert_eq!(
+            choice_list.classified_text(),
+            "Films for tonight\nThe Lighthouse\n2019, psychological drama\nArrival\n"
+        );
+        let item = |title: &str| json!({"title": title, "detail": "d"});
+        let two = json!([item("One"), item("Two")]);
+        for (label, list) in [
+            ("one item", json!({"title": "T", "items": [item("One")]})),
+            (
+                "nine items",
+                json!({"title": "T", "items": (1..=9).map(|n| item(&n.to_string())).collect::<Vec<_>>()}),
+            ),
+            ("blank title", json!({"title": " ", "items": two})),
+            (
+                "long title",
+                json!({"title": "x".repeat(121), "items": two}),
+            ),
+            (
+                "long item title",
+                json!({"title": "T", "items": [item(&"x".repeat(81)), item("Two")]}),
+            ),
+            (
+                "blank item title",
+                json!({"title": "T", "items": [item(""), item("Two")]}),
+            ),
+            (
+                "long detail",
+                json!({"title": "T", "items": [{"title": "One", "detail": "x".repeat(201)}, item("Two")]}),
+            ),
+            (
+                "control character",
+                json!({"title": "T\u{0007}", "items": two}),
+            ),
+            (
+                "model-supplied id",
+                json!({"title": "T", "items": [{"id": "7", "title": "One", "detail": ""}, item("Two")]}),
+            ),
+            ("no items", json!({"title": "T"})),
+            (
+                "items not a list",
+                json!({"title": "T", "items": "One, Two"}),
+            ),
+        ] {
+            assert!(
+                serde_json::from_value::<Proposal>(
+                    json!({"choice_list": list, "privacy": "public"})
+                )
+                .is_err(),
+                "{label}"
+            );
+        }
+        assert!(
+            serde_json::from_value::<Proposal>(json!({
+                "choice_list": {"title": "T", "items": two},
+                "intent": {"kind": "visual_text_card", "text": "Here are some films"},
+                "privacy": "public",
+            }))
+            .is_err(),
+            "a list and an answer together are not one proposal"
+        );
+        assert!(
+            serde_json::from_value::<Proposal>(json!({
+                "intent": {"kind": "choice_list", "title": "T", "items": two},
+                "privacy": "public",
+            }))
+            .is_err(),
+            "a list is its own branch, never an intent kind"
+        );
+    }
+
+    #[test]
     fn ambiance_lookup_proposals_require_exactly_one_branch_even_for_null_or_mixed_fields() {
         let branches = [
             (
@@ -452,6 +629,10 @@ mod tests {
             ),
             ("web_lookup", json!({"query":"public facts"})),
             ("place_lookup", json!({"query":"Named Museum, Copenhagen"})),
+            (
+                "choice_list",
+                json!({"title":"Films","items":[{"title":"One","detail":""},{"title":"Two","detail":""}]}),
+            ),
         ];
         assert!(serde_json::from_value::<Proposal>(json!({"privacy":"public"})).is_err());
         // A proposal that omits its privacy estimate is accepted at the

@@ -193,6 +193,9 @@ pub(crate) fn command(action: &Action, card: Option<&Card>) -> Option<Value> {
     }
     let content = match &action.intent {
         SemanticIntent::VisualTextCard { text } => json!({"kind":"text","text":text}),
+        SemanticIntent::ChoiceList { title, items } => {
+            json!({"kind":"choices","title":title,"items":items})
+        }
         SemanticIntent::PlaceAddressCard { content } => {
             let card = card?;
             if card.digest() != content.digest

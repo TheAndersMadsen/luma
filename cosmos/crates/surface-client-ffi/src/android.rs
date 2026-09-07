@@ -2,8 +2,9 @@
 //! journal, foreground state and rendering; the same worker as the C binding
 //! owns admission, retries and RTC fencing. Snapshots cross as bytes.
 use super::{
-    Bindings, CLOSED, Command, CosmosSurface, INVALID_ARGUMENT, MAX_CONFIG, MAX_JOURNAL, MAX_TEXT,
-    OK, config, spawn,
+    Bindings, CLOSED, Command, CosmosSurface, INVALID_ARGUMENT, MAX_CONFIG, MAX_CONTEXT,
+    MAX_CONTEXT_APP, MAX_JOURNAL, MAX_TEXT, OK, config, parse_context, parse_target, parse_text,
+    spawn,
 };
 use cosmos_surface_client::{PlatformError, SecureStore, Signer};
 use jni::{
@@ -229,6 +230,39 @@ pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_setVisi
     enqueue(handle, Command::SetVisible(visible != 0))
 }
 
+/// A required bounded byte-array argument.
+fn required_bytes(env: &JNIEnv, array: &JByteArray, maximum: usize) -> Result<Vec<u8>, jint> {
+    if array.is_null() {
+        return Err(INVALID_ARGUMENT);
+    }
+    let length = env.get_array_length(array).map_err(|_| INVALID_ARGUMENT)?;
+    if length <= 0 || length as usize > maximum {
+        return Err(INVALID_ARGUMENT);
+    }
+    env.convert_byte_array(array).map_err(|_| INVALID_ARGUMENT)
+}
+
+/// An optional bounded byte-array argument: null or empty is absent.
+fn optional_bytes(
+    env: &JNIEnv,
+    array: &JByteArray,
+    maximum: usize,
+) -> Result<Option<Vec<u8>>, jint> {
+    if array.is_null() {
+        return Ok(None);
+    }
+    let length = env.get_array_length(array).map_err(|_| INVALID_ARGUMENT)?;
+    if length <= 0 {
+        return Ok(None);
+    }
+    if length as usize > maximum {
+        return Err(INVALID_ARGUMENT);
+    }
+    env.convert_byte_array(array)
+        .map(Some)
+        .map_err(|_| INVALID_ARGUMENT)
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_sendText(
     env: JNIEnv,
@@ -236,22 +270,59 @@ pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_sendTex
     handle: jlong,
     text: JByteArray,
 ) -> jint {
-    let Ok(length) = env.get_array_length(&text) else {
-        return INVALID_ARGUMENT;
-    };
-    if length <= 0 || length as usize > MAX_TEXT {
-        return INVALID_ARGUMENT;
+    match required_bytes(&env, &text, MAX_TEXT).and_then(|bytes| parse_text(&bytes)) {
+        Ok(text) => enqueue(handle, Command::Text(text)),
+        Err(code) => code,
     }
-    let Ok(bytes) = env.convert_byte_array(&text) else {
-        return INVALID_ARGUMENT;
-    };
-    let Ok(text) = String::from_utf8(bytes) else {
-        return INVALID_ARGUMENT;
-    };
-    if text.trim().is_empty() {
-        return INVALID_ARGUMENT;
+}
+
+/// Send text with the request's own explicit destination. `target` is null,
+/// empty, or exactly one of macos, linux, android or android_tv.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_sendTextTo(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    text: JByteArray,
+    target: JByteArray,
+) -> jint {
+    let text = required_bytes(&env, &text, MAX_TEXT).and_then(|bytes| parse_text(&bytes));
+    let target = optional_bytes(&env, &target, 16).and_then(|bytes| parse_target(bytes.as_deref()));
+    match (text, target) {
+        (Ok(text), Ok(target)) => enqueue(handle, Command::TextTo(text, target)),
+        _ => INVALID_ARGUMENT,
     }
-    enqueue(handle, Command::Text(text))
+}
+
+/// Send text with bounded screen context from this installation: `app` (at
+/// most 64 bytes) and `context` (at most 8000 bytes) are required UTF-8.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_sendTextWithContext(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    text: JByteArray,
+    app: JByteArray,
+    context: JByteArray,
+    target: JByteArray,
+) -> jint {
+    let text = required_bytes(&env, &text, MAX_TEXT).and_then(|bytes| parse_text(&bytes));
+    let context = required_bytes(&env, &app, MAX_CONTEXT_APP).and_then(|app| {
+        required_bytes(&env, &context, MAX_CONTEXT)
+            .and_then(|context| parse_context(&app, &context))
+    });
+    let target = optional_bytes(&env, &target, 16).and_then(|bytes| parse_target(bytes.as_deref()));
+    match (text, context, target) {
+        (Ok(text), Ok(context), Ok(target)) => enqueue(
+            handle,
+            Command::TextWithContext {
+                text,
+                context,
+                target,
+            },
+        ),
+        _ => INVALID_ARGUMENT,
+    }
 }
 
 /// One complete snapshot, or null when the queue is empty or the handle is

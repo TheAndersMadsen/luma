@@ -119,6 +119,66 @@ fn browser_room_render_envelope_enforces_exact_wire_byte_limit_before_send() {
 }
 
 #[test]
+fn native_room_status_frame_names_only_the_kind_of_surface_and_committed_state() {
+    use crate::ambiance::status::{TurnState, TurnStatus};
+    let stamp = InputStamp {
+        epoch: Uuid::from_u128(9),
+        sequence: 4,
+        instance_id: Uuid::from_u128(12),
+    };
+    let status = TurnStatus {
+        turn_id: Uuid::from_u128(8),
+        generation: 2,
+        state: TurnState::Shown,
+        surface: Some(Uuid::from_u128(3)),
+        privacy: crate::ambiance::PrivacyClass::SharedRoom,
+    };
+    let shown: serde_json::Value = serde_json::from_str(&status_frame(
+        &status,
+        serde_json::json!({"platform": "android"}),
+        &stamp,
+    ))
+    .unwrap();
+    assert_eq!(
+        shown,
+        serde_json::json!({
+            "version": 1, "kind": "status",
+            "stamp": {"epoch": Uuid::from_u128(9), "sequence": 4, "instanceId": Uuid::from_u128(12)},
+            "status": {"version": 1, "turnId": Uuid::from_u128(8), "generation": 2,
+                "state": "shown", "surface": {"platform": "android"}, "privacy": "shared_room"},
+        })
+    );
+    assert!(!shown.to_string().contains(&Uuid::from_u128(3).to_string()));
+    let nowhere = TurnStatus {
+        state: TurnState::Nowhere,
+        surface: None,
+        ..status
+    };
+    let nowhere: serde_json::Value =
+        serde_json::from_str(&status_frame(&nowhere, serde_json::Value::Null, &stamp)).unwrap();
+    assert_eq!(nowhere["status"]["state"], "nowhere");
+    assert!(nowhere["status"]["surface"].is_null());
+    assert_eq!(
+        nowhere["status"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        [
+            "generation",
+            "privacy",
+            "state",
+            "surface",
+            "turnId",
+            "version"
+        ],
+        "a status carries no reason"
+    );
+    assert!(TurnState::Shown.terminal() && TurnState::Nowhere.terminal());
+    assert!(!TurnState::Working.terminal() && !TurnState::Waiting.terminal());
+}
+
+#[test]
 fn browser_room_missing_transient_places_never_replays_or_substitutes_text() {
     let model = Arc::new(CardModel::default());
     let runtime = AmbianceRuntime::new(Arc::new(MemoryStore::default()), model.clone(), None);

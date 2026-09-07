@@ -21,6 +21,26 @@ pub enum Channel {
     AudioTts,
 }
 
+pub const MIN_CHOICES: usize = 2;
+pub const MAX_CHOICES: usize = 8;
+pub const MAX_CHOICE_TITLE_BYTES: usize = 120;
+pub const MAX_CHOICE_ITEM_TITLE_BYTES: usize = 80;
+pub const MAX_CHOICE_DETAIL_BYTES: usize = 200;
+
+/// One numbered entry of a choice list. The runtime assigns ids `1`..`8` in
+/// list order so a later "number two" names exactly this entry.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Choice {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+}
+
+fn choice_text(value: &str, maximum: usize) -> bool {
+    !value.trim().is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
+}
+
 /// Semantic proposals have no device-operation, permission, or grant fields.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -28,18 +48,57 @@ pub enum SemanticIntent {
     InformationalSpeech { text: String },
     VisualTextCard { text: String },
     PlaceAddressCard { content: super::visual::Reference },
+    ChoiceList { title: String, items: Vec<Choice> },
 }
 impl SemanticIntent {
     pub fn text(&self) -> &str {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text,
-            Self::PlaceAddressCard { .. } => "",
+            Self::PlaceAddressCard { .. } | Self::ChoiceList { .. } => "",
+        }
+    }
+    /// Every model-authored word of the proposal, for the runtime's own
+    /// privacy classification; place cards carry provider content only.
+    pub fn classified_text(&self) -> String {
+        match self {
+            Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text.clone(),
+            Self::PlaceAddressCard { .. } => String::new(),
+            Self::ChoiceList { title, items } => {
+                let mut text = title.clone();
+                for item in items {
+                    text.push('\n');
+                    text.push_str(&item.title);
+                    text.push('\n');
+                    text.push_str(&item.detail);
+                }
+                text
+            }
+        }
+    }
+    /// Whether the durable action still carries content to clear.
+    pub fn has_payload(&self) -> bool {
+        match self {
+            Self::InformationalSpeech { text } | Self::VisualTextCard { text } => !text.is_empty(),
+            Self::PlaceAddressCard { .. } => false,
+            Self::ChoiceList { title, items } => !title.is_empty() || !items.is_empty(),
+        }
+    }
+    pub fn clear_payload(&mut self) {
+        match self {
+            Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text.clear(),
+            Self::PlaceAddressCard { .. } => {}
+            Self::ChoiceList { title, items } => {
+                title.clear();
+                items.clear();
+            }
         }
     }
     pub fn channel(&self) -> Channel {
         match self {
             Self::InformationalSpeech { .. } => Channel::AudioTts,
-            Self::VisualTextCard { .. } | Self::PlaceAddressCard { .. } => Channel::VisualCard,
+            Self::VisualTextCard { .. }
+            | Self::PlaceAddressCard { .. }
+            | Self::ChoiceList { .. } => Channel::VisualCard,
         }
     }
     pub fn valid(&self) -> bool {
@@ -48,6 +107,16 @@ impl SemanticIntent {
             Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
                 !self.text().trim().is_empty() && self.text().len() <= 4000
             }
+            Self::ChoiceList { title, items } => {
+                choice_text(title, MAX_CHOICE_TITLE_BYTES)
+                    && (MIN_CHOICES..=MAX_CHOICES).contains(&items.len())
+                    && items.iter().enumerate().all(|(index, item)| {
+                        item.id == (index + 1).to_string()
+                            && choice_text(&item.title, MAX_CHOICE_ITEM_TITLE_BYTES)
+                            && item.detail.len() <= MAX_CHOICE_DETAIL_BYTES
+                            && !item.detail.chars().any(char::is_control)
+                    })
+            }
         }
     }
     pub fn content_digest(&self) -> String {
@@ -55,6 +124,14 @@ impl SemanticIntent {
             Self::PlaceAddressCard { content } => content.digest.clone(),
             Self::InformationalSpeech { .. } | Self::VisualTextCard { .. } => {
                 crate::surface_registry::hash(self.text().as_bytes())
+            }
+            Self::ChoiceList { title, items } => {
+                let items: Vec<_> = items
+                    .iter()
+                    .map(|item| serde_json::json!([item.id, item.title, item.detail]))
+                    .collect();
+                let canonical = serde_json::json!(["cosmos.choice-list", 1, title, items]);
+                crate::surface_registry::hash(canonical.to_string().as_bytes())
             }
         }
     }

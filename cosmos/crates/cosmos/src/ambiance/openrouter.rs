@@ -123,20 +123,25 @@ fn normalize_arguments(arguments: &str) -> Option<String> {
     let object = value.as_object_mut()?;
     let nested = object.get("intent").and_then(|intent| {
         let kind = intent.get("kind")?.as_str()?;
-        if !matches!(kind, "web_lookup" | "place_lookup") {
-            return None;
-        }
-        Some((kind.to_owned(), intent.get("query")?.clone()))
+        let branch = match kind {
+            "web_lookup" | "place_lookup" => json!({"query": intent.get("query")?.clone()}),
+            "choice_list" => json!({
+                "title": intent.get("title")?.clone(),
+                "items": intent.get("items")?.clone(),
+            }),
+            _ => return None,
+        };
+        Some((kind.to_owned(), branch))
     });
     let mut normalized = false;
-    if let Some((kind, query)) = nested {
+    if let Some((kind, branch)) = nested {
         object.remove("intent");
         if !object.contains_key(&kind) {
-            object.insert(kind, json!({"query": query}));
+            object.insert(kind, branch);
         }
         normalized = true;
     }
-    if ["analysis", "web_lookup", "place_lookup"]
+    if ["analysis", "web_lookup", "place_lookup", "choice_list"]
         .iter()
         .any(|branch| object.contains_key(*branch))
         && object.remove("intent").is_some()

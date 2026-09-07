@@ -3,8 +3,8 @@
 #[cfg(target_os = "android")]
 mod android;
 use cosmos_surface_client::{
-    Client, Config, Display, Error, OperationKind, Pending, Platform, PlatformError, SecureStore,
-    Signer, Speech, TransportShutdown,
+    Client, Config, Display, Error, OperationKind, Pending, Platform, PlatformError, ScreenContext,
+    SecureStore, Signer, Speech, TransportShutdown, TurnStatus,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -37,6 +37,8 @@ const PANIC: i32 = -4;
 const UNAVAILABLE: i32 = -5;
 const MAX_CONFIG: usize = 2048;
 const MAX_TEXT: usize = 4000;
+const MAX_CONTEXT_APP: usize = cosmos_surface_client::MAX_CONTEXT_APP_BYTES;
+const MAX_CONTEXT: usize = cosmos_surface_client::MAX_CONTEXT_BYTES;
 const MAX_JOURNAL: usize = 32768;
 const MAX_EVENT: usize = 16384;
 const COMMAND_CAPACITY: usize = 16;
@@ -225,12 +227,64 @@ fn config(bytes: &[u8]) -> Result<Config, i32> {
 enum Command {
     Connect,
     Text(String),
+    TextTo(String, Option<Platform>),
+    TextWithContext {
+        text: String,
+        context: ScreenContext,
+        target: Option<Platform>,
+    },
     Retry,
     Cancel,
     SetVisible(bool),
     Acknowledge,
     AcknowledgeSpeech,
     Disconnect,
+}
+
+/// The explicit destination a binding passed: absent, or exactly one of the
+/// wire platform names. Anything else is an argument error, never ignored.
+fn parse_target(bytes: Option<&[u8]>) -> Result<Option<Platform>, i32> {
+    match bytes {
+        None => Ok(None),
+        Some([]) => Ok(None),
+        Some(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(Platform::parse)
+            .map(Some)
+            .ok_or(INVALID_ARGUMENT),
+    }
+}
+
+/// Bounded, non-blank UTF-8 request text from a binding.
+fn parse_text(bytes: &[u8]) -> Result<String, i32> {
+    if bytes.is_empty() || bytes.len() > MAX_TEXT {
+        return Err(INVALID_ARGUMENT);
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| INVALID_ARGUMENT)?;
+    if text.trim().is_empty() {
+        return Err(INVALID_ARGUMENT);
+    }
+    Ok(text.to_owned())
+}
+
+/// Bounded screen context from a binding; the client rechecks every bound.
+fn parse_context(app: &[u8], context: &[u8]) -> Result<ScreenContext, i32> {
+    if app.is_empty()
+        || app.len() > MAX_CONTEXT_APP
+        || context.is_empty()
+        || context.len() > MAX_CONTEXT
+    {
+        return Err(INVALID_ARGUMENT);
+    }
+    let app = std::str::from_utf8(app).map_err(|_| INVALID_ARGUMENT)?;
+    let text = std::str::from_utf8(context).map_err(|_| INVALID_ARGUMENT)?;
+    if app.trim().is_empty() || text.trim().is_empty() {
+        return Err(INVALID_ARGUMENT);
+    }
+    Ok(ScreenContext {
+        app: app.to_owned(),
+        text: text.to_owned(),
+    })
 }
 
 /// The current spoken reply's audio, shared with the platform's own buffer
@@ -385,7 +439,8 @@ fn display(value: Option<&Display>) -> Value {
                 .map(|credit| cosmos_surface_client::display::parse_attribution(credit))
                 .collect::<Result<Vec<_>, _>>()
                 .ok(),
-            cosmos_surface_client::DisplayContent::Text { .. } => Some(Vec::new()),
+            cosmos_surface_client::DisplayContent::Text { .. }
+            | cosmos_surface_client::DisplayContent::Choices { .. } => Some(Vec::new()),
         };
         let Some(credits) = credits else {
             return Value::Null;
@@ -412,6 +467,20 @@ fn invitation(value: Option<&cosmos_surface_client::Invitation>) -> Value {
             "origin": invitation.origin,
             "privacy": invitation.privacy,
             "expiresAtMs": invitation.expires_at_ms,
+        })
+    })
+}
+
+/// The committed state of this installation's own turn. It names only the
+/// kind of surface involved and the class the status is expressed at.
+fn status(value: Option<&TurnStatus>) -> Value {
+    value.map_or(Value::Null, |status| {
+        json!({
+            "turnId": status.turn_id.to_string(),
+            "generation": status.generation,
+            "state": status.state,
+            "surfacePlatform": status.surface.map(|platform| platform.as_str()),
+            "privacy": status.privacy,
         })
     })
 }
@@ -459,6 +528,7 @@ fn snapshot(
         "display": status.as_ref().map_or(Value::Null, |s| display(s.display.as_ref())),
         "speech": status.as_ref().map_or(Value::Null, |s| speech(s.speech.as_ref())),
         "invitation": status.as_ref().map_or(Value::Null, |s| invitation(s.invitation.as_ref())),
+        "status": status.as_ref().map_or(Value::Null, |s| self::status(s.turn_status.as_ref())),
     })
 }
 
@@ -511,6 +581,7 @@ async fn run(
     let mut displays = client.display_changes();
     let mut speeches = client.speech_changes();
     let mut invitations = client.invitation_changes();
+    let mut statuses = client.status_changes();
     // The platform's last requested foreground state. It is re-reported after
     // every new connection because visibility lives on the connection.
     let mut wanted_visible = false;
@@ -520,6 +591,7 @@ async fn run(
         Display,
         Speech,
         Invitation,
+        Status,
     }
     let publish_speech = |client: &Client| {
         *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = client
@@ -536,6 +608,7 @@ async fn run(
             changed = displays.changed() => { if changed.is_err() { break; } Wake::Display }
             changed = speeches.changed() => { if changed.is_err() { break; } Wake::Speech }
             changed = invitations.changed() => { if changed.is_err() { break; } Wake::Invitation }
+            changed = statuses.changed() => { if changed.is_err() { break; } Wake::Status }
             _ = heartbeat.tick() => Wake::Heartbeat,
             command = commands.recv() => match command { Some(command) => Wake::Command(command), None => break },
         };
@@ -561,6 +634,13 @@ async fn run(
                 push(
                     &events,
                     snapshot(Some(&client), &descriptor, "invitation", None),
+                );
+                continue;
+            }
+            Wake::Status => {
+                push(
+                    &events,
+                    snapshot(Some(&client), &descriptor, "status", None),
                 );
                 continue;
             }
@@ -594,6 +674,8 @@ async fn run(
         let operation = match &command {
             Some(Command::Connect) => "connect",
             Some(Command::Text(_)) => "send_text",
+            Some(Command::TextTo(..)) => "send_text_to",
+            Some(Command::TextWithContext { .. }) => "send_text_with_context",
             Some(Command::Retry) => "retry_pending",
             Some(Command::Cancel) => "cancel",
             Some(Command::SetVisible(_)) => "set_visible",
@@ -622,6 +704,10 @@ async fn run(
                         connected
                     }
                     Some(Command::Text(text)) => client.send_text(&text).await.map(|_| ()),
+                    Some(Command::TextTo(text, target)) => client.send_text_to(&text, target).await.map(|_| ()),
+                    Some(Command::TextWithContext { text, context, target }) => {
+                        client.send_text_with_context(&text, context, target).await.map(|_| ())
+                    }
                     Some(Command::Retry) => client.retry_pending().await.map(|_| ()),
                     Some(Command::Cancel) => match client.status().last_admission {
                         Some(value) => client.cancel(value).await,
@@ -926,14 +1012,112 @@ pub unsafe extern "C" fn cosmos_surface_send_text(
             return INVALID_ARGUMENT;
         }
         // SAFETY: Length is bounded and caller guarantees a live readable slice.
-        let bytes = unsafe { std::slice::from_raw_parts(text, length) };
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return INVALID_ARGUMENT;
+        let text = match parse_text(unsafe { std::slice::from_raw_parts(text, length) }) {
+            Ok(text) => text,
+            Err(code) => return code,
         };
-        if text.trim().is_empty() {
+        unsafe { enqueue(surface, Command::Text(text)) }
+    })
+}
+
+/// Borrow an optional bounded byte argument: NULL or zero length is absent.
+unsafe fn optional_bytes<'a>(
+    bytes: *const u8,
+    length: usize,
+    maximum: usize,
+) -> Result<Option<&'a [u8]>, i32> {
+    if bytes.is_null() || length == 0 {
+        return Ok(None);
+    }
+    if length > maximum {
+        return Err(INVALID_ARGUMENT);
+    }
+    // SAFETY: The caller guarantees a live readable slice of `length` bytes.
+    Ok(Some(unsafe { std::slice::from_raw_parts(bytes, length) }))
+}
+
+/// # Safety
+/// The handle must be live; text and target must be readable for their lengths
+/// until return. A NULL target with zero length means no explicit destination.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_send_text_to(
+    surface: *mut CosmosSurface,
+    text: *const u8,
+    length: usize,
+    target: *const u8,
+    target_length: usize,
+) -> i32 {
+    boundary(|| {
+        if text.is_null() || length == 0 || length > MAX_TEXT {
             return INVALID_ARGUMENT;
         }
-        unsafe { enqueue(surface, Command::Text(text.to_owned())) }
+        // SAFETY: Lengths are bounded and the caller guarantees live slices.
+        let (text, target) = unsafe {
+            (
+                parse_text(std::slice::from_raw_parts(text, length)),
+                optional_bytes(target, target_length, 16).and_then(parse_target),
+            )
+        };
+        let (Ok(text), Ok(target)) = (text, target) else {
+            return INVALID_ARGUMENT;
+        };
+        unsafe { enqueue(surface, Command::TextTo(text, target)) }
+    })
+}
+
+/// # Safety
+/// The handle must be live; text, app, context and target must be readable for
+/// their lengths until return. App and context are required; a NULL target
+/// with zero length means no explicit destination.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_send_text_with_context(
+    surface: *mut CosmosSurface,
+    text: *const u8,
+    length: usize,
+    app: *const u8,
+    app_length: usize,
+    context: *const u8,
+    context_length: usize,
+    target: *const u8,
+    target_length: usize,
+) -> i32 {
+    boundary(|| {
+        if text.is_null()
+            || length == 0
+            || length > MAX_TEXT
+            || app.is_null()
+            || app_length == 0
+            || app_length > MAX_CONTEXT_APP
+            || context.is_null()
+            || context_length == 0
+            || context_length > MAX_CONTEXT
+        {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: Lengths are bounded and the caller guarantees live slices.
+        let (text, context, target) = unsafe {
+            (
+                parse_text(std::slice::from_raw_parts(text, length)),
+                parse_context(
+                    std::slice::from_raw_parts(app, app_length),
+                    std::slice::from_raw_parts(context, context_length),
+                ),
+                optional_bytes(target, target_length, 16).and_then(parse_target),
+            )
+        };
+        let (Ok(text), Ok(context), Ok(target)) = (text, context, target) else {
+            return INVALID_ARGUMENT;
+        };
+        unsafe {
+            enqueue(
+                surface,
+                Command::TextWithContext {
+                    text,
+                    context,
+                    target,
+                },
+            )
+        }
     })
 }
 

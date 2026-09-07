@@ -1,5 +1,5 @@
 use super::*;
-use crate::state::{Control, PendingRpc, Stamp};
+use crate::state::{ContextKind, ContextWire, Control, PendingRpc, Stamp};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use serde_json::{Value, json};
 use std::sync::{
@@ -118,6 +118,16 @@ fn connected_journal() -> Journal {
 }
 
 fn stage(journal: &mut Journal, text: &str, now: i64) -> Result<(), Error> {
+    stage_input(journal, text, None, None, now)
+}
+
+fn stage_input(
+    journal: &mut Journal,
+    text: &str,
+    target: Option<Platform>,
+    context: Option<ScreenContext>,
+    now: i64,
+) -> Result<(), Error> {
     let message = RpcMessage::Input {
         stamp: Stamp {
             epoch: journal.epoch,
@@ -125,6 +135,12 @@ fn stage(journal: &mut Journal, text: &str, now: i64) -> Result<(), Error> {
             instance_id: Uuid::new_v4(),
         },
         text: text.into(),
+        target,
+        context: context.map(|context| ContextWire {
+            kind: ContextKind::Screen,
+            app: context.app,
+            text: context.text,
+        }),
     };
     let open = journal.open.as_ref().unwrap();
     journal.stage(
@@ -133,6 +149,153 @@ fn stage(journal: &mut Journal, text: &str, now: i64) -> Result<(), Error> {
         open.runtime_epoch.unwrap(),
         open.connection.as_ref().unwrap().incarnation,
     )
+}
+
+#[test]
+fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
+    let mut journal = connected_journal();
+    stage_input(
+        &mut journal,
+        "Play trailer for number two",
+        Some(Platform::AndroidTv),
+        Some(ScreenContext {
+            app: "Settings".into(),
+            text: "Wi-Fi\nConnected to Home".into(),
+        }),
+        NOW,
+    )
+    .unwrap();
+    let wire = serde_json::to_value(&journal.pending.as_ref().unwrap().message).unwrap();
+    assert_eq!(wire["kind"], "input");
+    assert_eq!(wire["text"], "Play trailer for number two");
+    assert_eq!(wire["target"], "android_tv");
+    assert_eq!(
+        wire["context"],
+        json!({"kind":"screen","app":"Settings","text":"Wi-Fi\nConnected to Home"})
+    );
+    assert_eq!(wire.as_object().unwrap().len(), 5);
+    // The pending request survives the journal exactly, so an exact retry
+    // replays the same target and context.
+    let restored = Journal::load(
+        &journal.bytes().unwrap(),
+        &config(),
+        &TestSigner::new().public_key_sec1().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.pending.as_ref().unwrap().message).unwrap(),
+        wire
+    );
+    // Plain text serializes exactly as before: no target or context keys.
+    let mut plain = connected_journal();
+    stage(&mut plain, "plain", NOW).unwrap();
+    let plain = serde_json::to_value(&plain.pending.as_ref().unwrap().message).unwrap();
+    assert_eq!(plain.as_object().unwrap().len(), 3);
+    for (label, context) in [
+        (
+            "blank app",
+            ScreenContext {
+                app: " ".into(),
+                text: "x".into(),
+            },
+        ),
+        (
+            "long app",
+            ScreenContext {
+                app: "x".repeat(MAX_CONTEXT_APP_BYTES + 1),
+                text: "x".into(),
+            },
+        ),
+        (
+            "blank text",
+            ScreenContext {
+                app: "App".into(),
+                text: " \n".into(),
+            },
+        ),
+        (
+            "long text",
+            ScreenContext {
+                app: "App".into(),
+                text: "x".repeat(MAX_CONTEXT_BYTES + 1),
+            },
+        ),
+        (
+            "control text",
+            ScreenContext {
+                app: "App".into(),
+                text: "a\u{0007}b".into(),
+            },
+        ),
+    ] {
+        let mut journal = connected_journal();
+        let before = journal.bytes().unwrap();
+        assert_eq!(
+            stage_input(&mut journal, "request", None, Some(context), NOW),
+            Err(Error::InvalidInput),
+            "{label}"
+        );
+        assert_eq!(journal.bytes().unwrap(), before, "{label}");
+    }
+    // Both maxima together still fit the transport envelope, so a full request
+    // about a full screen is never refused for its size alone.
+    let mut journal = connected_journal();
+    stage_input(
+        &mut journal,
+        &"x".repeat(MAX_TEXT_BYTES),
+        None,
+        Some(ScreenContext {
+            app: "App".into(),
+            text: "y".repeat(MAX_CONTEXT_BYTES),
+        }),
+        NOW,
+    )
+    .unwrap();
+    // JSON escaping is what overruns it: quotation marks in screen text cost
+    // two bytes each on the wire, and the message is refused before it claims
+    // a durable sequence.
+    let mut journal = connected_journal();
+    let before = journal.bytes().unwrap();
+    assert_eq!(
+        stage_input(
+            &mut journal,
+            &"x".repeat(MAX_TEXT_BYTES),
+            None,
+            Some(ScreenContext {
+                app: "App".into(),
+                text: "\"".repeat(MAX_CONTEXT_BYTES),
+            }),
+            NOW
+        ),
+        Err(Error::InvalidInput)
+    );
+    assert_eq!(journal.bytes().unwrap(), before);
+    let mut journal = connected_journal();
+    stage_input(
+        &mut journal,
+        "short request",
+        None,
+        Some(ScreenContext {
+            app: "App".into(),
+            text: "y".repeat(MAX_CONTEXT_BYTES),
+        }),
+        NOW,
+    )
+    .unwrap();
+    // A journal with an unknown context kind never loads as a fresh one.
+    let mut value: Value = serde_json::from_slice(&journal.bytes().unwrap()).unwrap();
+    value["pending"]["message"]["context"]["kind"] = json!("clipboard");
+    assert!(
+        Journal::load(
+            &serde_json::to_vec(&value).unwrap(),
+            &config(),
+            &TestSigner::new().public_key_sec1().unwrap()
+        )
+        .is_err()
+    );
+    assert_eq!(Platform::parse("android_tv"), Some(Platform::AndroidTv));
+    assert_eq!(Platform::parse("browser"), None);
+    assert_eq!(Platform::AndroidTv.as_str(), "android_tv");
 }
 
 fn admission(pending: &PendingRpc) -> Admission {

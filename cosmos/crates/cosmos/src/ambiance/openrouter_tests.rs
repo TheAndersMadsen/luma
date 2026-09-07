@@ -135,6 +135,31 @@ fn openrouter_proposal_normalizes_nested_and_combined_lookups() {
     );
     assert!(with(r#"{"intent":{"kind":"bogus","text":"x"},"privacy":"public"}"#).is_err());
     assert!(with(r#"{"intent":{"kind":"place_lookup"},"privacy":"public"}"#).is_err());
+    // A choice list nested inside intent is lifted, and a list next to an
+    // unsourced answer keeps the list; a list without items is still wrong.
+    let list = r#"{"title":"Films for tonight","items":[{"title":"Arrival","detail":"2016"},{"title":"Heat","detail":"1995"}]}"#;
+    let lifted = with(
+        r#"{"intent":{"kind":"choice_list","title":"Films for tonight","items":[{"title":"Arrival","detail":"2016"},{"title":"Heat","detail":"1995"}]},"privacy":"public","target":"android_tv"}"#,
+    )
+    .unwrap();
+    let lifted: Value = serde_json::from_str(&lifted).unwrap();
+    let expected_list: Value = serde_json::from_str(list).unwrap();
+    assert_eq!(
+        lifted,
+        json!({"choice_list":expected_list,"privacy":"public","target":"android_tv"})
+    );
+    let combined = with(&format!(
+        r#"{{"intent":{{"kind":"visual_text_card","text":"Here are two films."}},"choice_list":{list},"privacy":"public"}}"#
+    ))
+    .unwrap();
+    let combined: Value = serde_json::from_str(&combined).unwrap();
+    assert_eq!(
+        combined,
+        json!({"choice_list":expected_list,"privacy":"public"})
+    );
+    assert!(
+        with(r#"{"intent":{"kind":"choice_list","title":"Films"},"privacy":"public"}"#).is_err()
+    );
 }
 
 #[tokio::test]

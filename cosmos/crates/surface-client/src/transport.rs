@@ -3,7 +3,7 @@
 //! received frame is never evidence that it rendered.
 use crate::{
     Error,
-    display::{self, Display, Expected, Incoming, Invitation},
+    display::{self, Display, Expected, Incoming, Invitation, TurnStatus},
     speech::{Assembler, Speech},
     wire::RoomResponse,
 };
@@ -168,6 +168,7 @@ pub(crate) struct Outputs {
     pub(crate) display: watch::Sender<Option<Display>>,
     pub(crate) speech: watch::Sender<Option<Speech>>,
     pub(crate) invitation: watch::Sender<Option<Invitation>>,
+    pub(crate) status: watch::Sender<Option<TurnStatus>>,
 }
 
 impl Outputs {
@@ -175,6 +176,7 @@ impl Outputs {
         self.display.send_replace(None);
         self.speech.send_replace(None);
         self.invitation.send_replace(None);
+        self.status.send_replace(None);
     }
 }
 
@@ -205,6 +207,10 @@ fn answer(
             },
             Ok((Incoming::Invite(invitation), reply)) => {
                 outputs.invitation.send_replace(invitation);
+                Ok(reply)
+            }
+            Ok((Incoming::Status(status), reply)) => {
+                outputs.status.send_replace(Some(status));
                 Ok(reply)
             }
             Ok((Incoming::Clear(action_id), reply)) => {

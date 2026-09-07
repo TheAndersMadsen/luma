@@ -68,8 +68,50 @@ pub(crate) struct PendingRpc {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub(crate) enum RpcMessage {
-    Input { stamp: Stamp, text: String },
-    Control { stamp: Stamp, control: Control },
+    Input {
+        stamp: Stamp,
+        text: String,
+        /// The request's own explicit destination; an exact retry replays it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<Platform>,
+        /// Bounded text from this installation's own screen; makes the turn
+        /// private and is journaled with the request until its receipt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<ContextWire>,
+    },
+    Control {
+        stamp: Stamp,
+        control: Control,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ContextKind {
+    Screen,
+}
+
+/// The wire and journal form of a `ScreenContext`: `{"kind":"screen",...}`.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ContextWire {
+    pub(crate) kind: ContextKind,
+    pub(crate) app: String,
+    pub(crate) text: String,
+}
+
+impl ContextWire {
+    pub(crate) fn valid(&self) -> bool {
+        !self.app.trim().is_empty()
+            && self.app.len() <= crate::MAX_CONTEXT_APP_BYTES
+            && !self.app.chars().any(char::is_control)
+            && !self.text.trim().is_empty()
+            && self.text.len() <= crate::MAX_CONTEXT_BYTES
+            && !self
+                .text
+                .chars()
+                .any(|c| c.is_control() && !c.is_whitespace())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -387,7 +429,11 @@ impl RpcMessage {
             return Err(Error::InvalidInput);
         }
         match self {
-            Self::Input { text, .. } if text.trim().is_empty() || text.len() > MAX_TEXT_BYTES => {
+            Self::Input { text, context, .. }
+                if text.trim().is_empty()
+                    || text.len() > MAX_TEXT_BYTES
+                    || context.as_ref().is_some_and(|context| !context.valid()) =>
+            {
                 Err(Error::InvalidInput)
             }
             Self::Control {

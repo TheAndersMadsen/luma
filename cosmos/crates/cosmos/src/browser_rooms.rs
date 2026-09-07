@@ -3,7 +3,12 @@
 use crate::{
     ambiance::{
         BrowserControl, InputStamp, NativeProof, RoomProof, RuntimeOperation, RuntimeResult,
-        TurnFence, runtime::AmbianceRuntime, speech::SpeechTarget,
+        TurnFence,
+        policy::RoutingTarget,
+        runtime::{AmbianceRuntime, RoomInput},
+        screen::ScreenContext,
+        speech::SpeechTarget,
+        status::TurnStatus,
     },
     surface_registry::{Mutation, hash},
 };
@@ -306,6 +311,13 @@ enum Message {
     Input {
         stamp: InputStamp,
         text: String,
+        /// The request's own explicit destination, weighed exactly like the
+        /// model's target and outranking it.
+        #[serde(default)]
+        target: Option<RoutingTarget>,
+        /// Bounded text from the origin's own screen; makes the turn private.
+        #[serde(default)]
+        context: Option<ScreenContext>,
     },
     Control {
         stamp: InputStamp,
@@ -431,10 +443,14 @@ async fn deliver(
     let mut speaking: BTreeMap<(String, Uuid), tokio::task::JoinHandle<()>> = BTreeMap::new();
     // The invitation each personal member last received (None = withdrawn).
     let mut invited: BTreeMap<String, Option<Uuid>> = BTreeMap::new();
+    // The turn status each native origin last received; a terminal state
+    // ends a turn's status frames.
+    let mut statused: BTreeMap<String, TurnStatus> = BTreeMap::new();
     loop {
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
         invited.retain(|identity, _| members.contains_key(identity));
+        statused.retain(|identity, _| members.contains_key(identity));
         speaking.retain(|(identity, _), job| {
             if !members.contains_key(identity) {
                 job.abort();
@@ -532,6 +548,53 @@ async fn deliver(
                         continue 'member;
                     }
                     invited.insert(identity.clone(), current);
+                }
+                // The origin hears its turn's committed outcome once per
+                // state change: working, waiting, shown/spoken elsewhere,
+                // nowhere or unknown. It never learns why nothing took it.
+                let status = match tokio::time::timeout(
+                    ADMISSION_TIMEOUT,
+                    runtime.store.runtime(
+                        principal,
+                        RuntimeOperation::TurnStatus {
+                            connection: connection.clone(),
+                        },
+                    ),
+                )
+                .await
+                .map_err(|_| Error::Unavailable)?
+                {
+                    Ok(RuntimeResult::TurnStatus(status)) => status,
+                    Err(
+                        crate::ambiance::RuntimeError::InvalidOrigin
+                        | crate::ambiance::RuntimeError::Stale
+                        | crate::ambiance::RuntimeError::NotFound,
+                    ) => None,
+                    _ => return Err(Error::Unavailable),
+                };
+                if let Some(status) = status
+                    && statused.get(identity).is_none_or(|last| {
+                        !(last.turn_id == status.turn_id
+                            && last.generation == status.generation
+                            && (last.state.terminal() || *last == status))
+                    })
+                {
+                    sequence = sequence
+                        .checked_add(1)
+                        .filter(|n| *n <= 9_007_199_254_740_991)
+                        .ok_or(Error::Unavailable)?;
+                    let stamp = InputStamp {
+                        epoch,
+                        sequence,
+                        instance_id: Uuid::new_v4(),
+                    };
+                    let payload = status_payload(runtime, principal, &status, &stamp).await;
+                    if !received(session.invoke(identity, payload).await, &stamp) {
+                        leave(runtime, principal, &member.proof).await;
+                        participants.lock().await.remove(identity);
+                        continue 'member;
+                    }
+                    statused.insert(identity.clone(), status);
                 }
                 for action in actions.iter().filter(|a| {
                     a.channel == Channel::AudioTts && a.status == ActionStatus::Proposed
@@ -827,6 +890,24 @@ async fn speak_frames(
     }
 }
 
+/// The kind of surface a record is, as the wire names it. A surface that no
+/// longer exists is `unknown`; nothing else about it is named.
+async fn platform_label(runtime: &AmbianceRuntime, principal: &str, surface_id: Uuid) -> String {
+    match runtime
+        .store
+        .surface(principal, surface_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|surface| surface.binding)
+    {
+        Some(crate::surface_registry::Binding::Native { platform, .. }) => platform,
+        Some(crate::surface_registry::Binding::Pin { .. }) => "pin".to_owned(),
+        Some(crate::surface_registry::Binding::Browser) => "browser".to_owned(),
+        None => "unknown".to_owned(),
+    }
+}
+
 /// The invite frame tells a personal member that a private card is waiting for
 /// its unlocked foreground: the member's own bound connection, the class, the
 /// expiry and which kind of surface asked. It never carries content; `null`
@@ -841,19 +922,7 @@ async fn invite_payload(
     let invitation = match invitation {
         None => serde_json::Value::Null,
         Some(invitation) => {
-            let origin = match runtime
-                .store
-                .surface(principal, invitation.origin_surface)
-                .await
-                .ok()
-                .flatten()
-                .map(|surface| surface.binding)
-            {
-                Some(crate::surface_registry::Binding::Native { platform, .. }) => platform,
-                Some(crate::surface_registry::Binding::Pin { .. }) => "pin".to_owned(),
-                Some(crate::surface_registry::Binding::Browser) => "browser".to_owned(),
-                None => "unknown".to_owned(),
-            };
+            let origin = platform_label(runtime, principal, invitation.origin_surface).await;
             serde_json::json!({
                 "version": 1,
                 "id": invitation.id,
@@ -867,6 +936,41 @@ async fn invite_payload(
     };
     serde_json::json!({"version":1,"kind":"invite","stamp":stamp,"invitation":invitation})
         .to_string()
+}
+
+/// The status frame tells the turn's origin what the ledger committed: the
+/// state, the kind of surface involved and the class the status is expressed
+/// at. It never carries content, a surface identity or a reason.
+async fn status_payload(
+    runtime: &AmbianceRuntime,
+    principal: &str,
+    status: &TurnStatus,
+    stamp: &InputStamp,
+) -> String {
+    let surface = match status.surface {
+        Some(surface_id) => {
+            serde_json::json!({"platform": platform_label(runtime, principal, surface_id).await})
+        }
+        None => serde_json::Value::Null,
+    };
+    status_frame(status, surface, stamp)
+}
+
+fn status_frame(status: &TurnStatus, surface: serde_json::Value, stamp: &InputStamp) -> String {
+    serde_json::json!({
+        "version": 1,
+        "kind": "status",
+        "stamp": stamp,
+        "status": {
+            "version": 1,
+            "turnId": status.turn_id,
+            "generation": status.generation,
+            "state": status.state,
+            "surface": surface,
+            "privacy": status.privacy,
+        },
+    })
+    .to_string()
 }
 
 fn render_payload(
@@ -939,8 +1043,20 @@ async fn coordinate(
             return;
         }
     };
-    let (stamp, text) = match message {
-        Message::Input { stamp, text } => (stamp, text),
+    let (stamp, input) = match message {
+        Message::Input {
+            stamp,
+            text,
+            target,
+            context,
+        } => (
+            stamp,
+            RoomInput {
+                text,
+                target,
+                context,
+            },
+        ),
         Message::Control { stamp, control } => {
             if stamp.epoch != member.epoch {
                 let _ = call.reply.send(Err(Error::Denied));
@@ -976,7 +1092,7 @@ async fn coordinate(
     }
     let (started, mut admission) = oneshot::channel();
     let work =
-        runtime.sequenced_room_text_started(&principal, member.proof, stamp, text, Some(started));
+        runtime.sequenced_room_input_started(&principal, member.proof, stamp, input, Some(started));
     tokio::pin!(work);
     let admitted = tokio::time::timeout(ADMISSION_TIMEOUT, async {
         tokio::select! {

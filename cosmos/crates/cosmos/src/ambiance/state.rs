@@ -201,6 +201,27 @@ pub enum RuntimeOperation {
         fence: TurnFence,
         count: u32,
     },
+    /// The owner's screen-context permission for one native installation.
+    ScreenContextPolicy {
+        surface_id: Uuid,
+    },
+    SetScreenContextPolicy {
+        surface_id: Uuid,
+        approval_revision: u64,
+        expected_revision: u64,
+        policy: Option<super::screen::Policy>,
+    },
+    /// Offer the origin's own screen text to this turn's cognition under the
+    /// origin's screen-context permission; recorded content-free.
+    OfferScreenContext {
+        fence: TurnFence,
+        app_digest: String,
+        bytes: u32,
+    },
+    /// The current turn's outcome as its origin member may express it.
+    TurnStatus {
+        connection: RoomProof,
+    },
     SetDisclosurePolicy {
         surface_id: Uuid,
         approval_revision: u64,
@@ -365,6 +386,9 @@ pub enum RuntimeResult {
     PersonalSurfaces(usize),
     Invitation(Option<super::personal::Invitation>),
     PrivateContextOffered,
+    ScreenContextPolicy(Option<super::screen::Approval>),
+    ScreenContextOffered,
+    TurnStatus(Option<super::status::TurnStatus>),
     PinOpened {
         connection: super::PinConnection,
         duplicate: bool,
@@ -430,6 +454,21 @@ pub struct Turn {
     pub voice: Option<super::voice::Intake>,
     #[serde(default)]
     pub lookup: Option<super::lookup::Lookup>,
+    /// The first committed acknowledgment of this turn's own output: the
+    /// only outcome any surface may express for it.
+    #[serde(default)]
+    pub outcome: Option<TurnOutcome>,
+    /// The origin's own screen text was offered to cognition under the
+    /// owner's permission; content-free.
+    #[serde(default)]
+    pub screen_context: Option<super::screen::Offered>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnOutcome {
+    pub surface_id: Uuid,
+    pub channel: Channel,
 }
 
 impl Turn {
@@ -544,6 +583,24 @@ pub struct RecentContext {
 #[serde(rename_all = "snake_case")]
 pub enum RecentContextKind {
     PlaceQuery,
+    /// An acknowledged choice list: its title and numbered item titles.
+    Choices,
+}
+
+/// The remembered form of an acknowledged choice list, bounded by the
+/// list's own limits: `title: 1. first; 2. second`.
+fn choice_context_text(title: &str, items: &[policy::Choice]) -> String {
+    let mut text = format!("{title}:");
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            text.push(';');
+        }
+        text.push(' ');
+        text.push_str(&item.id);
+        text.push_str(". ");
+        text.push_str(&item.title);
+    }
+    text
 }
 
 pub const RECENT_CONTEXT_MS: i64 = 600_000;
@@ -574,6 +631,8 @@ pub struct RuntimeState {
     pub recent_context: Option<RecentContext>,
     #[serde(default)]
     pub private_policies: BTreeMap<Uuid, super::personal::Approval>,
+    #[serde(default)]
+    pub screen_context_policies: BTreeMap<Uuid, super::screen::Approval>,
 }
 
 /// Client boot epochs and sequences are provenance; client clocks are not.
@@ -768,6 +827,17 @@ pub enum RuntimeData {
         fence: TurnFence,
         source: String,
         count: u32,
+    },
+    ScreenContextPolicyChanged {
+        surface_id: Uuid,
+        approval: super::screen::Approval,
+    },
+    /// The origin's own screen text reached cognition: which app it came
+    /// from (digest) and how many bytes; never the text.
+    ScreenContextOffered {
+        fence: TurnFence,
+        app_digest: String,
+        bytes: u32,
     },
     ProviderDisclosureStarted {
         fence: TurnFence,
@@ -1136,7 +1206,7 @@ impl RuntimeState {
                 action.status,
                 ActionStatus::Cancelled | ActionStatus::OutcomeUnknown
             ) {
-                if !action.intent.text().is_empty() {
+                if action.intent.has_payload() {
                     return 0;
                 }
                 continue;
@@ -1169,13 +1239,9 @@ impl RuntimeState {
             if matches!(
                 action.status,
                 ActionStatus::Cancelled | ActionStatus::OutcomeUnknown
-            ) && !action.intent.text().is_empty()
+            ) && action.intent.has_payload()
             {
-                match &mut action.intent {
-                    SemanticIntent::InformationalSpeech { text }
-                    | SemanticIntent::VisualTextCard { text } => text.clear(),
-                    SemanticIntent::PlaceAddressCard { .. } => {}
-                }
+                action.intent.clear_payload();
                 events.push(RuntimeData::PayloadCleared {
                     action_id: action.id,
                     content_digest: action.content_digest.clone(),
@@ -1282,6 +1348,11 @@ impl RuntimeState {
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
         });
         self.private_policies.retain(|id, approval| {
+            records
+                .get(id)
+                .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
+        });
+        self.screen_context_policies.retain(|id, approval| {
             records
                 .get(id)
                 .is_some_and(|r| !r.revoked && r.revision == approval.approval_revision)
@@ -1682,7 +1753,9 @@ impl RuntimeState {
                     return Err(RuntimeError::PolicyBlocked);
                 }
             }
-            SemanticIntent::InformationalSpeech { .. } | SemanticIntent::VisualTextCard { .. }
+            SemanticIntent::InformationalSpeech { .. }
+            | SemanticIntent::VisualTextCard { .. }
+            | SemanticIntent::ChoiceList { .. }
                 if turn.completed_places_lookup() && confirmation.is_none() =>
             {
                 return Err(RuntimeError::PolicyBlocked);
@@ -2135,6 +2208,37 @@ impl RuntimeState {
                     count,
                 });
                 RuntimeResult::PrivateContextOffered
+            }
+            RuntimeOperation::ScreenContextPolicy { surface_id } => {
+                RuntimeResult::ScreenContextPolicy(self.screen_context_policy(records, surface_id)?)
+            }
+            RuntimeOperation::SetScreenContextPolicy {
+                surface_id,
+                approval_revision,
+                expected_revision,
+                policy,
+            } => {
+                let (approval, appended) = self.set_screen_context_policy(
+                    records,
+                    surface_id,
+                    approval_revision,
+                    expected_revision,
+                    policy,
+                )?;
+                events.extend(appended);
+                events.extend(self.reconcile(records, now));
+                RuntimeResult::ScreenContextPolicy(Some(approval))
+            }
+            RuntimeOperation::OfferScreenContext {
+                fence,
+                app_digest,
+                bytes,
+            } => {
+                events.extend(self.offer_screen_context(records, fence, app_digest, bytes, now)?);
+                RuntimeResult::ScreenContextOffered
+            }
+            RuntimeOperation::TurnStatus { connection } => {
+                RuntimeResult::TurnStatus(self.turn_status(records, &connection, now)?)
             }
             RuntimeOperation::SetDisclosurePolicy {
                 surface_id,
@@ -2702,6 +2806,8 @@ impl RuntimeState {
                         OriginProof::VoicePin { intake, .. } => Some(intake.clone()),
                         _ => None,
                     },
+                    outcome: None,
+                    screen_context: None,
                 });
                 if let Some((surface_id, _, stamp)) = sequenced {
                     let cursor = self.ingress.get_mut(&surface_id).unwrap();
@@ -2741,7 +2847,13 @@ impl RuntimeState {
                 {
                     return Err(RuntimeError::Stale);
                 }
-                if turn.privacy > PrivacyClass::SharedRoom || turn.completed_places_lookup() {
+                // Cognition sees a turn above the shared-room ceiling only
+                // when the origin's own screen text was offered under the
+                // owner's permission; sensitive content never reaches it.
+                if (turn.privacy > PrivacyClass::SharedRoom && turn.screen_context.is_none())
+                    || turn.privacy > PrivacyClass::Private
+                    || turn.completed_places_lookup()
+                {
                     return Err(RuntimeError::PolicyBlocked);
                 }
                 if turn.lookup_pending() {
@@ -2974,12 +3086,52 @@ impl RuntimeState {
                     return Err(RuntimeError::Stale);
                 }
                 let action = self.actions.get_mut(&action_id).unwrap();
-                if action.status != ActionStatus::Acknowledged {
+                let first = action.status != ActionStatus::Acknowledged;
+                if first {
                     action.status = ActionStatus::Acknowledged;
                     events.push(action_event(action));
                 }
+                let outcome = (first && !action.expression).then_some(TurnOutcome {
+                    surface_id: action.surface_id,
+                    channel: action.channel,
+                });
+                // An acknowledged choice list becomes bounded recent context
+                // at the shared-room ceiling, so "number two" can be resolved
+                // by the next turn; a private list is not remembered.
+                let remembered = match &action.intent {
+                    SemanticIntent::ChoiceList { title, items }
+                        if first && action.privacy <= PrivacyClass::SharedRoom =>
+                    {
+                        Some((
+                            choice_context_text(title, items),
+                            action.surface_id,
+                            action.privacy,
+                        ))
+                    }
+                    _ => None,
+                };
                 let result = RuntimeResult::Acknowledged(action.clone());
+                if let Some((text, source_surface, privacy)) = remembered {
+                    let expires_at_ms = now.saturating_add(RECENT_CONTEXT_MS);
+                    self.recent_context = Some(RecentContext {
+                        kind: RecentContextKind::Choices,
+                        text,
+                        source_surface,
+                        privacy,
+                        created_at_ms: now,
+                        expires_at_ms,
+                    });
+                    events.push(RuntimeData::RecentContextRemembered {
+                        context: RecentContextKind::Choices,
+                        source_surface,
+                        privacy,
+                        expires_at_ms,
+                    });
+                }
                 let turn = self.turn.as_mut().unwrap();
+                if turn.outcome.is_none() {
+                    turn.outcome = outcome;
+                }
                 if records
                     .get(&turn.fence.origin_surface)
                     .is_some_and(|r| matches!(r.binding, Binding::Browser | Binding::Native { .. }))
@@ -3833,5 +3985,266 @@ mod tests {
                 .reconcile(&records, action.display_expires_at_ms + 1)
                 .is_empty()
         );
+    }
+
+    /// The origin's status is derived from committed state only: working
+    /// until something is proposed, waiting while an action is proposed or
+    /// dispatched, shown once acknowledged (and still shown after the card
+    /// retires), unknown after exhausted deadlines, nowhere when nothing was
+    /// eligible; a shared origin never sees a class above its own ceiling.
+    #[test]
+    fn ambiance_turn_status_follows_committed_outcomes_and_caps_the_origins_class() {
+        use super::super::status::{TurnState, TurnStatus};
+        let id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let mut records = BTreeMap::from([(id, browser(id)), (other, browser(other))]);
+        for record in records.values_mut() {
+            record.lease_expires_at = 100_000;
+        }
+        let mut state = RuntimeState::default();
+        let status =
+            |state: &mut RuntimeState, records: &BTreeMap<Uuid, Record>, who: Uuid, now| {
+                let (result, _) = state
+                    .apply(
+                        "U:owner",
+                        records,
+                        RuntimeOperation::TurnStatus {
+                            connection: RoomProof::Browser(proof(&records[&who])),
+                        },
+                        now,
+                    )
+                    .unwrap();
+                let RuntimeResult::TurnStatus(status) = result else {
+                    panic!()
+                };
+                status
+            };
+        assert_eq!(status(&mut state, &records, id, 100), None);
+        let fence = begin(&mut state, &records, id);
+        let expect = |state: TurnState, surface: Option<Uuid>, privacy: PrivacyClass| TurnStatus {
+            turn_id: fence.turn_id,
+            generation: fence.generation,
+            state,
+            surface,
+            privacy,
+        };
+        assert_eq!(
+            status(&mut state, &records, id, 101),
+            Some(expect(TurnState::Working, None, PrivacyClass::SharedRoom))
+        );
+        assert_eq!(
+            status(&mut state, &records, other, 101),
+            None,
+            "only the origin has a status"
+        );
+        let action = propose(&mut state, &records, &fence);
+        assert_eq!(
+            status(&mut state, &records, id, 102),
+            Some(expect(
+                TurnState::Waiting,
+                Some(id),
+                PrivacyClass::SharedRoom
+            ))
+        );
+        let dispatched = poll(&mut state, &records, id, 103).remove(0);
+        assert_eq!(
+            status(&mut state, &records, id, 103),
+            Some(expect(
+                TurnState::Waiting,
+                Some(id),
+                PrivacyClass::SharedRoom
+            ))
+        );
+        state
+            .apply("U:owner", &records, ack(&dispatched, &records[&id]), 104)
+            .unwrap();
+        assert_eq!(
+            status(&mut state, &records, id, 104),
+            Some(expect(TurnState::Shown, Some(id), PrivacyClass::SharedRoom))
+        );
+        // Retiring the shown card does not unsay the committed outcome.
+        state.reconcile(&records, action.display_expires_at_ms);
+        assert_eq!(state.actions[&action.id].status, ActionStatus::Cancelled);
+        assert_eq!(
+            status(&mut state, &records, id, action.display_expires_at_ms),
+            Some(expect(TurnState::Shown, Some(id), PrivacyClass::SharedRoom))
+        );
+        // Exhausted delivery deadlines are an unknown outcome, never a claim.
+        let mut state = RuntimeState::default();
+        let fence = begin(&mut state, &records, id);
+        propose(&mut state, &records, &fence);
+        poll(&mut state, &records, id, 103);
+        let retry = poll(&mut state, &records, id, 3103).remove(0);
+        assert_eq!(retry.attempts, 2);
+        records.get_mut(&other).unwrap().visible = false;
+        state.reconcile(&records, 6103);
+        assert_eq!(
+            status(&mut state, &records, id, 6104),
+            Some(TurnStatus {
+                turn_id: fence.turn_id,
+                generation: fence.generation,
+                state: TurnState::Unknown,
+                surface: Some(id),
+                privacy: PrivacyClass::SharedRoom,
+            })
+        );
+        // A private answer with no personal surface and a public answer with
+        // no visible surface end the same way: nowhere, at the shared class.
+        let mut state = RuntimeState::default();
+        let fence = begin(&mut state, &records, id);
+        let (result, _) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: SemanticIntent::VisualTextCard {
+                        text: "private service data".into(),
+                    },
+                    privacy: PrivacyClass::Private,
+                    hint: None,
+                },
+                102,
+            )
+            .unwrap();
+        assert!(matches!(result, RuntimeResult::Blocked));
+        assert_eq!(state.turn.as_ref().unwrap().privacy, PrivacyClass::Private);
+        state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Finish {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+                103,
+            )
+            .unwrap();
+        let private = status(&mut state, &records, id, 104).unwrap();
+        assert_eq!(
+            (private.state, private.surface, private.privacy),
+            (TurnState::Nowhere, None, PrivacyClass::SharedRoom)
+        );
+        let mut state = RuntimeState::default();
+        let fence = begin(&mut state, &records, id);
+        state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Cancel {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                },
+                102,
+            )
+            .unwrap();
+        let cancelled = status(&mut state, &records, id, 103).unwrap();
+        assert_eq!(
+            (cancelled.state, cancelled.surface, cancelled.privacy),
+            (TurnState::Nowhere, None, PrivacyClass::SharedRoom)
+        );
+    }
+
+    /// An acknowledged shared choice list becomes bounded recent context
+    /// naming its numbered items; a private list is never remembered, and
+    /// a retired list clears its whole payload.
+    #[test]
+    fn ambiance_acknowledged_choice_list_is_remembered_at_the_shared_class_only() {
+        let id = Uuid::new_v4();
+        let records = BTreeMap::from([(id, browser(id))]);
+        let list = SemanticIntent::ChoiceList {
+            title: "Films for tonight".into(),
+            items: vec![
+                policy::Choice {
+                    id: "1".into(),
+                    title: "Arrival".into(),
+                    detail: "2016 science fiction".into(),
+                },
+                policy::Choice {
+                    id: "2".into(),
+                    title: "Heat".into(),
+                    detail: String::new(),
+                },
+            ],
+        };
+        assert!(list.valid() && list.has_payload());
+        let mut state = RuntimeState::default();
+        let fence = begin(&mut state, &records, id);
+        let (RuntimeResult::Proposed(action), _) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: list.clone(),
+                    privacy: PrivacyClass::Public,
+                    hint: None,
+                },
+                102,
+            )
+            .unwrap()
+        else {
+            panic!("choice card")
+        };
+        assert_eq!(action.content_digest, list.content_digest());
+        let dispatched = poll(&mut state, &records, id, 103).remove(0);
+        let (_, events) = state
+            .apply("U:owner", &records, ack(&dispatched, &records[&id]), 104)
+            .unwrap();
+        let remembered = state.recent_context.clone().expect("choice context");
+        assert_eq!(remembered.kind, RecentContextKind::Choices);
+        assert_eq!(remembered.text, "Films for tonight: 1. Arrival; 2. Heat");
+        assert_eq!(remembered.source_surface, id);
+        assert_eq!(remembered.privacy, PrivacyClass::SharedRoom);
+        assert_eq!(remembered.expires_at_ms, 104 + RECENT_CONTEXT_MS);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            RuntimeData::RecentContextRemembered {
+                context: RecentContextKind::Choices,
+                ..
+            }
+        )));
+        assert_eq!(
+            state.turn.as_ref().unwrap().outcome,
+            Some(TurnOutcome {
+                surface_id: id,
+                channel: Channel::VisualCard
+            })
+        );
+        // A repeated acknowledgment neither re-remembers nor moves the outcome.
+        state
+            .apply("U:owner", &records, ack(&dispatched, &records[&id]), 105)
+            .unwrap();
+        assert_eq!(state.recent_context.as_ref().unwrap().created_at_ms, 104);
+        state.reconcile(&records, action.display_expires_at_ms);
+        assert!(!state.actions[&action.id].intent.has_payload());
+        assert!(!state.actions[&action.id].intent.valid());
+        // Above the shared class the list is shown to a personal surface
+        // only; it leaves no shared memory behind.
+        let mut state = RuntimeState::default();
+        let fence = begin(&mut state, &records, id);
+        let (result, _) = state
+            .apply(
+                "U:owner",
+                &records,
+                RuntimeOperation::Propose {
+                    turn_id: fence.turn_id,
+                    generation: fence.generation,
+                    worker: fence.worker,
+                    intent: list,
+                    privacy: PrivacyClass::Private,
+                    hint: None,
+                },
+                102,
+            )
+            .unwrap();
+        assert!(matches!(result, RuntimeResult::Blocked));
+        assert!(state.recent_context.is_none());
     }
 }
