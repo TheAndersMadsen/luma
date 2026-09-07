@@ -29,7 +29,7 @@ it("reports browser text readiness only from the actual runtime capability endpo
     : Response.json({ assistant: true, speech: true, model: "configured-model", provider_authority: "cosmos", tools: [] })));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><AssistantStatusChip /></QueryClientProvider>);
-  await screen.findByText("Public text available");
+  await screen.findByText("Browser replies available");
   expect(screen.queryByText("Assistant ready")).not.toBeInTheDocument(); client.clear();
 });
 it("does not mistake configured providers for an available browser runtime", async () => {

@@ -207,7 +207,7 @@ try {
   };
   await page.goto(`${origin}/settings/account/surfaces`);
   await page.getByRole("button", { name: "Add a device", exact: true }).click();
-  await page.getByRole("button", { name: "Enter a descriptor manually", exact: true }).click();
+  await page.getByRole("button", { name: "Enter the device details by hand", exact: true }).click();
   await page.getByLabel("Public installation descriptor", { exact: true }).fill(JSON.stringify(descriptor));
   await page.getByRole("button", { name: "Review", exact: true }).click();
   // The review shows the fingerprint the way the device does: four lines of four groups.
@@ -231,8 +231,8 @@ try {
   assert.deepEqual(approved.request().postDataJSON(), { ...descriptor, expectedRevision: 0 });
   assert.deepEqual(await approved.json(), { native: expectedNative });
   await page.getByText("Approved. Cosmos shows replies on this device while its app is in front.", { exact: true }).waitFor();
-  const deviceCard = page.getByRole("region", { name: `Mac ${descriptor.enrollmentId.slice(0, 8)}`, exact: true });
-  await deviceCard.getByText("Not connected", { exact: true }).waitFor();
+  const deviceCard = page.getByRole("region", { name: "Mac", exact: true });
+  await deviceCard.getByText("Offline", { exact: true }).waitFor();
   await until(() => { const status = readJson(statusPath); return status?.nativeApproved && status.enrollmentOnlyNoRoomAuthority; }, 10000);
   // An owner cookie and public descriptor do not provide a browser connection.
   // Both requests go through the real Center server in this isolated context.
@@ -253,7 +253,7 @@ try {
   // native installation must not be confused with navigation retiring a browser.
   await page.getByRole("switch", { name: "Use this browser as a display", exact: true }).click();
   await page.getByRole("button", { name: "Turn on", exact: true }).click();
-  await page.getByText("Ready for public text requests.", { exact: true }).waitFor();
+  await page.getByText("Connected", { exact: true }).first().waitFor();
   checkpoint("browserReady");
   // The production native client supplies this model request and recovers
   // its persisted admission. Center must acknowledge the actual DOM commit.

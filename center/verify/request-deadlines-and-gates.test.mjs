@@ -199,14 +199,17 @@ test("the burst ranking releases its own control after it succeeds", async () =>
 });
 
 test("the Ai Mic display aborts delivery and clears committed content when the wearer leaves", async () => {
-  const [chat, display] = await Promise.all([
-    source("components/AiMicChat.tsx"), source("components/BrowserDisplay.tsx"),
+  const [chat, display, tab] = await Promise.all([
+    source("components/AiMicChat.tsx"), source("components/BrowserDisplay.tsx"), source("app/settings/account/surfaces/TabDisplay.tsx"),
   ]);
   assert.match(chat, /<BrowserDisplay active=\{active\}/);
-  assert.doesNotMatch(`${chat}\n${display}`, /new Audio|SpeechRecognition|\/api\/assistant\/(?:stream|speech)/);
-  assert.match(display, /current\.dispose\(\)/);
-  assert.match(display, /if \(!active\) \{ tab\.current\?\.leave\(\)/);
-  assert.match(display, /command=\{active && status === "visible" \? command : null\}/);
+  assert.doesNotMatch(`${chat}\n${display}\n${tab}`, /new Audio|SpeechRecognition|\/api\/assistant\/(?:stream|speech)/);
+  // The panel and the Devices card share one tab lifecycle: unmount disposes, an inactive panel leaves.
+  assert.match(display, /useSurfaceTab\(active\)/);
+  assert.match(tab, /current\.dispose\(\)/);
+  assert.match(tab, /if \(!active\) tab\.current\?\.leave\(\)/);
+  assert.match(display, /const ready = active && tab\.tabStatus === "visible"/);
+  assert.match(display, /const command = ready \? tab\.command : null;/);
   // BrowserDisplay's rendered lifecycle tests prove clearing, cancellation
   // and late-result fencing on the room transport. Keep only the Ai Mic seam here.
 });

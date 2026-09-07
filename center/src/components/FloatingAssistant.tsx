@@ -86,7 +86,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           </div>
           <div className={styles.headerActions}>
             <AssistantStatusChip className={styles.status} />
-            <button type="button" className={styles.close} onClick={closeAssistant} aria-label="Close Ai Mic">
+            {/* Closing hides the panel. It does not cancel a request already sent;
+                that is the panel's own "Cancel task". This tab simply stops being
+                somewhere Cosmos can show the reply. */}
+            <button type="button" className={styles.close} onClick={closeAssistant} aria-label="Close Ai Mic"
+              title="Hides this panel. A request already sent keeps running; the reply goes to another approved device.">
               <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden>
                 <path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
               </svg>

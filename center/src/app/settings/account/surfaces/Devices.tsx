@@ -70,7 +70,7 @@ export function Devices() {
       signal.throwIfAborted();
       if (generation.current === current && saved) setRows(saved);
     } catch {
-      if (generation.current === current) setError("Device status is unavailable. Refresh before making changes.");
+      if (generation.current === current) setError("Cosmos could not be reached just now. Choose Refresh devices to try again.");
     } finally { if (generation.current === current) { active.current = null; setBusy(false); } }
   }, [invalidate]);
   // A device may hand its public descriptor over as a link fragment (for
@@ -93,7 +93,7 @@ export function Devices() {
       descriptorRead.current++;
       setSource(text); setReview(null); setError(""); setMessage("");
       void inspect(text);
-    } catch { setError("The link’s device details are not valid. Enter the descriptor manually instead."); }
+    } catch { setError("That link does not carry valid device details. Enter the device’s code by hand instead."); }
     // Runs once per fresh owner read; the review it opens belongs to that read.
   }, [rows]);
   useEffect(() => {
@@ -149,7 +149,7 @@ export function Devices() {
         || existing.publicKeyFingerprint !== fingerprint)) throw new Error("native_descriptor_changed");
       if (generation.current === current) setReview({ descriptor, fingerprint, existing });
     } catch {
-      if (generation.current === current) setError("This device could not be verified. Check its descriptor and read the device list again.");
+      if (generation.current === current) setError("This device could not be verified. Check its details and read the device list again.");
     } finally { if (generation.current === current) { active.current = null; setBusy(false); } }
   }
   async function change(chosen: Review | NativeSurface) {
@@ -190,6 +190,7 @@ export function Devices() {
     } finally { if (generation.current === current) { active.current = null; setBusy(false); } }
   }
   const alreadyApproved = review?.existing !== null && review?.existing !== undefined && !review.existing.revoked && review.existing.speech;
+  const waiting = adding && busy && review === null && rows !== undefined;
   return <section className={styles.page} aria-label="Devices">
     <div className={styles.lead}>
       <p className={styles.leadText}>Cosmos shows replies on the devices you approve here.</p>
@@ -200,14 +201,20 @@ export function Devices() {
       }}>Add a device</button>
     </div>
     {adding ? <section className={`${settings.section} ${styles.card}`} aria-label="Add a device">
-      <p className={styles.line}>During its own set-up, the device shows a QR code or an “Approve in Center” link. Open that link on this page and the device appears here for approval.</p>
+      <ol className={styles.howto}>
+        <li>On the new device, open Cosmos and choose <strong>Approve in Center</strong>.</li>
+        <li>Open the link it shows — scan its QR code with your phone, or type the link here.</li>
+        <li>Check that the code it shows matches the one below, then approve.</li>
+      </ol>
+      {waiting ? <p className={styles.status} role="status">Checking this device…</p> : null}
       {review ? <div className={styles.review} role="group" aria-label="Review device">
         <h3 className={styles.reviewTitle}>{DEVICE_LABELS[review.descriptor.platform]}</h3>
         <p className={styles.line}>Compare with the fingerprint shown on the device.</p>
         <code className={styles.fingerprint}>{fingerprintLines(review.fingerprint).map((line, index) => <span key={index}>{line}</span>)}</code>
         {alreadyApproved ? <p className={styles.line}>This device is already approved.</p> : <>
-          {review.existing?.revoked ? <p className={styles.line}>This device was removed earlier. Approving it again restores shared replies; its other permissions stay off until you turn them on.</p> : null}
-          {review.existing && !review.existing.revoked ? <p className={styles.line}>This device was approved before spoken replies existed. Approving it again adds them, and its app reconnects.</p> : null}
+          {review.existing?.revoked ? <p className={styles.line}>You removed this device earlier. Approving it again lets it show replies; its other permissions stay off until you turn them on.</p>
+            : review.existing ? <p className={styles.line}>This device was approved before spoken replies existed. Approving it again adds them, and its app reconnects.</p>
+              : <p className={styles.line}>This device is waiting for your approval.</p>}
         </>}
         <div className={styles.actions}>
           {alreadyApproved ? null : <button type="button" className={styles.primary} disabled={busy || rows === undefined} onClick={() => void change(review)}>Approve this device</button>}
@@ -215,7 +222,7 @@ export function Devices() {
         </div>
       </div> : null}
       <div className={styles.actions}>
-        <button type="button" className={styles.linkButton} aria-expanded={manual} onClick={() => setManual(!manual)}>Enter a descriptor manually</button>
+        <button type="button" className={styles.linkButton} aria-expanded={manual} onClick={() => setManual(!manual)}>Enter the device details by hand</button>
       </div>
       {manual ? <div className={styles.manual}>
         <label className={styles.field} htmlFor="native-descriptor">Public installation descriptor</label>
@@ -233,7 +240,7 @@ export function Devices() {
         </div>
       </div> : null}
     </section> : null}
-    {message ? <p className={styles.status} role="status">{message}</p> : null}
+    {message ? <p className={styles.confirmation} role="status">{message}</p> : null}
     {error ? <p className={styles.alert} role="alert">{error}</p> : null}
     <ul className={styles.cards}>
       <li><BrowserCard /></li>
@@ -241,9 +248,16 @@ export function Devices() {
         <DeviceCard row={row} servicesRegion={servicesRegion} lastRegion={lastRegion} onRegionUsed={onRegionUsed} offerSetup={approved === row.surfaceId}
           busy={busy} onRemove={chosen => void change(chosen)} onRefreshDevices={() => void refresh()} />
       </li>)}
+      {rows === undefined && busy ? [0, 1].map(index => <li key={`skeleton-${index}`} aria-hidden="true">
+        <div className={`${settings.section} ${styles.card} ${styles.skeleton}`}><span /><span /></div>
+      </li>) : null}
     </ul>
-    {rows === undefined ? <p className={styles.status} role="status">{busy ? "Checking devices…" : "Device status is unavailable. Refresh before making changes."}</p>
-      : rows.length === 0 ? <p className={styles.status}>No phones, TVs or computers yet. Choose Add a device to show Cosmos replies on one.</p> : null}
+    {rows === undefined ? <p className={styles.status} role="status">{busy ? "Checking devices…"
+      : error ? "" : "This list is out of date. Choose Refresh devices to read it again."}</p>
+      : rows.length === 0 ? <div className={styles.emptyList}>
+        <p className={styles.emptyTitle}>No phones, TVs or computers yet</p>
+        <p className={styles.status}>Choose Add a device to show Cosmos replies on one.</p>
+      </div> : null}
     <div className={styles.actions}>
       <button type="button" className={styles.quiet} disabled={busy} onClick={() => void refresh()}>Refresh devices</button>
     </div>

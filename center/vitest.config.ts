@@ -14,6 +14,8 @@ export default defineConfig({
     },
   },
   test: {
+    // Dates and day grouping read the same here as they do in CI.
+    env: { TZ: "UTC" },
     environment: "jsdom",
     setupFiles: ["./verify/vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],

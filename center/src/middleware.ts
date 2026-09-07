@@ -36,7 +36,7 @@ const PROTECTED_PAGE_PATTERNS = [
   /^\/my-data(?:\/(?:ai-mic|calls|music|translation))?$/u,
   /^\/settings$/u,
   /^\/settings\/(?:about|contacts|privacy)$/u,
-  /^\/settings\/account(?:\/(?:details|devices|features|orders|services|surfaces))?$/u,
+  /^\/settings\/account(?:\/(?:activity|details|devices|features|orders|services|surfaces))?$/u,
   /^\/settings\/pin$/u,
   /^\/settings\/pin\/(?:activity|contacts|diagnostics|esim|fitness|flags|gallery|install|llm|provision|server|services|setup)$/u,
   /^\/settings\/pin\/conversations(?:\/[^/]+)?$/u,

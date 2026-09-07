@@ -2,6 +2,9 @@ import { parseAdmission, parseFrame, parseRoomConnection, publicText, renderCont
   type BrowserControl, type RenderCommand, type RoomConnection, type Stamp } from "./contracts/ambianceRuntime";
 import type { SurfaceConnection } from "./contracts/surfaces";
 import { createBrowserRoom, type BrowserRoom } from "./browserRoom";
+import { describeTurn, NO_STATUS, statusLine, type StatusLine } from "./turnOutcome";
+
+const LOST = statusLine("Disconnected", "The connection was lost. Turn it on again to reconnect.");
 
 const digest = async (text: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))),
   byte => byte.toString(16).padStart(2, "0")).join("");
@@ -31,7 +34,7 @@ export class BrowserRuntime {
   private incomingPending = 0;
   private failureHandler: ((incarnation: string) => void) | undefined;
   constructor(readonly surfaceId: string, private render: (command: RenderCommand | null) => void,
-    private status: (message: string) => void, private roomFactory = createBrowserRoom) {}
+    private status: (line: StatusLine) => void, private roomFactory = createBrowserRoom) {}
   onFailure(handler: (incarnation: string) => void) { this.failureHandler = handler; }
   private retire(actionId: string) {
     if (this.retired.size >= 32) this.retired.delete(this.retired.values().next().value!);
@@ -48,7 +51,7 @@ export class BrowserRuntime {
     this.room?.close(); this.room = null; this.connection = null; this.bootstrap = null;
     this.clearFrame(); this.turn = null; this.receipts.clear(); this.retired.clear();
     this.outgoing = Promise.resolve(); this.incoming = Promise.resolve(); this.pending = 0; this.incomingPending = 0;
-    this.status("");
+    this.status(NO_STATUS);
   }
   async start(connection: SurfaceConnection) {
     if (this.blockedIncarnation === connection.incarnation) throw new Error("fenced_incarnation");
@@ -69,12 +72,12 @@ export class BrowserRuntime {
       this.bootstrap = bootstrap;
       const room = this.roomFactory(); this.room = room;
       await room.connect(bootstrap, payload => this.receive(payload, generation), () => {
-        if (generation === this.generation) this.fail("Runtime connection unavailable. Approve again to reconnect.");
+        if (generation === this.generation) this.fail(LOST);
       });
       this.active(generation);
-      this.status("Ready for public text requests.");
+      this.status(statusLine("Connected"));
     } catch (error) {
-      if (generation === this.generation) this.fail("Runtime connection unavailable. Approve again to reconnect.");
+      if (generation === this.generation) this.fail(LOST);
       throw error;
     }
   }
@@ -82,11 +85,11 @@ export class BrowserRuntime {
     if (generation !== this.generation || !this.connection || this.connection.expiresAt <= Date.now()
       || this.controller?.signal.aborted) throw new Error("inactive");
   }
-  private fail(message: string) {
+  private fail(line: StatusLine) {
     const incarnation = this.connection?.incarnation;
     this.blockedIncarnation = incarnation ?? null; this.stop();
     if (incarnation) this.failureHandler?.(incarnation);
-    this.status(message);
+    this.status(line);
   }
   private send(message: { kind: "input"; text: string } | { kind: "control"; control: BrowserControl }, instanceId = crypto.randomUUID()) {
     const generation = this.generation; const room = this.room; const bootstrap = this.bootstrap;
@@ -162,6 +165,9 @@ export class BrowserRuntime {
           this.clearFrame(); this.current = command;
           this.expiry = setTimeout(() => { if (generation === this.generation) this.clearFrame(); }, command.expiresAt - Date.now());
           this.render(command);
+        } else if (frame.kind === "status") {
+          // Where the turn stands; content-free and safe to show even for a turn asked elsewhere.
+          this.status(describeTurn(frame.status));
         } else {
           this.retire(frame.actionId);
           if (this.current?.actionId === frame.actionId) this.clearFrame();
@@ -178,7 +184,10 @@ export class BrowserRuntime {
   /** A rejected layout retires the exact card without claiming delivery. */
   displayFailed(command: RenderCommand) {
     if (this.current !== command) return;
-    this.clearFrame(); this.status("The place card could not fit its required attribution on this display.");
+    this.clearFrame();
+    this.status(statusLine("Cannot confirm", command.content.kind === "places"
+      ? "The place card could not fit its required attribution on this display."
+      : "This card could not be shown in this browser."));
   }
   /** Called only after exact content and every required credit commit to the visible DOM. */
   async committed(command: RenderCommand) {
@@ -189,27 +198,27 @@ export class BrowserRuntime {
       const { actionId, turnId, generation: actionGeneration, channel, contentDigest } = command;
       await this.send({ kind: "control", control: { kind: "acknowledge", actionId, turnId, generation: actionGeneration, channel, contentDigest } }, actionId);
       if (generation !== this.generation || this.current !== command || visibilityEpoch !== this.visibilityEpoch || command.expiresAt <= Date.now()) return;
-      this.acknowledged.add(command.actionId); this.status("Display acknowledgment recorded by Cosmos.");
+      this.acknowledged.add(command.actionId); this.status(statusLine("Completed", "Shown in this browser"));
     } catch {
-      if (generation === this.generation && this.current === command) this.fail("Display acknowledgment could not be confirmed.");
+      if (generation === this.generation && this.current === command) this.fail(statusLine("Cannot confirm", "This browser could not confirm it showed the reply."));
     } finally { if (generation === this.generation) this.acknowledging.delete(command.actionId); }
   }
   async input(text: string) {
-    if (!publicText(text)) { this.status("Use a shorter public text request (up to 4000 UTF-8 bytes)."); return; }
-    const generation = this.generation; this.status("Waiting for Cosmos…");
+    if (!publicText(text)) { this.status(statusLine("", "That request is too long. Shorten it and send again.")); return; }
+    const generation = this.generation; this.status(statusLine("Working"));
     try {
       const result = await this.send({ kind: "input", text });
       if (generation !== this.generation) return;
       this.turn = { turnId: result.turnId as string, generation: result.generation as number };
-      this.status("Request accepted. Waiting for an eligible display.");
-    } catch { if (generation === this.generation) this.status("Request could not be confirmed. No completion is claimed."); }
+      this.status(statusLine("Waiting for a device"));
+    } catch { if (generation === this.generation) this.status(statusLine("Cannot confirm", "The request may not have reached Cosmos. Send it again.")); }
   }
   async cancel() {
     if (!this.turn) return;
     const turn = this.turn; const generation = this.generation; this.clearFrame();
     try {
       await this.send({ kind: "control", control: { kind: "cancel", ...turn } });
-      if (generation === this.generation && this.turn === turn) { this.turn = null; this.status("Cancellation recorded by Cosmos."); }
-    } catch { if (generation === this.generation) this.status("Cancellation could not be confirmed."); }
+      if (generation === this.generation && this.turn === turn) { this.turn = null; this.status(statusLine("Cancelled")); }
+    } catch { if (generation === this.generation) this.status(statusLine("Cannot confirm", "Cosmos did not confirm the cancellation.")); }
   }
 }

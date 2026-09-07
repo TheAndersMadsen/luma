@@ -14,7 +14,12 @@ export interface PlacesContent {
   items: { placeId: string; name: string; address: string; sourceUrl: string | null }[];
   attributions: string[];
 }
-export type RenderContent = { kind: "text"; text: string } | PlacesContent;
+/** A short numbered list the owner can answer by number; Cosmos assigns ids "1".."8" in list order. */
+export interface ChoicesContent {
+  kind: "choices"; title: string;
+  items: { id: string; title: string; detail: string }[];
+}
+export type RenderContent = { kind: "text"; text: string } | PlacesContent | ChoicesContent;
 export interface RenderCommand {
   version: 1; actionId: string; turnId: string; generation: number;
   surfaceId: string; incarnation: string; channel: "visual.card";
@@ -24,8 +29,16 @@ export interface RenderCommand {
 }
 export const PRIVACY_CLASSES = ["public", "shared_room", "near_user", "private", "sensitive"] as const;
 export type PrivacyClass = typeof PRIVACY_CLASSES[number];
+export const TURN_STATES = ["working", "waiting", "shown", "spoken", "nowhere", "unknown"] as const;
+export type TurnState = typeof TURN_STATES[number];
+/** Where one turn stands, content-free: the runtime names a kind of device, never text or a device ID. */
+export interface TurnStatus {
+  version: 1; turnId: string; generation: number; state: TurnState;
+  surface: { platform: string } | null; privacy: PrivacyClass;
+}
 export type RuntimeFrame = { version: 1; kind: "render"; stamp: Stamp; command: RenderCommand }
-  | { version: 1; kind: "clear"; stamp: Stamp; actionId: string };
+  | { version: 1; kind: "clear"; stamp: Stamp; actionId: string }
+  | { version: 1; kind: "status"; stamp: Stamp; status: TurnStatus };
 export type BrowserControl = { kind: "state"; visible: boolean }
   | { kind: "cancel"; turnId: string; generation: number }
   | { kind: "acknowledge"; actionId: string; turnId: string; generation: number; channel: "visual.card"; contentDigest: string };
@@ -90,15 +103,35 @@ function parseContent(value: unknown): RenderContent {
       // Unsupported credit must reject the card, never become omitted credit.
       parsePlaceAttribution(attribution);
     }
+  } else if (content.kind === "choices") {
+    fields(content, ["kind", "title", "items"]);
+    if (!placeText(content.title, 120) || !Array.isArray(content.items) || content.items.length < 2 || content.items.length > 8) throw new Error("invalid_choice_content");
+    for (const [index, value] of content.items.entries()) {
+      const item = record(value); fields(item, ["id", "title", "detail"]);
+      if (item.id !== String(index + 1) || !placeText(item.title, 80) || item.detail !== "" && !placeText(item.detail, 200)) throw new Error("invalid_choice_item");
+    }
   } else throw new Error("invalid_content");
   return content as unknown as RenderContent;
 }
-/** Existing text hashes remain byte-for-byte; Places bind every raw credit. */
+/** Existing text hashes remain byte-for-byte; Places bind every raw credit; choices bind id, title and detail in order. */
 export function renderContentPayload(content: RenderContent): string {
-  return content.kind === "text" ? content.text : JSON.stringify([
+  if (content.kind === "text") return content.text;
+  if (content.kind === "choices") return JSON.stringify(["cosmos.choice-list", 1, content.title, content.items.map(item => [item.id, item.title, item.detail])]);
+  return JSON.stringify([
     "cosmos.place-address-card", 1, content.query,
     content.items.map(item => [item.placeId, item.name, item.address, item.sourceUrl]), content.attributions,
   ]);
+}
+function parseStatus(value: unknown): TurnStatus {
+  const status = record(value);
+  fields(status, ["version", "turnId", "generation", "state", "surface", "privacy"]);
+  if (status.version !== 1 || !id(status.turnId) || !integer(status.generation, 1) || !TURN_STATES.some(name => name === status.state)
+    || !PRIVACY_CLASSES.some(name => name === status.privacy)) throw new Error("invalid_status");
+  if (status.surface !== null) {
+    const surface = record(status.surface); fields(surface, ["platform"]);
+    if (typeof surface.platform !== "string" || !/^[a-z][a-z_]{0,31}$/.test(surface.platform)) throw new Error("invalid_status");
+  }
+  return status as unknown as TurnStatus;
 }
 export function parseCommand(value: unknown): RenderCommand {
   const c = record(value);
@@ -113,14 +146,15 @@ export function parseCommand(value: unknown): RenderCommand {
 export function parseFrame(payload: string): RuntimeFrame {
   if (new TextEncoder().encode(payload).length > ROOM_PAYLOAD_BYTES) throw new Error("oversized_frame");
   const frame = record(JSON.parse(payload));
-  if (frame.version !== 1 || !["render", "clear"].includes(String(frame.kind))) throw new Error("invalid_frame");
-  fields(frame, ["version", "kind", "stamp", frame.kind === "render" ? "command" : "actionId"]);
+  if (frame.version !== 1 || !["render", "clear", "status"].includes(String(frame.kind))) throw new Error("invalid_frame");
+  fields(frame, ["version", "kind", "stamp", frame.kind === "render" ? "command" : frame.kind === "clear" ? "actionId" : "status"]);
   const stamp = record(frame.stamp); fields(stamp, ["epoch", "sequence", "instanceId"]);
   if (!id(stamp.epoch) || !id(stamp.instanceId) || !integer(stamp.sequence, 1)) throw new Error("invalid_stamp");
   if (frame.kind === "render") {
     const command = parseCommand(frame.command);
     if (command.actionId !== stamp.instanceId) throw new Error("wrong_instance");
-  } else if (!id(frame.actionId)) throw new Error("invalid_clear");
+  } else if (frame.kind === "status") parseStatus(frame.status);
+  else if (!id(frame.actionId)) throw new Error("invalid_clear");
   return frame as unknown as RuntimeFrame;
 }
 export function parseAdmission(payload: string, turnId?: string) {

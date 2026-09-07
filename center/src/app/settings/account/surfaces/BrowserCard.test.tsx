@@ -9,7 +9,7 @@ it("is one plain card whose switch needs explicit confirmation before any reques
   const mock = vi.fn(async () => Response.json({ surfaces: [] })); vi.stubGlobal("fetch", mock);
   render(<BrowserCard />);
   expect(screen.getByRole("heading", { name: "This browser" })).toBeVisible();
-  expect(screen.getByText("Not connected")).toBeVisible();
+  expect(screen.getByText("Offline")).toBeVisible();
   expect(screen.getByText("Shows shared replies while this tab is open.")).toBeVisible();
   expect(mock).not.toHaveBeenCalled();
   const toggle = screen.getByRole("switch", { name: "Use this browser as a display" });
@@ -29,6 +29,6 @@ it("is one plain card whose switch needs explicit confirmation before any reques
   // The reply carried no connection, so the tab reports the loss instead of pretending.
   await screen.findByText("The connection was lost. Turn it on again to reconnect.");
   expect(screen.getByRole("switch", { name: "Use this browser as a display" })).not.toBeChecked();
-  expect(screen.getByText("Not connected")).toBeVisible();
+  expect(screen.getByText("Offline")).toBeVisible();
   expect(mock).toHaveBeenCalledTimes(1);
 });

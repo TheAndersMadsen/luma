@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { BrowserRoom } from "./browserRoom";
-import type { RenderCommand, RoomConnection, Stamp } from "./contracts/ambianceRuntime";
+import type { RenderCommand, RoomConnection, Stamp, TurnStatus } from "./contracts/ambianceRuntime";
 
 export const incarnation = "22222222-2222-2222-2222-222222222222";
 export const runtimeEpoch = "55555555-5555-5555-5555-555555555555";
@@ -26,6 +26,11 @@ export class TestRoom implements BrowserRoom {
   clear(actionId: string, sequence = 2) {
     const stamp: Stamp = { epoch: runtimeEpoch, sequence, instanceId: crypto.randomUUID() };
     return this.receive(JSON.stringify({ version: 1, kind: "clear", stamp, actionId }));
+  }
+  status(status: Partial<TurnStatus> & Pick<TurnStatus, "turnId" | "state">, sequence = 2) {
+    const stamp: Stamp = { epoch: runtimeEpoch, sequence, instanceId: crypto.randomUUID() };
+    return this.receive(JSON.stringify({ version: 1, kind: "status", stamp,
+      status: { version: 1, generation: 1, surface: null, privacy: "shared_room", ...status } }));
   }
   messages() { return this.invoke.mock.calls.map(([payload]) => JSON.parse(payload)); }
 }

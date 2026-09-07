@@ -2,7 +2,7 @@
 import { createHash, webcrypto } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { BrowserRuntime } from "./browserRuntime";
-import { incarnation, roomConnection, TestRoom } from "./browserRoom.test-support";
+import { incarnation, roomConnection, runtimeEpoch, TestRoom } from "./browserRoom.test-support";
 import { renderContentPayload, type PlacesContent, type RenderCommand } from "./contracts/ambianceRuntime";
 let runtime: BrowserRuntime; let room: TestRoom;
 const surfaceId = "11111111-1111-1111-1111-111111111111";
@@ -23,7 +23,10 @@ const placesCommand = (): RenderCommand & { content: PlacesContent } => ({ ...co
   contentDigest: createHash("sha256").update(JSON.stringify(["cosmos.place-address-card", 1, "Central Library",
     [["place-library", "Central Library", "1 Library Road", "https://www.google.com/maps/place/Central-Library"]],
     ["Library information provider"]])).digest("hex") });
-const renderCases = [{ kind: "text", makeCommand: command }, { kind: "places", makeCommand: placesCommand }];
+const choicesCommand = (): RenderCommand => ({ ...command(),
+  content: { kind: "choices", title: "Which library?", items: [{ id: "1", title: "Central", detail: "Open" }, { id: "2", title: "East", detail: "" }] },
+  contentDigest: createHash("sha256").update(JSON.stringify(["cosmos.choice-list", 1, "Which library?", [["1", "Central", "Open"], ["2", "East", ""]]])).digest("hex") });
+const renderCases = [{ kind: "text", makeCommand: command }, { kind: "places", makeCommand: placesCommand }, { kind: "choices", makeCommand: choicesCommand }];
 it("fences a failed incarnation and cannot reconnect on a heartbeat", async () => {
   vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 403 }));
   await expect(runtime.start(connection())).rejects.toThrow();
@@ -168,4 +171,15 @@ it.each(["hide", "expiry", "clear"] as const)("%s removes a place card and fence
 });
 it("bounds UTF-8 input without contacting transport", async () => {
   await runtime.input("é".repeat(2001)); expect(fetch).not.toHaveBeenCalled(); expect(room.invoke).not.toHaveBeenCalled();
+});
+it("a status frame updates the status line, is receipted once per stamp and never renders or acknowledges", async () => {
+  const status = vi.fn(); const render = vi.fn(); runtime = new BrowserRuntime(surfaceId, render, status, () => room);
+  await runtime.start(connection()); await runtime.visibility(true);
+  const receipt = JSON.parse(await room.status({ turnId: crypto.randomUUID(), state: "spoken", surface: { platform: "pin" } }, 1));
+  expect(receipt).toMatchObject({ version: 1, kind: "received", stamp: { epoch: runtimeEpoch, sequence: 1 } });
+  expect(status).toHaveBeenLastCalledWith({ title: "Completed", detail: "Spoken on your Ai Pin" });
+  await expect(room.status({ turnId: crypto.randomUUID(), state: "working" }, 1)).rejects.toThrow("stale_or_changed_frame");
+  expect(status).toHaveBeenLastCalledWith({ title: "Completed", detail: "Spoken on your Ai Pin" });
+  expect(render.mock.calls.filter(([value]) => value)).toHaveLength(0);
+  expect(room.messages().filter(m => m.control?.kind === "acknowledge")).toHaveLength(0);
 });

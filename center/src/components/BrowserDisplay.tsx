@@ -1,9 +1,9 @@
 "use client";
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { SurfaceTab, type TabStatus } from "@/app/settings/account/surfaces/surfaceTab";
-import { BrowserRuntime } from "@/lib/browserRuntime";
-import type { PlacesContent, RenderCommand } from "@/lib/contracts/ambianceRuntime";
+import { TabSwitch, useSurfaceTab } from "@/app/settings/account/surfaces/TabDisplay";
+import type { BrowserRuntime } from "@/lib/browserRuntime";
+import type { ChoicesContent, PlacesContent, RenderCommand } from "@/lib/contracts/ambianceRuntime";
 import { parsePlaceAttribution, type PlaceAttributionPart } from "@/lib/placeAttribution";
 import styles from "./browserDisplay.module.css";
 
@@ -44,6 +44,24 @@ function placesCommitted(node: HTMLElement, content: PlacesContent, credits: Pla
   });
 }
 
+/**
+ * A numbered list whose numbers are the exact choice ids, so an answer by number
+ * names what Cosmos meant. Each row is one control the owner can press, click or
+ * pick with a digit; the committed text under it is still exactly the runtime's.
+ */
+function choicesCommitted(node: HTMLElement, content: ChoicesContent): boolean {
+  if (node.childNodes.length !== 2) return false;
+  const [title, list] = Array.from(node.childNodes);
+  if (!exactText(title, "H2", content.title) || !(list instanceof HTMLOListElement) || list.childNodes.length !== content.items.length) return false;
+  return content.items.every((item, index) => {
+    const row = list.childNodes[index];
+    if (!(row instanceof HTMLLIElement) || row.getAttribute("value") !== item.id || row.childNodes.length !== 1) return false;
+    const action = row.firstChild;
+    return action instanceof HTMLButtonElement && action.childNodes.length === (item.detail ? 2 : 1)
+      && exactText(action.childNodes[0], "STRONG", item.title) && (!item.detail || exactText(action.childNodes[1], "P", item.detail));
+  });
+}
+
 function fitPlaceCard(node: HTMLElement): boolean {
   const bounds = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
   for (let parent = node.parentElement; parent; parent = parent.parentElement) {
@@ -72,8 +90,14 @@ function fitPlaceCard(node: HTMLElement): boolean {
 }
 
 /** Acknowledgment follows an exact DOM commit, including all required credit. */
-export function CommittedCard({ command, runtime }: { command: RenderCommand | null; runtime: BrowserRuntime | undefined }) {
+export function CommittedCard({ command, runtime, onChoose }: {
+  command: RenderCommand | null;
+  runtime: BrowserRuntime | undefined;
+  /** Answering a choice sends its exact title as the next request; absent, the list is shown but inert. */
+  onChoose?: (title: string) => void;
+}) {
   const node = useRef<HTMLElement>(null);
+  const list = useRef<HTMLOListElement>(null);
   const [failedAction, setFailedAction] = useState<string | null>(null);
   const credits = useMemo(() => {
     if (command?.content.kind !== "places") return null;
@@ -85,6 +109,11 @@ export function CommittedCard({ command, runtime }: { command: RenderCommand | n
     if (!command || !card?.isConnected || document.visibilityState !== "visible") return;
     if (command.content.kind === "text") {
       if (card.childNodes.length === 1 && exactText(card.firstChild ?? undefined, "P", command.content.text)) void runtime?.committed(command);
+      return;
+    }
+    if (command.content.kind === "choices") {
+      if (choicesCommitted(card, command.content)) void runtime?.committed(command);
+      else { setFailedAction(command.actionId); runtime?.displayFailed(command); }
       return;
     }
     const commit = () => {
@@ -102,9 +131,29 @@ export function CommittedCard({ command, runtime }: { command: RenderCommand | n
     for (const child of card.children) observer?.observe(child);
     return () => { window.removeEventListener("resize", commit); window.removeEventListener("scroll", commit, true); observer?.disconnect(); };
   });
+  /** Digits 1–8 pick, arrows walk the list, Home and End jump; Enter and Space are the button's own. */
+  function choiceKeys(event: React.KeyboardEvent<HTMLOListElement>, items: ChoicesContent["items"]) {
+    const buttons = Array.from(list.current?.querySelectorAll("button") ?? []);
+    if (!buttons.length) return;
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const move = (index: number) => { event.preventDefault(); buttons[Math.min(Math.max(index, 0), buttons.length - 1)]?.focus(); };
+    if (event.key === "ArrowDown") return move(at + 1);
+    if (event.key === "ArrowUp") return move(at < 0 ? buttons.length - 1 : at - 1);
+    if (event.key === "Home") return move(0);
+    if (event.key === "End") return move(buttons.length - 1);
+    if (/^[1-8]$/u.test(event.key)) {
+      const index = items.findIndex(item => item.id === event.key);
+      if (index >= 0) { event.preventDefault(); buttons[index]?.focus(); onChoose?.(items[index].title); }
+    }
+  }
   if (!command || failedAction === command.actionId || command.content.kind === "places" && credits === null) return null;
   const content = command.content;
-  return <article ref={node} className={`${styles.card}${content.kind === "places" ? ` ${styles.placesCard}` : ""}`} aria-label="Cosmos display">{content.kind === "text" ? <p>{content.text}</p> : <>
+  return <article ref={node} className={`${styles.card}${content.kind === "places" ? ` ${styles.placesCard}` : ""}`} aria-label="Cosmos display">{content.kind === "text" ? <p>{content.text}</p> : content.kind === "choices" ? <>
+      <h2 className={styles.placeQuery}>{content.title}</h2>
+      <ol ref={list} className={styles.choices} onKeyDown={event => choiceKeys(event, content.items)}>{content.items.map(item => <li key={item.id} value={Number(item.id)}>
+        <button type="button" disabled={!onChoose} onClick={() => onChoose?.(item.title)}><strong>{item.title}</strong>{item.detail ? <p>{item.detail}</p> : null}</button>
+      </li>)}</ol>
+    </> : <>
     <h2 className={styles.placeQuery}>{content.query}</h2>
     {content.items.length ? <ol className={styles.places}>{content.items.map(item => <li key={item.placeId} data-place-id={item.placeId}>
       <strong>{item.name}</strong><p>{item.address}</p>{item.sourceUrl !== null ? <a href={item.sourceUrl} target="_blank" rel="noreferrer noopener" referrerPolicy="no-referrer">View on Google Maps</a> : null}
@@ -117,40 +166,69 @@ export function CommittedCard({ command, runtime }: { command: RenderCommand | n
   </>}</article>;
 }
 
+/** Prompts that work with the permissions a browser can hold today. A browser never reads its own screen. */
+const EXAMPLES = ["Find cafés near me", "Show my notes about the kitchen", "What is the weather today?"] as const;
+/** While one of these is the state, the turn is still running and Cancel task is worth offering. */
+const OPEN_STATES: readonly string[] = ["Working", "Waiting for a device", "Waiting for you"];
+
+/**
+ * The Ask Cosmos panel: what was just sent, where the turn stands, the card the
+ * runtime delivered, and one prompt field. Closing the panel hides it; the turn
+ * keeps running, and Cancel task is a separate, explicit action.
+ */
 export function BrowserDisplay({ active = true }: { active?: boolean }) {
-  const [status, setStatus] = useState<TabStatus>("inactive");
-  const [message, setMessage] = useState("");
-  const [command, setCommand] = useState<RenderCommand | null>(null);
+  const tab = useSurfaceTab(active);
   const [draft, setDraft] = useState("");
-  const [confirming, setConfirming] = useState(false);
-  const tab = useRef<SurfaceTab | null>(null);
-  const isActive = useRef(active); isActive.current = active;
-  useEffect(() => {
-    const runtime = new BrowserRuntime(crypto.randomUUID(), setCommand, setMessage);
-    const current = new SurfaceTab(setStatus, () => {}, runtime); tab.current = current;
-    const visibility = () => { current.visibility(isActive.current && document.visibilityState === "visible"); if (document.visibilityState !== "visible") setDraft(""); };
-    const pagehide = () => { current.leave(); setDraft(""); };
-    document.addEventListener("visibilitychange", visibility); window.addEventListener("pagehide", pagehide);
-    return () => { document.removeEventListener("visibilitychange", visibility); window.removeEventListener("pagehide", pagehide); current.dispose(); tab.current = null; };
-  }, []);
-  useEffect(() => { if (!active) { tab.current?.leave(); setDraft(""); setMessage(""); setConfirming(false); } }, [active]);
+  const [sent, setSent] = useState("");
+  const [sending, setSending] = useState(false);
+  const ready = active && tab.tabStatus === "visible";
+  useEffect(() => { if (!ready) { setDraft(""); setSent(""); setSending(false); } }, [ready]);
+  const status = tab.status;
+  const turnOpen = OPEN_STATES.includes(status.title);
+  const command = ready ? tab.command : null;
+  const empty = !command && !sent;
+
+  /** Acknowledged the instant it leaves: the line appears as "Now", the field clears, and Send stays down until Cosmos answers. */
+  function send(text: string) {
+    if (!ready || sending || !text.trim()) return;
+    setSent(text.trim()); setDraft(""); setSending(true);
+    void tab.input(text.trim()).finally(() => setSending(false));
+  }
+  function promptKeys(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (draft.length || command?.content.kind !== "choices" || !/^[1-8]$/u.test(event.key)) return;
+    const item = command.content.items.find(candidate => candidate.id === event.key);
+    if (item) { event.preventDefault(); send(item.title); }
+  }
+
   return <div className={styles.display}>
-    <p className={styles.notice}>This is a shared display. Use public text only. Cosmos cannot establish who can see this screen; private memories, speech and device actions are unavailable here.</p>
-    <div className={styles.actions}>
-    {confirming ? <div role="group" aria-label="Approve shared display">
-      <p>Approve this tab to send public text requests and display public replies for one hour?</p>
-      <button onClick={() => { setConfirming(false); void tab.current?.approve(); }}>Confirm shared display</button>
-      <button onClick={() => setConfirming(false)}>Cancel</button>
-    </div> : <button disabled={!active || status === "approving"} onClick={() => setConfirming(true)}>Approve this tab</button>}
-    <button onClick={() => { tab.current?.leave(); setDraft(""); setMessage(""); }}>Leave this tab</button>
+    <div className={styles.control}>
+      <TabSwitch title="Show replies in this browser" tabStatus={tab.tabStatus} on={tab.on} disabled={!active} onApprove={tab.approve} onLeave={tab.leave} />
     </div>
-    <p className={styles.status} role="status">{status === "visible" ? message : status === "inactive" ? "Approve this tab to ask Cosmos." : `Display ${status}.`}</p>
-    {status === "lost" && message && <p>{message}</p>}
-    <CommittedCard command={active && status === "visible" ? command : null} runtime={tab.current?.runtime} />
-    <form className={styles.composer} onSubmit={event => { event.preventDefault(); const text = draft.trim(); if (status === "visible" && text) { setDraft(""); void tab.current?.runtime?.input(text); } }}>
-      <input aria-label="Ask Cosmos" placeholder="Ask Cosmos a public question…" maxLength={4000} value={draft} disabled={!active || status !== "visible"} onChange={event => setDraft(event.target.value)} />
-      <button type="submit" aria-label="Send" disabled={!active || status !== "visible" || !draft.trim()}>Send</button>
-      <button type="button" disabled={!active || status !== "visible"} onClick={() => { void tab.current?.runtime.cancel(); }}>Cancel request</button>
+    <div className={styles.body}>
+      <p className={styles.presence} role="status">
+        {status.title ? <span className={styles.presenceTitle}>{status.title}</span> : null}
+        {status.detail ? <span className={styles.presenceDetail}>{status.detail}</span> : null}
+      </p>
+      {sent ? <p className={styles.now}><span className={styles.nowLabel}>Now</span><span className={styles.nowText}>{sent}</span></p> : null}
+      <CommittedCard command={command} runtime={tab.runtime} onChoose={ready ? send : undefined} />
+      {empty ? <div className={styles.empty}>
+        <span className={styles.nebula} aria-hidden="true" />
+        <h2 className={styles.emptyTitle}>Ask anything</h2>
+        <p className={styles.emptyBody}>{ready ? "Replies appear here or on the device that suits them best."
+          : "Turn on replies in this browser to ask Cosmos from this tab."}</p>
+        <ul className={styles.examples}>{EXAMPLES.map(example => <li key={example}>
+          <button type="button" className={styles.example} disabled={!ready || sending} onClick={() => send(example)}>{example}</button>
+        </li>)}</ul>
+      </div> : null}
+    </div>
+    <form className={styles.composer} onSubmit={event => { event.preventDefault(); send(draft); }}>
+      <input aria-label="Ask Cosmos" placeholder={ready ? "Ask Cosmos…" : "Waiting for the connection…"} maxLength={4000}
+        value={draft} disabled={!ready || sending} autoComplete="off" onKeyDown={promptKeys} onChange={event => setDraft(event.target.value)} />
+      <button type="submit" className={styles.send} disabled={!ready || sending || !draft.trim()}>Send</button>
     </form>
+    <div className={styles.tray}>
+      {ready ? <span className={styles.destination} title="Cosmos may still answer on another device it thinks suits the reply better.">→ This screen</span> : <span />}
+      {turnOpen ? <button type="button" className={styles.trayAction} onClick={tab.cancel}>Cancel task</button> : null}
+    </div>
   </div>;
 }

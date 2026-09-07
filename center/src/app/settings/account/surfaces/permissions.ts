@@ -3,6 +3,7 @@ import { exact } from "@/lib/contracts/surfaces";
 import { SPEECH_DISCLOSURE_APPROVAL, parseSpeechApproval, type SpeechApproval, type SpeechPolicy } from "@/lib/contracts/speechDisclosure";
 import { LOOKUP_SERVICES, parseLookupState, type LookupPolicy, type LookupProvider, type LookupService, type LookupState } from "@/lib/contracts/lookupDisclosure";
 import { PRIVATE_DISPLAY_APPROVAL, parsePrivateDisplayApproval, type PrivateDisplayApproval, type PrivateDisplayPolicy } from "@/lib/contracts/privateDisplay";
+import { SCREEN_CONTEXT_APPROVAL, parseScreenContextApproval, type ScreenContextApproval, type ScreenContextPolicy } from "@/lib/contracts/screenContext";
 
 const TIMEOUT = 10000;
 
@@ -64,6 +65,26 @@ export function privatePermission(surfaceId: string, approvalRevision: number): 
     async write(snapshot, policy, signal) {
       const expectedRevision = snapshot?.revision ?? 0;
       const saved = parsePrivateDisplayApproval(await post(path, { approval: PRIVATE_DISPLAY_APPROVAL, approvalRevision, expectedRevision, policy }, signal));
+      if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
+      return saved;
+    },
+  };
+}
+
+export const SCREEN_CONTEXT_POLICY: ScreenContextPolicy = { maximumClass: "private" };
+
+/** Screen text may be read once for a private reply on the same device; TVs and browsers never hold it. */
+export function screenContextPermission(surfaceId: string, approvalRevision: number): Permission<ScreenContextApproval | null, ScreenContextPolicy> {
+  const path = `/api/surfaces/${surfaceId}/screen-context`;
+  return {
+    async read(signal) {
+      const saved = parseScreenContextApproval(await get(path, signal));
+      if (saved && saved.approvalRevision !== approvalRevision) throw new Error("approval_changed");
+      return saved;
+    },
+    async write(snapshot, policy, signal) {
+      const expectedRevision = snapshot?.revision ?? 0;
+      const saved = parseScreenContextApproval(await post(path, { approval: SCREEN_CONTEXT_APPROVAL, approvalRevision, expectedRevision, policy }, signal));
       if (!saved || saved.approvalRevision !== approvalRevision || saved.revision !== expectedRevision + 1 || !exact(saved.policy, policy)) throw new Error("approval_mismatch");
       return saved;
     },

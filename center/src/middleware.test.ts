@@ -58,7 +58,7 @@ describe("public discovery middleware", () => {
   it("keeps every real private page behind authentication", async () => {
     const privatePaths = [
       "/captures", "/captures/id", "/notes", "/notes/id", "/my-data/music",
-      "/settings", "/settings/account/services", "/settings/pin/activity",
+      "/settings", "/settings/account/services", "/settings/account/activity", "/settings/pin/activity",
       "/settings/pin/conversations/id", "/settings/pin/gallery/id", "/talk",
     ];
     for (const path of privatePaths) expect(isProtectedPageRequest(path), path).toBe(true);

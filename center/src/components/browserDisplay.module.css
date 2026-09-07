@@ -1,42 +1,91 @@
+/*
+ * The Ask Cosmos panel and the one card the runtime delivered.
+ *
+ * Graphite ground, beam cyan as the only accent, one type scale, and reserved
+ * space for the presence line so nothing moves when a status arrives. Only the
+ * body scrolls; the prompt and the tray stay put.
+ */
+
 .display {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding-block: 18px 2px;
+  padding-block: 14px 2px;
   font-size: 14px;
   line-height: 1.5;
 }
 
-.notice,
-.status { margin: 0; color: var(--hu-colors-crater-base); }
-.status { font-size: 12px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.actions [role="group"] { display: flex; flex-wrap: wrap; gap: 8px; }
-.actions [role="group"] p { flex-basis: 100%; margin: 0 0 4px; }
+/* The shared switch row, without the divider it draws inside a Devices card. */
+.control { flex: none; }
+.control > div:first-child { padding-top: 0; padding-bottom: 8px; border-top: 0; }
 
-.display button {
-  min-height: 44px;
-  padding: 10px 14px;
-  border: 1px solid var(--hu-divider);
-  border-radius: 12px;
-  font: inherit;
-  color: var(--hu-colors-white);
-  background: var(--hu-colors-button-background-dark-secondary-base);
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hu-divider);
 }
-.display button:hover:enabled { border-color: var(--hu-colors-beam-base); }
-.display button:disabled { opacity: 0.4; cursor: default; }
-.display button:focus-visible,
-.composer input:focus-visible { outline: 2px solid var(--hu-colors-beam-base); outline-offset: 2px; }
+
+/* Reserved height: an empty state line must not move the card under it. */
+.presence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-height: 20px;
+  margin: 0;
+}
+
+.presenceTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hu-colors-beam-base);
+}
+
+.presenceDetail {
+  max-width: 68ch;
+  font-size: 13px;
+  color: var(--hu-colors-crater-base);
+}
+
+/* What was just sent, the instant it was sent. */
+.now {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  animation: cardIn var(--transition-duration) ease-out both;
+}
+
+.nowLabel {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--hu-colors-crater-base);
+}
+
+.nowText {
+  min-width: 0;
+  max-width: 68ch;
+  color: var(--hu-colors-white);
+  overflow-wrap: anywhere;
+}
 
 .card {
+  max-width: 68ch;
   padding: 16px;
   border: 1px solid var(--hu-divider);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.035);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  animation: cardIn var(--transition-duration) ease-out both;
 }
 .card p { margin: 0; }
 .placesCard { box-sizing: border-box; flex-shrink: 0; display: flex; flex-direction: column; max-height: var(--place-card-height, min(480px, 65dvh)); overflow: hidden; }
@@ -48,9 +97,95 @@
 .attributions { flex-shrink: 0; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--hu-divider); font-family: Arial, sans-serif; font-size: 13px; font-weight: 400; }
 .attributions p + p { margin-top: 4px; }
 .googleMaps { font-family: Arial, sans-serif; font-size: 14px; font-weight: 400; line-height: 20px; color: var(--hu-colors-white); }
-.composer { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* A numbered list: click, press Enter, or type the number. */
+.choices { margin: 0; padding-left: 26px; }
+.choices li + li { margin-top: 6px; }
+.choices li::marker { color: var(--hu-colors-beam-base); font-weight: 600; }
+.choices button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background-color var(--transition-duration) ease-out,
+    border-color var(--transition-duration) ease-out;
+}
+.choices button:hover:enabled { border-color: var(--hu-divider); background: rgba(255, 255, 255, 0.05); }
+.choices button:disabled { cursor: default; }
+.choices button:focus-visible { outline: 2px solid var(--hu-colors-beam-base); outline-offset: 2px; }
+.choices strong { font-weight: 500; }
+.choices p { margin-top: 2px; color: var(--hu-colors-crater-base); }
+
+/* Welcome and empty state: the nebula lives here and nowhere else. */
+.empty {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 0 4px;
+}
+
+.nebula {
+  position: absolute;
+  top: -40px;
+  left: -60px;
+  width: 260px;
+  height: 220px;
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side, rgba(0, 255, 224, 0.16), rgba(0, 255, 224, 0) 70%),
+    radial-gradient(closest-side at 70% 60%, rgba(0, 133, 118, 0.22), rgba(0, 133, 118, 0) 70%);
+  filter: blur(6px);
+}
+
+.emptyTitle {
+  position: relative;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--hu-colors-white);
+}
+
+.emptyBody {
+  position: relative;
+  margin: 0;
+  max-width: 52ch;
+  color: var(--hu-colors-crater-base);
+}
+
+.examples {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.example {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid var(--hu-divider);
+  border-radius: 100px;
+  color: var(--hu-colors-crater-base);
+  font: inherit;
+  transition: color var(--transition-duration) ease-out,
+    border-color var(--transition-duration) ease-out;
+}
+.example:hover:enabled { color: var(--hu-colors-white); border-color: var(--hu-colors-beam-base); }
+.example:disabled { opacity: 0.5; cursor: default; }
+
+.composer { display: flex; gap: 8px; }
 .composer input {
-  flex: 1 1 100%;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 48px;
   padding: 12px 14px;
@@ -59,6 +194,58 @@
   background: rgba(0, 0, 0, 0.2);
   color: var(--hu-colors-white);
   font: inherit;
+  transition: border-color var(--transition-duration) ease-out;
 }
+.composer input:hover:enabled { border-color: var(--hu-colors-crater-grey-200); }
 .composer input::placeholder { color: var(--hu-colors-crater-base); }
-.composer button[type="submit"] { color: var(--hu-colors-beam-base); }
+.composer input:disabled { opacity: 0.6; }
+
+.send {
+  flex: none;
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: 100px;
+  background: var(--hu-colors-beam-base);
+  color: var(--hu-colors-eclipse-base);
+  font: inherit;
+  font-weight: 500;
+  transition: background-color var(--transition-duration) ease-out;
+}
+.send:hover:enabled { background: var(--hu-colors-button-background-dark-primary-hover); }
+.send:disabled { background: var(--hu-colors-button-background-dark-secondary-base); color: var(--hu-colors-crater-base); cursor: default; }
+
+/* Where the reply can land, and the one explicit way to stop a running task. */
+.tray {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.destination {
+  padding: 4px 10px;
+  border: 1px solid var(--hu-divider);
+  border-radius: 100px;
+  font-size: 12px;
+  color: var(--hu-colors-crater-base);
+}
+
+.trayAction {
+  min-height: 28px;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--hu-colors-crater-base);
+  transition: color var(--transition-duration) ease-out;
+}
+.trayAction:hover { color: var(--hu-colors-white); }
+
+.composer input:focus-visible,
+.send:focus-visible,
+.example:focus-visible,
+.trayAction:focus-visible { outline: 2px solid var(--hu-colors-beam-base); outline-offset: 2px; }
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

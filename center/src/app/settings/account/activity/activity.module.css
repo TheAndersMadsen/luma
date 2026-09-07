@@ -1,0 +1,139 @@
+/*
+ * Activity — one scannable row per turn, grouped by day. The "Why" disclosure
+ * stays secondary; nothing here has a colour of its own except the beam accent
+ * on the day heading rule and the disclosure's summary.
+ */
+
+.lead,
+.note {
+  margin: 0;
+  padding: 20px 24px;
+  max-width: 68ch;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+  overflow-wrap: anywhere;
+}
+
+.note { padding-top: 0; }
+
+/* A friendly end of the road: what happened, and the one thing to do next. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 24px 28px;
+  max-width: 68ch;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+}
+
+.empty p { margin: 0; }
+
+.emptyTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+}
+
+.emptyAction {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+  margin-top: 10px;
+}
+
+.turns {
+  list-style: none;
+  margin: 0;
+  padding: 0 24px 8px;
+}
+
+.turn p { margin: 0; }
+
+/* The day this run of turns belongs to. */
+.day {
+  margin: 0;
+  padding: 20px 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--hu-text-muted);
+}
+
+.turn:first-child .day { padding-top: 4px; }
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "when outcome" "asked outcome" "why why";
+  gap: 2px 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--hu-divider);
+}
+
+.when {
+  grid-area: when;
+  font-size: 12px;
+  color: var(--hu-text-muted);
+}
+
+.asked {
+  grid-area: asked;
+  font-size: 15px;
+  color: var(--hu-colors-white);
+}
+
+.outcome {
+  grid-area: outcome;
+  align-self: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--hu-colors-white);
+  text-align: right;
+}
+
+.why {
+  grid-area: why;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--hu-colors-crater-base);
+}
+
+.why summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--hu-text-muted);
+  cursor: pointer;
+  transition: color var(--transition-duration) ease-out;
+}
+
+.why summary:hover { color: var(--hu-colors-beam-base); }
+.why summary:focus-visible { outline: 2px solid var(--hu-colors-beam-base); outline-offset: 3px; }
+
+.reason {
+  margin-top: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hu-divider);
+  max-width: 68ch;
+}
+
+.reason ul { margin: 0; padding-left: 20px; }
+.reason li + li { margin-top: 4px; }
+.reason p { margin-top: 6px; }
+.reason ul + p { margin-top: 8px; }
+
+@media (max-width: 560px) {
+  .lead { padding-inline: 18px; }
+  .note { padding-inline: 18px; }
+  .empty { padding-inline: 18px; }
+  .turns { padding-inline: 18px; }
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "when" "asked" "outcome" "why";
+  }
+  .outcome { text-align: left; }
+}

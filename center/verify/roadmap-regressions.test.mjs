@@ -192,7 +192,8 @@ test("muted text uses the accessible token and reduced motion is global", async 
   // imperative animation; the global reduced-motion rule still covers CSS.
   const display = withoutComments(await source("src/components/BrowserDisplay.tsx"));
   assert.doesNotMatch(display, /scrollTo\(|scrollIntoView\(|\.animate\(|behavior:\s*["']smooth["']/);
-  assert.match(display, /command=\{active && status === "visible" \? command : null\}/);
+  assert.match(display, /const ready = active && tab\.tabStatus === "visible"/);
+  assert.match(display, /const command = ready \? tab\.command : null;/);
 });
 
 test("My Data and capture overlays have symmetric, reduced-motion-aware exits", async () => {

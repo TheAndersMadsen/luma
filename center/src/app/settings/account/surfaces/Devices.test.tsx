@@ -22,10 +22,10 @@ const second: NativeSurface = { ...first, surfaceId: "bbbbbbbb-bbbb-bbbb-bbbb-bb
 const path = "/api/surfaces/native";
 const approved = "Approved. Cosmos shows replies on this device while its app is in front.";
 const removed = "Removed. This device no longer shows replies.";
-const empty = "No phones, TVs or computers yet. Choose Add a device to show Cosmos replies on one.";
-const firstCard = "Android TV 11111111";
-const secondCard = "Linux PC 22222222";
-const PERMISSION = /^\/api\/surfaces\/([0-9a-f-]{36})\/(speech-disclosure|private-display|web-lookup|places-lookup)$/u;
+const empty = "No phones, TVs or computers yet";
+const firstCard = "TV";
+const secondCard = "Linux PC";
+const PERMISSION = /^\/api\/surfaces\/([0-9a-f-]{36})\/(speech-disclosure|private-display|screen-context|web-lookup|places-lookup)$/u;
 
 beforeEach(() => {
   vi.stubGlobal("crypto", webcrypto);
@@ -65,7 +65,7 @@ async function ready() {
 }
 function openAdd() {
   fireEvent.click(screen.getByRole("button", { name: "Add a device" }));
-  fireEvent.click(screen.getByRole("button", { name: "Enter a descriptor manually" }));
+  fireEvent.click(screen.getByRole("button", { name: "Enter the device details by hand" }));
 }
 function paste(text = serialized) {
   fireEvent.change(screen.getByLabelText("Public installation descriptor"), { target: { value: text } });
@@ -121,14 +121,16 @@ it("shows this browser and a calm empty state, then requires review and a separa
   expect(screen.getByText(empty)).toBeVisible();
   expect(screen.queryByLabelText("Public installation descriptor")).not.toBeInTheDocument();
   openAdd();
-  expect(screen.getByText(/shows a QR code or an “Approve in Center” link/)).toBeVisible();
+  expect(screen.getByText(/open Cosmos and choose/u)).toBeVisible();
+  expect(screen.getByText(/scan its QR code with your phone/u)).toBeVisible();
   paste();
   expect(calls(mock, /\/enrollments\//)).toHaveLength(0);
   expect(screen.queryByRole("button", { name: "Approve this device" })).not.toBeInTheDocument();
   const inspected = within(await review());
-  expect(inspected.getByRole("heading", { name: "Android TV" })).toBeVisible();
+  expect(inspected.getByRole("heading", { name: "TV" })).toBeVisible();
   for (const line of fingerprintLines(fingerprint)) expect(inspected.getByText(line)).toBeVisible();
   expect(inspected.getByText("Compare with the fingerprint shown on the device.")).toBeVisible();
+  expect(inspected.getByText("This device is waiting for your approval.")).toBeVisible();
   expect(inspected.queryByText(descriptor.enrollmentId)).not.toBeInTheDocument();
   expect(calls(mock, `${path}/enrollments/${descriptor.enrollmentId}`)).toHaveLength(1);
   expect(mutations(mock)).toHaveLength(0);
@@ -146,17 +148,19 @@ it("shows this browser and a calm empty state, then requires review and a separa
   expect(screen.queryByLabelText("Public installation descriptor")).not.toBeInTheDocument();
   expect(screen.queryByText(empty)).not.toBeInTheDocument();
   const tv = card(firstCard);
-  expect(tv.getByRole("heading", { name: "Android TV" })).toBeVisible();
-  expect(tv.getByText("Not connected")).toBeVisible();
+  expect(tv.getByRole("heading", { name: "TV" })).toBeVisible();
+  expect(tv.getByText("Offline")).toBeVisible();
   expect(tv.getByRole("group", { name: "Set up the usual permissions" })).toBeVisible();
   expect(tv.getByRole("switch", { name: "Speak replies" })).toBeInTheDocument();
   expect(tv.getByRole("switch", { name: "Look things up on the web" })).toBeInTheDocument();
   expect(tv.getByRole("switch", { name: "Find places" })).toBeInTheDocument();
   expect(tv.queryByRole("switch", { name: "Show private replies here" })).not.toBeInTheDocument();
+  expect(tv.queryByRole("switch", { name: "Use what's on the screen" })).not.toBeInTheDocument();
   expect(tv.queryByText(descriptor.enrollmentId)).not.toBeInTheDocument();
   expect(tv.queryByText(fingerprint)).not.toBeInTheDocument();
   await waitFor(() => expect(calls(mock, /\/(?:web|places)-lookup$/)).toHaveLength(2));
   expect(calls(mock, /\/private-display$/)).toHaveLength(0);
+  expect(calls(mock, /\/screen-context$/)).toHaveLength(0);
   expect(mutations(mock)).toHaveLength(1);
 });
 
@@ -173,11 +177,11 @@ it("shows each device as a plain card: status words from the runtime, capabiliti
     return undefined;
   });
   render(<Devices />); await ready();
-  const phoneCard = card("Android phone 33333333");
+  const phoneCard = card("Phone");
   expect(phoneCard.getByText("Connected")).toBeVisible();
   await phoneCard.findByText("Shows shared replies · Speaks replies · Looks things up · Shows private replies");
-  expect(card(secondCard).getByText("Connected · app in background")).toBeVisible();
-  expect(card(firstCard).getByText("Not connected")).toBeVisible();
+  expect(card(secondCard).getByText("Connected · in the background")).toBeVisible();
+  expect(card(firstCard).getByText("Offline")).toBeVisible();
   await card(firstCard).findByText("Shows shared replies");
   for (const row of rows) {
     expect(screen.queryByText(row.enrollmentId)).not.toBeInTheDocument();
@@ -242,7 +246,7 @@ it("rejects oversized files without reading them and rejects extra fields in imp
 it("reapproval uses the fresh revoked lookup revision, while an active matching device cannot be approved again", async () => {
   const existing = { ...first, revision: 8, revoked: true };
   const mock = upstream([], existing); render(<Devices />); await ready(); openAdd(); await review();
-  expect(screen.getByText(/This device was removed earlier/)).toBeVisible();
+  expect(screen.getByText(/You removed this device earlier/u)).toBeVisible();
   mock.revisions.set(first.surfaceId, 9);
   mock.mockResolvedValueOnce(Response.json({ native: { ...first, revision: 9 } })); approve();
   await screen.findByText(approved);
@@ -409,7 +413,7 @@ it("a linked descriptor opens the review at once, is consumed once and never rea
   render(<Devices />);
   const inspected = within(await screen.findByRole("group", { name: "Review device" }));
   expect(window.location.hash).toBe("");
-  expect(inspected.getByRole("heading", { name: "Android TV" })).toBeVisible();
+  expect(inspected.getByRole("heading", { name: "TV" })).toBeVisible();
   for (const line of fingerprintLines(fingerprint)) expect(inspected.getByText(line)).toBeVisible();
   expect(inspected.getByText("Compare with the fingerprint shown on the device.")).toBeVisible();
   expect(inspected.getByRole("button", { name: "Approve this device" })).toBeEnabled();
@@ -418,8 +422,46 @@ it("a linked descriptor opens the review at once, is consumed once and never rea
   expect(mutations(mock)).toHaveLength(0);
   window.history.replaceState(null, "", "/settings/account/surfaces#descriptor=not-a-descriptor");
   render(<Devices />);
-  await screen.findByText("The link’s device details are not valid. Enter the descriptor manually instead.");
+  await screen.findByText("That link does not carry valid device details. Enter the device’s code by hand instead.");
   expect(window.location.hash).toBe("");
-  expect(screen.getAllByRole("button", { name: "Enter a descriptor manually" })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Enter the device details by hand" })).toHaveLength(2);
   window.history.replaceState(null, "", "/settings/account/surfaces");
+});
+
+it("walks the owner through adding a device in three steps and says what it is doing while it checks", async () => {
+  const mock = upstream(); render(<Devices />); await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Add a device" }));
+  const panel = within(screen.getByRole("region", { name: "Add a device" }));
+  expect(panel.getAllByRole("listitem").map(item => item.textContent)).toEqual([
+    "On the new device, open Cosmos and choose Approve in Center.",
+    "Open the link it shows — scan its QR code with your phone, or type the link here.",
+    "Check that the code it shows matches the one below, then approve.",
+  ]);
+  expect(screen.queryByText("Checking this device…")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Enter the device details by hand" }));
+  const pending = deferred<Response>(); mock.mockReturnValueOnce(pending.promise);
+  paste();
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  await screen.findByText("Checking this device…");
+  await act(async () => { pending.resolve(new Response(null, { status: 404 })); });
+  await screen.findByRole("group", { name: "Review device" });
+  expect(screen.queryByText("Checking this device…")).not.toBeInTheDocument();
+  expect(mutations(mock)).toHaveLength(0);
+});
+
+it("says calmly that the list is out of date after the tab was hidden, and keeps failure language for an actual failure", async () => {
+  const mock = upstream([first]); render(<Devices />); await ready();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  fireEvent(document, new Event("visibilitychange"));
+  expect(screen.getByText("This list is out of date. Choose Refresh devices to read it again.")).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  fireEvent(document, new Event("visibilitychange"));
+  await ready();
+  expect(screen.queryByText(/out of date/u)).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: firstCard })).toBeVisible();
+  mock.mockRejectedValue(new Error("cosmos unreachable"));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh devices" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Cosmos could not be reached just now. Choose Refresh devices to try again.");
+  expect(screen.queryByText(/out of date/u)).not.toBeInTheDocument();
 });

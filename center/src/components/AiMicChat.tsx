@@ -82,7 +82,7 @@ export function AssistantStatusChip({ className }: { className?: string }) {
       className={className} />;
   }
   if (data.browser_runtime === "public_text") {
-    return <StatusChip tone="live" label="Public text available" detail="Explicit shared-display approval required. Speech and private memory are unavailable in the browser." className={className} />;
+    return <StatusChip tone="live" label="Browser replies available" detail="Turn on Show replies in this browser to ask Cosmos here. Speech and private memories stay off in a browser." className={className} />;
   }
   if (data.assistant) {
     return (

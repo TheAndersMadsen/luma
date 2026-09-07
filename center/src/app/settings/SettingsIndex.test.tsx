@@ -19,7 +19,7 @@ describe("SettingsIndex", () => {
     const user = userEvent.setup();
     render(<SettingsIndex />);
 
-    expect(screen.getAllByText("Open")).toHaveLength(17);
+    expect(screen.getAllByText("Open")).toHaveLength(18);
     await user.type(screen.getByRole("searchbox", { name: "Search settings" }), "battery");
 
     expect(screen.getByRole("link", { name: /My Ai Pin/ })).toBeVisible();

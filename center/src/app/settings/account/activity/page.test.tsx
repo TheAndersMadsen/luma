@@ -1,0 +1,23 @@
+import { expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ session: vi.fn(), redirect: vi.fn(() => { throw new Error("redirect"); }), activity: vi.fn() }));
+vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+vi.mock("@/server/operator", () => ({ currentSession: mocks.session }));
+vi.mock("@/server/auth", () => ({ AUTH_ENABLED: true }));
+vi.mock("@/server/activity", () => ({ readActivity: mocks.activity }));
+vi.mock("./ActivityList", () => ({ ActivityList: () => null }));
+import Page, { dynamic, metadata } from "./page";
+it("page has its own verified session gate and reads the ledger on every request", async () => {
+  expect(metadata.title).toBe("Activity · Ai Pin Revival Center");
+  expect(dynamic).toBe("force-dynamic");
+  mocks.session.mockResolvedValue(null);
+  await expect(Page()).rejects.toThrow("redirect");
+  expect(mocks.redirect).toHaveBeenCalledWith("/login?next=%2Fsettings%2Faccount%2Factivity");
+  expect(mocks.activity).not.toHaveBeenCalled();
+  mocks.session.mockResolvedValue({ sub: "owner" });
+  mocks.activity.mockResolvedValue({ state: "unavailable" });
+  await expect(Page()).resolves.toBeTruthy();
+  expect(mocks.activity).toHaveBeenCalledTimes(1);
+  mocks.activity.mockResolvedValue({ state: "expired" });
+  await expect(Page()).rejects.toThrow("redirect");
+  expect(mocks.redirect).toHaveBeenCalledTimes(2);
+});

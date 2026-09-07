@@ -13,7 +13,10 @@ const FAILURE: Record<PermissionFailure, string> = {
 
 type Props = {
   title: string;
+  /** One sentence on what turning it on lets this device do. */
   description: ReactNode;
+  /** One sentence on what it means for privacy. */
+  privacy?: ReactNode;
   checked: boolean;
   /** True while this cannot be turned on; turning it off stays possible. */
   disabled?: boolean;
@@ -26,12 +29,13 @@ type Props = {
   children?: ReactNode;
 };
 
-/** One plain switch: a title, one line about what it allows, and the state Cosmos last confirmed. */
-export function PermissionSwitch({ title, description, checked, disabled = false, busy, reading, failure, message, onChange, onRetry, children }: Props) {
+/** One plain switch: a title, what it allows, what it means for privacy, and the state Cosmos last confirmed. */
+export function PermissionSwitch({ title, description, privacy, checked, disabled = false, busy, reading, failure, message, onChange, onRetry, children }: Props) {
   return <div className={styles.switchRow} role="group" aria-label={title}>
     <div className={styles.switchText}>
       <span className={styles.switchTitle}>{title}</span>
       <span className={styles.switchDescription}>{description}</span>
+      {privacy ? <span className={styles.switchPrivacy}>{privacy}</span> : null}
       {children}
       {reading ? <span className={styles.switchState} role="status">Checking…</span> : null}
       {failure ? <span className={styles.switchState} role="alert">{FAILURE[failure]}{" "}

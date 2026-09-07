@@ -38,6 +38,14 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         keywords: ["browser", "display", "ambiance", "surfaces", "phone", "tv", "mac", "linux"],
       },
       {
+        title: "Activity",
+        label: "Activity",
+        href: "/settings/account/activity",
+        description: "Where recent requests were asked and where the replies went.",
+        testid: "menu-activity-link",
+        keywords: ["turns", "history", "ledger", "replies", "why", "routing"],
+      },
+      {
         title: "Details",
         label: "Details",
         href: "/settings/account/details",
