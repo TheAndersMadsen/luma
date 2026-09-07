@@ -1,6 +1,12 @@
 package dk.andersmadsen.cosmos.android.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.speech.RecognizerIntent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -25,16 +31,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -56,7 +58,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
@@ -66,6 +67,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -77,8 +79,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -101,6 +101,8 @@ import dk.andersmadsen.cosmos.android.R
 import dk.andersmadsen.cosmos.android.Screen
 import dk.andersmadsen.cosmos.android.SessionStatus
 import dk.andersmadsen.cosmos.android.SurfaceState
+import dk.andersmadsen.cosmos.android.TV_TYPED_IN_CENTER
+import dk.andersmadsen.cosmos.android.TvControl
 import dk.andersmadsen.cosmos.android.TvStage
 import dk.andersmadsen.cosmos.android.notice
 import dk.andersmadsen.cosmos.android.pageRanges
@@ -108,6 +110,7 @@ import dk.andersmadsen.cosmos.android.screen
 import dk.andersmadsen.cosmos.android.serverLabel
 import dk.andersmadsen.cosmos.android.sessionStatus
 import dk.andersmadsen.cosmos.android.taskCard
+import dk.andersmadsen.cosmos.android.tvControl
 import dk.andersmadsen.cosmos.android.tvNotice
 import dk.andersmadsen.cosmos.android.tvStage
 import dk.andersmadsen.cosmos.android.action.DevicePolicy
@@ -140,7 +143,7 @@ private val GRAPHITE = Brush.verticalGradient(listOf(Color(0xFF161B1F), Color(0x
 
 /** Stage geometry as fractions of the screen height so 1080p and a phone agree: a 12% band, a 40 px corner radius at 1080p. */
 private const val BAND = .12f
-private const val INSET_TOP = .012f
+private const val INSET_TOP = .05f
 private const val INSET_RADIUS = .037f
 
 /** The one focusable thing on the stage, the corner crescent, labelled for what it does now. */
@@ -175,23 +178,33 @@ fun TvScreen(state: SurfaceState, approvalRequested: Boolean, actions: SurfaceAc
     }
 }
 
-/** Owns what only this TV knows: the typed request, the open ask field, the paged view and a reply sent away with Back. */
+/** Owns what only this TV knows: the spoken request, the paged view and a reply sent away with Back. */
 @Composable
 private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
     var request by remember { mutableStateOf<Ask?>(null) }
     var dismissed by remember { mutableStateOf<UUID?>(null) }
-    var asking by rememberSaveable { mutableStateOf(false) }
     var reading by rememberSaveable { mutableStateOf(false) }
     val stage = state.tvStage(request, dismissed)
     LaunchedEffect(stage) {
         if (stage is TvStage.Idle || stage is TvStage.Answer || stage is TvStage.Choices) request = null
         if (stage !is TvStage.Answer) reading = false
     }
-    val status = state.sessionStatus()
     val askLabel = stringResource(R.string.tv_ask)
     val retryLabel = stringResource(R.string.retry)
     val connectLabel = stringResource(R.string.connect)
     val cancelLabel = stringResource(R.string.cancel_request)
+    val prompt = stringResource(R.string.tv_voice_prompt)
+    // The television's own voice input, resolved once: it is the only microphone
+    // an app reaches here, and without it this screen cannot be asked anything.
+    val context = LocalContext.current
+    val voiceInput = remember(context) { TvVoiceInput.available(context) }
+    val speak = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val heard = TvVoiceInput.heard(result.resultCode, result.data)
+        if (heard != null) {
+            request = Ask(heard, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
+            actions.send(heard, "")
+        }
+    }
     // The elapsed line of a running command comes from a clock, not a state.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(state.task?.actionId, state.taskReport) {
@@ -202,38 +215,33 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
     }
     // This television never explains a refusal, so it has no card for one.
     val task = state.taskCard(now, DevicePolicy.TV)
-    val action = when {
-        state.canRetry -> TvStageAction(retryLabel, actions.retry)
-        task?.canCancel == true -> TvStageAction(cancelLabel, actions.cancelTask)
-        status != SessionStatus.CONNECTED && state.canConnect -> TvStageAction(connectLabel, actions.connect)
-        else -> TvStageAction(askLabel) { if (asking || state.canSend) asking = !asking }
+    val action = when (state.tvControl(taskRunning = task?.canCancel == true, voiceInput = voiceInput)) {
+        TvControl.RETRY -> TvStageAction(retryLabel, actions.retry)
+        TvControl.CANCEL -> TvStageAction(cancelLabel, actions.cancelTask)
+        TvControl.CONNECT -> TvStageAction(connectLabel, actions.connect)
+        // Nothing is captured here: pressing hands the request to the television's
+        // own voice input, which listens behind its own indicator and returns words.
+        TvControl.ASK -> TvStageAction(askLabel) { runCatching { speak.launch(TvVoiceInput.intent(prompt)) } }
+        TvControl.NONE -> TvStageAction(askLabel) { }
     }
     // A television shows the answer, the question band and nothing else; whatever is
     // left to say is one word or one sentence, and the rule for that lives in tvNotice.
-    val notice = state.tvNotice(now)
-    // Back closes the paged view, then the ask field, then sends the current reply or transcript away.
+    val notice = state.tvNotice(now, voiceInput)
+    // Back closes the paged view, then sends the current reply or transcript away.
     BackHandler(enabled = reading) { reading = false }
-    BackHandler(enabled = asking) { asking = false }
-    BackHandler(enabled = !asking && !reading && stage !is TvStage.Idle) {
+    BackHandler(enabled = !reading && stage !is TvStage.Idle) {
         dismissed = state.display?.actionId ?: state.speech?.actionId
         request = null
     }
     // Back closes the card. It is not Cancel task, which is the corner action.
-    BackHandler(enabled = task != null && !asking && !reading, onBack = actions.closeTask)
+    BackHandler(enabled = task != null && !reading, onBack = actions.closeTask)
     if (reading && stage is TvStage.Answer) {
         TvAnswerPages(stage.full)
         return
     }
     CosmosTvStage(
-        stage = stage, asking = asking, action = action, notice = notice, reducedMotion = LocalReducedMotion.current,
+        stage = stage, action = action, notice = notice, reducedMotion = LocalReducedMotion.current,
         onMore = { reading = true }, onCommitted = actions.committed,
-        askField = { fontSize ->
-            TvAskField(fontSize, enabled = state.canSend) { text ->
-                request = Ask(text, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
-                asking = false
-                actions.send(text, "")
-            }
-        },
         content = { focus, out ->
             // Choosing sends the title with no target: Cosmos decides where that reply goes.
             if (stage is TvStage.Choices) TvChoices(stage, focus, out, enabled = state.canSend, onCommitted = actions.committed) { title ->
@@ -245,32 +253,83 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
 }
 
 /**
+ * The television's own voice input, which is the whole of what a microphone can
+ * be on this hardware. The microphone lives in the remote and only the system
+ * reaches it: the remote's microphone button is `KEYCODE_ASSIST`, which the
+ * framework consumes for the system assistant before any app sees it, and the
+ * television declares no audio input device at all, so nothing in this app can
+ * open one or record a sample. What is left is the recognizer the television
+ * publishes: it listens behind its own full-screen indicator, for as long as
+ * the person speaks, and hands back words. Those words are sent to Cosmos as
+ * the ordinary public text this installation is already approved to send —
+ * never as a Cosmos capture, because no audio was captured here.
+ */
+private object TvVoiceInput {
+    fun intent(prompt: String): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        .putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+
+    /** Whether this television publishes one at all; the manifest's `queries` makes it visible. */
+    fun available(context: Context): Boolean =
+        intent("").resolveActivity(context.packageManager) != null
+
+    /** The words, or null when the person said nothing, was not understood, or backed out. */
+    fun heard(resultCode: Int, data: Intent?): String? {
+        if (resultCode != Activity.RESULT_OK) return null
+        return data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()?.trim()?.ifBlank { null }
+    }
+}
+
+/**
  * The whole TV screen: a content layer (the graphite ready screen until a player takes
  * the slot) and the assistant over it. Working and the transcript shrink the content
  * into a rounded inset above the nebula band; a reply returns it to full screen under
  * a subtitle caption. Text keeps 5% overscan insets; the inset and band reach the edges.
+ *
+ * Nothing here takes typing. There is no field, no keyboard inset and no software
+ * keyboard this screen can raise: the band holds the spoken question or the waveform
+ * and nothing else.
  */
 @Composable
 fun CosmosTvStage(
     stage: TvStage,
-    asking: Boolean,
     action: TvStageAction,
     notice: String?,
     reducedMotion: Boolean,
     onMore: () -> Unit,
     onCommitted: (DisplayCard) -> Unit,
-    askField: @Composable (fontSize: TextUnit) -> Unit,
     content: @Composable (contentFocus: FocusRequester, actionFocus: FocusRequester) -> Unit = { _, _ -> TvReadyContent() },
 ) {
-    val inset = asking || stage is TvStage.Working || stage is TvStage.Transcript
+    val inset = stage is TvStage.Working || stage is TvStage.Transcript
     // Reduced motion cuts between the two framings instead of animating them.
     val progress by animateFloatAsState(if (inset) 1f else 0f, if (reducedMotion) snap() else tween(300), label = "tv-inset")
     val actionFocus = remember { FocusRequester() }
     val contentFocus = remember { FocusRequester() }
-    // The D-pad lands on the choices while they are up, otherwise on the corner crescent.
+    // Nothing on the stage is focusable but a row of choices, so the D-pad only has
+    // somewhere to land while one is up. Asking is the remote's microphone, not a control.
     val choosing = stage is TvStage.Choices
-    LaunchedEffect(asking, choosing) { if (!asking) runCatching { if (choosing) contentFocus.requestFocus() else actionFocus.requestFocus() } }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+    val idle = stage is TvStage.Idle
+    LaunchedEffect(choosing, idle) {
+        runCatching { if (choosing) contentFocus.requestFocus() else if (idle) actionFocus.requestFocus() }
+    }
+    val press = remember(action) { action.onClick }
+    BoxWithConstraints(
+        Modifier.fillMaxSize().background(Color.Black)
+            // Nothing is drawn for this. The remote's own keys carry it: the assistant or
+            // search key asks, and the centre key does it too while no choice row holds focus.
+            .onKeyEvent { event ->
+                val ask = event.key == Key.Search || event.key == Key.VoiceAssist
+                val centre = !choosing && (event.key == Key.DirectionCenter || event.key == Key.Enter)
+                if (event.type == KeyEventType.KeyUp && (ask || centre)) {
+                    press()
+                    true
+                } else {
+                    false
+                }
+            },
+    ) {
         // Sizes follow the whole screen; only the content shrinks further when the keyboard takes room.
         val fullWidth = maxWidth
         val fullHeight = maxHeight
@@ -278,12 +337,11 @@ fun CosmosTvStage(
         val safeY = fullHeight * .05f
         val bandHeight = fullHeight * BAND
         val top = fullHeight * INSET_TOP
-        val crescent = fullHeight * .05f
         val bandFont = (fullHeight.value * .036f).sp
         val density = LocalDensity.current
         val topPx = with(density) { top.toPx() }
         val radiusPx = with(density) { (fullHeight * INSET_RADIUS).toPx() }
-        BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
             val insetScale = ((maxHeight - bandHeight - top * 2) / fullHeight).coerceIn(.2f, 1f)
             Box(Modifier.align(Alignment.TopCenter).requiredSize(fullWidth, fullHeight).graphicsLayer {
                 val scale = 1f - progress * (1f - insetScale)
@@ -298,9 +356,8 @@ fun CosmosTvStage(
             TvBand(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bandHeight).graphicsLayer { alpha = progress }, fullWidth) {
                 Box(Modifier.padding(horizontal = safeX), contentAlignment = Alignment.Center) {
                     when {
-                        asking -> askField(bandFont)
                         stage is TvStage.Transcript -> BasicText(
-                            stage.request, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            stage.request, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             style = TextStyle(color = TRANSCRIPT, fontSize = bandFont, lineHeight = bandFont * 1.25f, fontWeight = FontWeight.Medium,
                                 fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center),
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
@@ -310,8 +367,18 @@ fun CosmosTvStage(
                     }
                 }
             }
-            val captionInset = safeX + crescent + 16.dp
-            if (stage is TvStage.Answer && !asking) {
+            // The owner's reference frames carry nothing over the picture: while a question,
+            // a waveform or an answer is up, the corner stays empty. Idle is the one framing
+            // that may show the mark, because on this television OK is the only way to ask
+            // and nothing else says so.
+            if (stage is TvStage.Idle && !choosing) {
+                TvCrescent(
+                    action, fullHeight * .05f, actionFocus, null,
+                    Modifier.align(Alignment.BottomEnd).padding(end = safeX, bottom = safeY),
+                )
+            }
+            val captionInset = safeX
+            if (stage is TvStage.Answer) {
                 TvCaption(stage, (fullHeight.value * .04f).sp, onMore, onCommitted,
                     Modifier.align(Alignment.BottomCenter).padding(start = captionInset, end = captionInset, bottom = safeY))
             } else if (notice != null && !inset && stage !is TvStage.Choices) {
@@ -323,12 +390,6 @@ fun CosmosTvStage(
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
-            // The corner crescent keeps one place in every framing: the band's right end, inside the safe
-            // inset. While a row of choices is up, Up from it returns to that row, so focus is never trapped.
-            TvCrescent(
-                action, crescent, actionFocus, if (choosing) contentFocus else null,
-                Modifier.align(Alignment.BottomEnd).padding(end = safeX, bottom = (bandHeight - crescent) / 2),
-            )
         }
     }
 }
@@ -488,27 +549,6 @@ private fun TvCrescent(action: TvStageAction, size: Dp, focus: FocusRequester, u
     }
 }
 
-/** The ask field sits in the band like the transcript it becomes; Send on the remote's keyboard submits, Back closes. */
-@Composable
-private fun TvAskField(fontSize: TextUnit, enabled: Boolean, onSend: (String) -> Unit) {
-    var draft by rememberSaveable { mutableStateOf("") }
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    val style = TextStyle(color = TRANSCRIPT, fontSize = fontSize, fontWeight = FontWeight.Medium, fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center)
-    BasicTextField(
-        draft, { draft = it.take(4000) }, Modifier.fillMaxWidth().focusRequester(focus),
-        textStyle = style, cursorBrush = SolidColor(TRANSCRIPT), singleLine = true,
-        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-        keyboardActions = KeyboardActions(onSend = { if (enabled && draft.isNotBlank()) { onSend(draft.trim()); draft = "" } }),
-        decorationBox = { inner ->
-            Box(contentAlignment = Alignment.Center) {
-                if (draft.isEmpty()) BasicText(stringResource(R.string.tv_ask), style = style.copy(color = TRANSCRIPT.copy(alpha = .45f)))
-                inner()
-            }
-        },
-    )
-}
-
 /** The whole answer at full size, one page at a time: left and right page it, Back returns to the stage. */
 @Composable
 private fun TvAnswerPages(text: String) {
@@ -571,6 +611,10 @@ private fun TvSetupScreen(state: SurfaceState, actions: SurfaceActions) {
         Text(stringResource(R.string.tv_setup_body), fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
         Spacer(Modifier.height(14.dp))
         Text(serverLabel(state.serverOrigin), fontSize = 18.sp, color = CosmosPalette.secondary)
+        Spacer(Modifier.height(14.dp))
+        // The whole of what this television says about typing. The address it uses is
+        // the one it was built with, and nothing on this screen asks for a value.
+        Text(TV_TYPED_IN_CENTER, fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
     }
 }
 
@@ -595,6 +639,7 @@ private fun TvApproveScreen(state: SurfaceState, approvalRequested: Boolean, act
                 Text(stringResource(R.string.tv_approve_title), fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.SemiBold, color = CosmosPalette.primary)
                 Text(stringResource(R.string.tv_approve_body), fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
                 FingerprintLines(descriptor, fontSize = 20.sp, modifier = Modifier.align(Alignment.Start))
+                Text(TV_TYPED_IN_CENTER, fontSize = 18.sp, lineHeight = 26.sp, color = CosmosPalette.secondary)
             }
         }
     }

@@ -73,7 +73,10 @@
     <string name="notification_disconnected">Cosmos is disconnected.</string>
 
     <!-- The TV -->
-    <string name="tv_ask">Ask Cosmos</string>
+    <!-- A television has no keyboard: the crescent hands the request to the television's
+         own voice input, which listens behind its own indicator and returns words. -->
+    <string name="tv_ask">Ask by voice</string>
+    <string name="tv_voice_prompt">Ask Cosmos</string>
     <string name="tv_more">Read the answer</string>
     <string name="tv_setup_title">Set up this TV</string>
     <string name="tv_setup_body">Cosmos answers here after you approve this TV.</string>

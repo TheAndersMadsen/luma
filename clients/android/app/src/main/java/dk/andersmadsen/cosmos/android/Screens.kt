@@ -233,6 +233,36 @@ sealed interface AssistContext {
  */
 fun AssistContext.chipLabel(): String? = (this as? AssistContext.Attached)?.let { "Using: ${it.context.app} screen" }
 
+/**
+ * The one line a television is allowed to say about anything that has to be
+ * typed. It never asks for the value and never offers a field: this screen has
+ * no keyboard on purpose, and the owner enters it where there is one.
+ */
+const val TV_TYPED_IN_CENTER = "Anything to type is entered in Center, on your phone or computer."
+
+/**
+ * The line for a television that publishes no voice input of its own. Asking
+ * here is speaking, so a television without a recognizer cannot be asked at
+ * all, and it says where the owner asks instead rather than offering a field.
+ */
+const val TV_NO_VOICE_INPUT = "This TV has no voice input. Ask from your phone or your computer."
+
+/**
+ * The one focusable control on the television stage, in the order the states
+ * claim it. [ASK] opens the television's own voice input, and it is the only
+ * way to ask here: a television has no keyboard, so when it has no voice input
+ * either there is nothing to press and the control is [NONE].
+ */
+enum class TvControl { RETRY, CANCEL, CONNECT, ASK, NONE }
+
+fun SurfaceState.tvControl(taskRunning: Boolean, voiceInput: Boolean): TvControl = when {
+    canRetry -> TvControl.RETRY
+    taskRunning -> TvControl.CANCEL
+    sessionStatus() != SessionStatus.CONNECTED && canConnect -> TvControl.CONNECT
+    voiceInput && canSend -> TvControl.ASK
+    else -> TvControl.NONE
+}
+
 /** What the TV stage shows over its content; the set-up and approve screens are not stages. */
 sealed interface TvStage {
     data object Idle : TvStage
@@ -314,16 +344,17 @@ fun SurfaceState.taskCard(nowMs: Long, platform: String): TaskCard? {
  * The one line a television is ever allowed under its content, and usually none
  * at all. A command is its state word only — a shared room learns nothing about
  * what the command was — the connection is its own word, and otherwise it is
- * whatever single sentence the panel owes. Never a hint, never an explanation,
- * never two of them joined together.
+ * whatever single sentence the panel owes. A connected television with no voice
+ * input says so, because that is the whole of what the owner can do here.
+ * Never a hint, never an explanation, never two of them joined together.
  */
-fun SurfaceState.tvNotice(nowMs: Long): String? {
+fun SurfaceState.tvNotice(nowMs: Long, voiceInput: Boolean): String? {
     val task = taskCard(nowMs, DevicePolicy.TV)
     if (task != null) return task.state
     return when (sessionStatus()) {
         SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
         SessionStatus.DISCONNECTED -> SessionStatus.DISCONNECTED.label
-        SessionStatus.CONNECTED -> notice()
+        SessionStatus.CONNECTED -> notice() ?: TV_NO_VOICE_INPUT.takeUnless { voiceInput }
     }
 }
 

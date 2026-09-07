@@ -374,25 +374,77 @@ class ScreensTest {
     fun theTelevisionSaysOneWordAtMostAndNeverAHint() {
         val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
         // Idle and connected, a television says nothing at all: no D-pad hint, no tagline.
-        assertNull(connected.tvNotice(0))
+        assertNull(connected.tvNotice(0, voiceInput = true))
         // The connection is its own single word.
         assertEquals("Reconnecting…",
-            SurfaceState(phase = Phase.PREPARED, descriptor = descriptor, connectionWanted = true, needsReconnect = true).tvNotice(0))
-        assertEquals("Disconnected", SurfaceState(phase = Phase.PREPARED, descriptor = descriptor).tvNotice(0))
+            SurfaceState(phase = Phase.PREPARED, descriptor = descriptor, connectionWanted = true, needsReconnect = true).tvNotice(0, voiceInput = true))
+        assertEquals("Disconnected", SurfaceState(phase = Phase.PREPARED, descriptor = descriptor).tvNotice(0, voiceInput = true))
         // A running command is its state word alone: the room is never told what it was.
         val running = connected.copy(task = command, taskStartedAtMs = 1_000)
-        assertEquals("Working", running.tvNotice(15_000))
-        assertFalse(running.tvNotice(15_000)!!.contains("Restaurant Barr"))
-        assertFalse(running.tvNotice(15_000)!!.contains("·"))
+        assertEquals("Working", running.tvNotice(15_000, voiceInput = true))
+        assertFalse(running.tvNotice(15_000, voiceInput = true)!!.contains("Restaurant Barr"))
+        assertFalse(running.tvNotice(15_000, voiceInput = true)!!.contains("·"))
         // A refusal is invisible on a shared screen, so the line goes back to nothing.
-        assertNull(running.copy(taskReport = ActionOutcome.refused(DeclineReason.NOT_PERMITTED)).tvNotice(15_000))
+        assertNull(running.copy(taskReport = ActionOutcome.refused(DeclineReason.NOT_PERMITTED)).tvNotice(15_000, voiceInput = true))
         // A private command was never the television's to show, running or not.
-        assertNull(running.copy(task = command.copy(privacy = "private")).tvNotice(15_000))
+        assertNull(running.copy(task = command.copy(privacy = "private")).tvNotice(15_000, voiceInput = true))
         // What is left is the one sentence the panel owes, and only that one.
         val failed = connected.copy(alert = true, operation = "send_text", message = explain("busy"))
-        assertEquals("Cosmos is still on the last request. Wait a moment and try again.", failed.tvNotice(0))
+        assertEquals("Cosmos is still on the last request. Wait a moment and try again.", failed.tvNotice(0, voiceInput = true))
         // An abandoned earlier request is history and is not announced to a room.
-        assertNull(connected.copy(hasUnknownOutcome = true).tvNotice(0))
+        assertNull(connected.copy(hasUnknownOutcome = true).tvNotice(0, voiceInput = true))
+    }
+
+    /**
+     * A television has no keyboard, so speaking is the whole of asking here. When
+     * the television publishes no voice input of its own there is nothing to press
+     * and nothing to type, and the one line it is allowed says where the owner asks
+     * instead. It is a line about the owner's other devices, never about a field.
+     */
+    @Test
+    fun aTelevisionWithNoVoiceInputSaysWhereToAskInsteadOfOfferingAField() {
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        assertEquals(TV_NO_VOICE_INPUT, connected.tvNotice(0, voiceInput = false))
+        assertEquals("This TV has no voice input. Ask from your phone or your computer.", TV_NO_VOICE_INPUT)
+        assertEquals("Anything to type is entered in Center, on your phone or computer.", TV_TYPED_IN_CENTER)
+        // Neither line offers this screen as the place: no field, no keyboard, and each
+        // one names a device that has one instead of asking for the value here.
+        for (line in listOf(TV_NO_VOICE_INPUT, TV_TYPED_IN_CENTER)) {
+            for (word in listOf("field", "keyboard", "remote", "this tv,")) assertFalse(line.lowercase().contains(word))
+            assertTrue(line.contains("your phone"))
+        }
+        assertTrue(TV_TYPED_IN_CENTER.contains("Center"))
+        // It is still only ever one line: a command's state word and the connection
+        // both come first, and the missing microphone waits behind them.
+        assertEquals("Disconnected", SurfaceState(phase = Phase.PREPARED, descriptor = descriptor).tvNotice(0, voiceInput = false))
+        assertEquals("Working", connected.copy(task = command, taskStartedAtMs = 1_000).tvNotice(15_000, voiceInput = false))
+        assertEquals(
+            "Cosmos is still on the last request. Wait a moment and try again.",
+            connected.copy(alert = true, operation = "send_text", message = explain("busy")).tvNotice(0, voiceInput = false),
+        )
+    }
+
+    /**
+     * The one control on the stage. Asking is the last claim on it, and a
+     * television that cannot listen offers nothing at all rather than a field:
+     * there is no keyboard behind any of these states.
+     */
+    @Test
+    fun theOneTelevisionControlOffersVoiceLastAndNothingWhenItCannotListen() {
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        assertEquals(TvControl.ASK, connected.tvControl(taskRunning = false, voiceInput = true))
+        // No microphone on this television: the crescent has nothing to open.
+        assertEquals(TvControl.NONE, connected.tvControl(taskRunning = false, voiceInput = false))
+        // Cosmos cannot take a request right now, so neither can the microphone.
+        assertEquals(TvControl.NONE, connected.copy(busy = true).tvControl(taskRunning = false, voiceInput = true))
+        assertEquals(TvControl.NONE, connected.copy(hasPending = true).tvControl(taskRunning = false, voiceInput = true))
+        // Everything with a claim on the control comes before asking, in this order.
+        assertEquals(TvControl.RETRY, connected.copy(canRetry = true).tvControl(taskRunning = true, voiceInput = true))
+        assertEquals(TvControl.CANCEL, connected.tvControl(taskRunning = true, voiceInput = true))
+        val disconnected = SurfaceState(phase = Phase.PREPARED, descriptor = descriptor)
+        assertEquals(TvControl.CONNECT, disconnected.tvControl(taskRunning = false, voiceInput = true))
+        // Disconnected with nothing to connect: still never a field.
+        assertEquals(TvControl.NONE, disconnected.copy(busy = true).tvControl(taskRunning = false, voiceInput = true))
     }
 
     @Test

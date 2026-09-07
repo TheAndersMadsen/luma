@@ -25,6 +25,14 @@ class AssistActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A television has one surface, its stage, and nothing on it takes typing.
+        // This panel has an ask field, so on a television it opens the stage instead
+        // of putting a field and a software keyboard on a screen a room is watching.
+        if (controller.platform == "android_tv") {
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
+            return
+        }
         // Left to the system so the window resizes for the keyboard, exactly as the
         // voice session's window does; the sheet then needs no IME inset of its own.
         val actions = AssistOverlayActions(

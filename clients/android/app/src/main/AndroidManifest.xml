@@ -21,6 +21,9 @@
         <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="geo"/></intent>
         <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="google.navigation"/></intent>
         <intent><action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH"/></intent>
+        <!-- To see whether this television publishes a voice input at all: on a TV the
+             microphone is in the remote and only the system reaches it. -->
+        <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH"/></intent>
     </queries>
     <application android:name=".CosmosApplication" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
