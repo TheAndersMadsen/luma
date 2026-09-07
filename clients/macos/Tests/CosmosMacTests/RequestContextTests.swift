@@ -119,17 +119,32 @@ final class RequestContextTests: XCTestCase {
     // MARK: Destinations
 
     func testDestinationsMapToPlainWireTargets() throws {
-        XCTAssertEqual(Destination.allCases, [.thisMac, .phone, .linuxPC, .tv, .browser])
-        XCTAssertEqual(Destination.allCases.map(\.label), ["This Mac", "Phone", "Linux PC", "TV", "Browser"])
+        XCTAssertEqual(Destination.allCases, [.anywhere, .phone, .linuxPC, .tv, .browser])
+        XCTAssertEqual(Destination.allCases.map(\.label),
+                       ["Wherever it fits", "Phone", "Linux PC", "TV", "Browser"])
         XCTAssertEqual(Destination.allCases.map(\.target), [nil, "android", "linux", "android_tv", "browser"])
-        for destination in Destination.allCases where destination != .thisMac {
+        for destination in Destination.allCases where destination != .anywhere {
             XCTAssertTrue(TextRequest.targets.contains(try XCTUnwrap(destination.target)))
         }
         XCTAssertFalse(TextRequest.targets.contains("pin"), "the Pin asks; it is never a destination")
+        XCTAssertFalse(Destination.allCases.contains { $0.label.contains("This Mac") },
+                       "naming the device the request came from earns nothing")
         for destination in Destination.allCases {
             XCTAssertFalse(destination.label.lowercased().contains("approved"))
             XCTAssertFalse(destination.label.lowercased().contains("available"))
         }
+    }
+
+    /// Cosmos chooses the screen from what the answer is, so the panel asks the
+    /// owner for nothing: no destination is the default and the chip is silent
+    /// until one is named.
+    func testNoDestinationIsTheDefaultAndSaysNothing() throws {
+        XCTAssertNil(Destination.anywhere.target)
+        XCTAssertNil(Destination.anywhere.chip)
+        XCTAssertEqual(Destination.tv.chip, "→ TV")
+        XCTAssertEqual(ClientModel.admittedMessage(context: nil, destination: .anywhere), "")
+        XCTAssertEqual(ClientModel.admittedMessage(context: nil, destination: .tv),
+                       "Cosmos has your request, to continue on TV.")
     }
 
     // MARK: Status vocabulary and decoding
@@ -404,13 +419,13 @@ final class RequestContextTests: XCTestCase {
     @MainActor
     func testDestinationTravelsWithTheRequestAndResetsAfterwards() async throws {
         let (client, model) = try connectedModel(FakeContextProvider())
-        XCTAssertEqual(model.destination, .thisMac)
+        XCTAssertEqual(model.destination, .anywhere)
         model.destination = .tv
         model.draft = "Show this"
         model.send()
         await settled(model)
         XCTAssertEqual(client.sentRequests, [TextRequest(text: "Show this", target: "android_tv")])
-        XCTAssertEqual(model.destination, .thisMac, "a destination is for one request")
+        XCTAssertEqual(model.destination, .anywhere, "a destination is for one request")
         XCTAssertEqual(model.message,
                        "Cosmos has your request, to continue on TV.")
         model.draft = "And this"
@@ -438,7 +453,7 @@ final class RequestContextTests: XCTestCase {
         XCTAssertTrue(client.sentRequests.isEmpty)
         XCTAssertEqual(model.message, ClientModel.targetsUnavailableMessage)
         XCTAssertEqual(model.destination, .phone, "the choice stays until the owner changes it")
-        model.destination = .thisMac
+        model.destination = .anywhere
         model.send()
         await settled(model)
         XCTAssertEqual(client.sentRequests, [TextRequest(text: "Route")])

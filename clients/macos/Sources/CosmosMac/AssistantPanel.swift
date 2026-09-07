@@ -654,19 +654,23 @@ public struct AssistantPanel: View {
         .accessibilityIdentifier("context-chip")
     }
 
-    /// The destination is visible before sending and never a surprise. Plain kinds of
-    /// device: Cosmos alone knows which displays are approved and free.
+    /// Cosmos chooses the screen from what the answer is, so by default there is
+    /// nothing here to read: only the chevron that opens the override. A named
+    /// destination shows itself before sending and is never a surprise. Plain
+    /// kinds of device: Cosmos alone knows which displays are approved and free.
     private var destinationChip: some View {
-        Button { commands.destinationsShown.toggle() } label: {
+        let named = model.destination.chip
+        return Button { commands.destinationsShown.toggle() } label: {
             HStack(spacing: 5) {
-                Text(Words.destinationChip(model.destination.label))
+                if let named { Text(named) }
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8))
                     .accessibilityHidden(true)
             }
             .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(named == nil ? CosmosTokens.secondary : CosmosTokens.primary)
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(CosmosTokens.surface.opacity(0.8), in: Capsule())
-            .overlay(Capsule().strokeBorder(CosmosTokens.border, lineWidth: 1))
+            .background(named == nil ? Color.clear : CosmosTokens.surface.opacity(0.8), in: Capsule())
+            .overlay(Capsule().strokeBorder(named == nil ? Color.clear : CosmosTokens.border, lineWidth: 1))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

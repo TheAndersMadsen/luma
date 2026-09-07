@@ -74,6 +74,12 @@ class SourcesTest(unittest.TestCase):
         self.assertTrue(policy.parse_openers(json.loads(policy.example_document())).loaded)
         # The permission itself is not a file: it arrives on the connection.
         self.assertEqual(app.policy_notice(app.preview_state("task")), "")
+        # The foreground report is what releases a card Cosmos held for this
+        # computer, and keyboard focus is no part of it.
+        self.assertTrue(app.window_in_front(shown=True, hidden=False, exposed=True))
+        self.assertFalse(app.window_in_front(shown=False, hidden=False, exposed=True))
+        self.assertFalse(app.window_in_front(shown=True, hidden=True, exposed=True))
+        self.assertFalse(app.window_in_front(shown=True, hidden=False, exposed=False))
 
 
 if __name__ == "__main__":

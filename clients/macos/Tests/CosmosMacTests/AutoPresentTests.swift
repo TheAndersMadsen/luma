@@ -312,4 +312,37 @@ final class AutoPresentTests: XCTestCase {
         XCTAssertFalse(model.unshownReply, "a reply already shown here waits for nobody")
         XCTAssertEqual(model.presence, .quiet)
     }
+
+    /// Cosmos chooses the screen before anyone is in front of it, so a card can be
+    /// bound for this Mac while the panel is closed. The runtime holds it and hands
+    /// it over when this Mac says it is in front, which makes the foreground report
+    /// the thing that releases it — not a consequence of a card already being here.
+    @MainActor
+    func testComingToTheFrontIsWhatReleasesAReplyBoundForThisMac() async throws {
+        let bridge = try MockClientBridge()
+        let model = ClientModel(client: bridge, initialServerOrigin: "https://center.example")
+        model.prepare()
+        for _ in 0..<400 where model.descriptor == nil { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertNotNil(model.descriptor)
+        model.connect()
+        for _ in 0..<400 where model.busy { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(bridge.visibilityReports, [], "nothing is claimed before the panel is on screen")
+
+        let waiting = WaitingReply(id: UUID(), kind: .card, origin: "pin",
+                                   privacy: "near_user", expiresAtMs: 4_102_444_800_000)
+        bridge.publish(ClientSnapshot(phase: .connected, visible: false, waiting: waiting))
+        await Task.yield()
+        XCTAssertEqual(model.presence, .waiting, "the glyph says one is held for this Mac")
+        XCTAssertNil(model.display, "the runtime holds the card; nothing is invented here")
+
+        model.setVisible(true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(bridge.visibilityReports, [true], "the report is what the runtime waits for")
+        XCTAssertFalse(model.heldForThisMac, "the panel is in front; nothing is held any more")
+
+        let reply = try card(.text("The kettle is on."))
+        bridge.publish(ClientSnapshot(phase: .connected, visible: true, display: reply))
+        await Task.yield()
+        XCTAssertEqual(model.display, reply, "the held card arrives once this Mac is in front")
+    }
 }

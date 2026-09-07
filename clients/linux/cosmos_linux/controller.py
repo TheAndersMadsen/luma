@@ -515,7 +515,8 @@ class Controller:
         return self.send(card.items[index].title)
 
     def set_target(self, target: Optional[str]) -> bool:
-        """The explicit destination for this session only; None means this screen."""
+        """The explicit destination for this session only. None names none at all, which
+        is the default: Cosmos chooses the screen from what the answer is."""
         if target is not None and target not in TARGETS:
             return False
         if target is not None and not self._state.features.targets:

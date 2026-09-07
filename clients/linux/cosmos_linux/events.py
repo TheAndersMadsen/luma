@@ -14,9 +14,19 @@ from typing import Optional
 
 from .native import MAX_POLICY_BYTES, MAX_SPEECH_BYTES, MAX_TEXT_BYTES
 
-# Mirrors PROFILE in the Rust client (surface-client wire.rs). The descriptor the
-# library reports is verified against it; a different profile is an invalid response.
-APPROVAL_PROFILE = "native-device-action-v4"
+# Mirrors PROFILE and KNOWN_APPROVALS in the Rust client (surface-client wire.rs).
+# APPROVAL_PROFILE is the newest profile this build understands and enrols at;
+# KNOWN_APPROVALS is every rung an installation the owner approved earlier still
+# holds, because the challenge carries the record's own profile. A descriptor
+# naming none of them is an invalid response.
+APPROVAL_PROFILE = "native-audience-v6"
+KNOWN_APPROVALS = (
+    APPROVAL_PROFILE,
+    "native-voice-input-v5",
+    "native-device-action-v4",
+    "native-shared-speech-v3",
+    "native-shared-display-v2",
+)
 PLATFORM = "linux"
 OPERATIONS = frozenset({
     "prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending", "cancel",
@@ -340,7 +350,7 @@ def _descriptor(value) -> Optional[Descriptor]:
         _uuid(record, "enrollmentId"), _string(record, "publicKey"),
         _string(record, "platform"), _string(record, "approval"),
     )
-    if descriptor.platform != PLATFORM or descriptor.approval != APPROVAL_PROFILE:
+    if descriptor.platform != PLATFORM or descriptor.approval not in KNOWN_APPROVALS:
         raise InvalidEvent("foreign descriptor")
     if not BASE64URL_KEY.match(descriptor.public_key):
         raise InvalidEvent("descriptor public key is not a base64url SEC1 point")

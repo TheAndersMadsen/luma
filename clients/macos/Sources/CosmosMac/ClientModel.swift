@@ -8,7 +8,7 @@ public final class ClientModel: ObservableObject {
     @Published public var draft = ""
     /// Where the next request asks to continue. Sent as a plain kind of device;
     /// Cosmos decides whether any such display gets the reply. Resets after a send.
-    @Published public var destination: Destination = .thisMac
+    @Published public var destination: Destination = .anywhere
     /// Text the owner attached to the next request through an explicit action.
     @Published public private(set) var context: ContextChip?
     @Published public private(set) var snapshot: ClientSnapshot {
@@ -77,6 +77,8 @@ public final class ClientModel: ObservableObject {
     private var wantedVisible = false
     private var acknowledged: UUID?
     private var acknowledging: Task<Void, Never>?
+    /// The foreground report waiting for the operation in flight to finish.
+    private var reporting: Task<Void, Never>?
     private var playback: SpeechPlayback?
     private var loadingSpeech: Task<Void, Never>?
     private var spoken: UUID?
@@ -240,12 +242,18 @@ public final class ClientModel: ObservableObject {
         if let reply = snapshot.speech, spoken != reply.actionID { return true }
         return false
     }
+    /// A reply Cosmos chose this Mac for while the panel was closed. The runtime
+    /// holds it and hands it over when this Mac reports itself in front, so the
+    /// glyph is the only thing that can ask the owner to open the panel. Without
+    /// it a held card would wait until it expired and repair to another screen.
+    public var heldForThisMac: Bool { !panelVisible && snapshot.waiting != nil }
     /// What the menu-bar glyph shows without the panel being open. A ceremony or
     /// a task ready for this Mac is exactly what "waiting for you" means, and so
-    /// is a reply that arrived while the panel was closed.
+    /// is a reply that arrived while the panel was closed, and so is one Cosmos
+    /// is holding until it does.
     public var presence: MenuPresence {
         let waitingHere = awaitingChoice || snapshot.confirmation != nil || activity == .ready
-            || unshownReply
+            || unshownReply || heldForThisMac
             || (snapshot.status?.state == .waiting && snapshot.status?.surfacePlatform == "macos")
         return PanelState.presence(phase: waveformPhase, waitingHere: waitingHere)
     }
@@ -474,7 +482,7 @@ public final class ClientModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 pendingDraft = nil
                 apply(.sent)
-                message = Self.admittedMessage(context: nil, destination: .thisMac)
+                message = Self.admittedMessage(context: nil, destination: .anywhere)
             } catch {
                 apply(.sendFailed)
                 throw error
@@ -506,7 +514,7 @@ public final class ClientModel: ObservableObject {
             guard !Task.isCancelled else { return }
             if draft == request.text { draft = "" }
             if context == request.context { context = nil }
-            if destination == requested { destination = .thisMac }
+            if destination == requested { destination = .anywhere }
             pendingDraft = nil
             message = Self.admittedMessage(context: request.context, destination: requested)
         }
@@ -530,7 +538,7 @@ public final class ClientModel: ObservableObject {
             _ = try await client.send(request)
             guard !Task.isCancelled else { return }
             pendingDraft = nil
-            message = Self.admittedMessage(context: nil, destination: .thisMac)
+            message = Self.admittedMessage(context: nil, destination: .anywhere)
         }
         return true
     }
@@ -542,7 +550,7 @@ public final class ClientModel: ObservableObject {
         if let context {
             return "Cosmos has your request with your \(context.source.label.lowercased()) from \(context.app). The reply stays on this Mac."
         }
-        if destination != .thisMac {
+        if destination.target != nil {
             return "Cosmos has your request, to continue on \(destination.label)."
         }
         return ""
@@ -708,13 +716,25 @@ public final class ClientModel: ObservableObject {
 
     /// Report the panel's own visibility. Cosmos routes a shared card here only while
     /// this is true; it never treats the report as occupancy or identity.
+    ///
+    /// A reply Cosmos chose this Mac for is held until this report says the panel
+    /// is in front, so the report is never dropped for being ill-timed: one that
+    /// arrives while another operation is in flight waits behind it and then goes.
+    /// Dropping it would leave a held card waiting until it expired.
     public func setVisible(_ visible: Bool) {
         if panelVisible != visible { panelVisible = visible }
         guard wantedVisible != visible else { return }
         wantedVisible = visible
         if !visible { acknowledging?.cancel(); acknowledging = nil }
-        guard descriptor != nil, !busy else { return }
-        Task { [client] in try? await client.setVisible(visible) }
+        guard descriptor != nil else { return }
+        reporting?.cancel()
+        reporting = Task { [weak self] in
+            guard let self else { return }
+            defer { reporting = nil }
+            while busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
+            guard !Task.isCancelled, descriptor != nil else { return }
+            try? await client.setVisible(wantedVisible)
+        }
     }
 
     /// Call only after the card's complete content, including every credit line, has

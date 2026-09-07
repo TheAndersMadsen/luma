@@ -12,8 +12,11 @@ from typing import Optional, Sequence
 from . import strings as S
 from .events import PLATFORM, Confirmation, TurnStatus
 
-# The destinations the shared library accepts, in the order the picker lists them.
-TARGETS = ("linux", "macos", "android", "android_tv")
+# The destinations the shared library accepts. This computer is not one of
+# them: a request that names the device it came from earns nothing in the
+# runtime's ranking, so the picker offers the other screens and, first, no
+# destination at all.
+TARGETS = ("macos", "android", "android_tv")
 
 
 @dataclass(frozen=True)
@@ -229,34 +232,32 @@ def ceremony(confirmation: Optional[Confirmation], seconds: int = 0) -> Optional
 
 @dataclass(frozen=True)
 class Destination:
-    target: Optional[str]  # None sends without an explicit destination (this screen)
+    target: Optional[str]  # None names no destination: Cosmos chooses the screen
     name: str
     online: bool = True
 
     @property
     def chip(self) -> str:
-        return S.DESTINATION_CHIP.format(name=self.name)
+        """What the chip says. Nothing at all while no destination is named."""
+        return "" if self.target is None else S.DESTINATION_CHIP.format(name=self.name)
 
 
 def destinations(members: Optional[Sequence[dict]] = None, platform: str = PLATFORM) -> tuple:
-    """The picker entries. Room members from a snapshot win when they exist (name, platform,
-    online); otherwise the known kinds of device by friendly name, this screen first."""
+    """The picker entries, no destination first. Room members from a snapshot win when they
+    exist (name, platform, online); otherwise the other kinds of device by friendly name.
+    This computer is never an entry, because naming the asking device changes nothing."""
     entries = []
     if members:
         for member in members:
             target = member.get("platform")
-            if target not in TARGETS:
+            if target not in TARGETS or target == platform:
                 continue
             name = str(member.get("name") or S.DESTINATION_NAMES.get(target, target))
-            entries.append(Destination(None if target == platform else target,
-                                       S.THIS_SCREEN if target == platform else name,
-                                       bool(member.get("online", True))))
+            entries.append(Destination(target, name, bool(member.get("online", True))))
     if not entries:
-        entries = [Destination(None if target == platform else target,
-                               S.THIS_SCREEN if target == platform else S.DESTINATION_NAMES[target])
-                   for target in TARGETS]
-    entries.sort(key=lambda entry: entry.target is not None)
-    return tuple(entries)
+        entries = [Destination(target, S.DESTINATION_NAMES[target])
+                   for target in TARGETS if target != platform]
+    return (Destination(None, S.ANY_DEVICE), *entries)
 
 
 def destination_for(target: Optional[str], members: Optional[Sequence[dict]] = None) -> Destination:

@@ -241,6 +241,24 @@ class CommandTest(ControllerHarness):
         self.controller.drain()
         self.assertEqual(surface.commands[-1], ("set_visible", False))
 
+    def test_a_card_held_for_this_computer_arrives_when_it_comes_to_the_front(self):
+        """Cosmos decides where a reply belongs before anyone is in front of it. The
+        invitation says one waits; reporting the foreground is what releases it."""
+        surface = self.connected()
+        self.controller.set_visible(False)
+        self.controller.drain()
+        self.fold(snapshot("invitation", connected=True, needsReconnect=False, visible=False,
+                           invitation={"id": ACTION_ID, "kind": "card", "origin": "macos",
+                                       "privacy": "near_user", "expiresAtMs": 4102444800000}))
+        self.assertIsNotNone(self.state.invitation)
+        self.assertEqual(self.state.presence.title, S.WAITING_FOR_YOU)
+        self.controller.set_visible(True)
+        self.controller.drain()
+        self.assertEqual(surface.commands[-1], ("set_visible", True))
+        self.fold(snapshot("display", connected=True, needsReconnect=False, visible=True,
+                           display=text_card()))
+        self.assertIsNotNone(self.state.display, "the held card is rendered once this window is in front")
+
     def test_pending_operation_pauses_new_requests(self):
         surface = self.connected()
         self.fold(snapshot("send_text", connected=True, needsReconnect=False, error="pending_operation",

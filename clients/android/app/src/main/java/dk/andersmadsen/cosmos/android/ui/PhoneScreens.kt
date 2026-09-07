@@ -523,13 +523,19 @@ fun AskBar(
     }
 }
 
-/** The current destination as one pill; tapping it opens the row of plain device names. */
+/**
+ * The destination as one pill. Cosmos chooses the screen from what the answer is,
+ * so by default there is nothing here to read — only the chevron that opens the
+ * override. A named destination shows itself before sending.
+ */
 @Composable
 private fun DestinationButton(destination: Destination, onClick: () -> Unit) {
-    val label = stringResource(R.string.continue_on_current, destination.label)
     val open = stringResource(R.string.continue_on_choose)
+    val label = if (destination.names) stringResource(R.string.continue_on_current, destination.label) else open
     Text(
-        "${destination.label} ▾", color = CosmosPalette.primary, fontSize = CosmosType.quiet,
+        if (destination.names) "${destination.label} ▾" else "▾",
+        color = if (destination.names) CosmosPalette.primary else CosmosPalette.secondary,
+        fontSize = CosmosType.quiet,
         modifier = Modifier.heightIn(min = 48.dp)
             .clickable(role = Role.Button, onClickLabel = open, onClick = onClick)
             .background(CosmosPalette.card, CircleShape).padding(horizontal = 16.dp, vertical = 14.dp)

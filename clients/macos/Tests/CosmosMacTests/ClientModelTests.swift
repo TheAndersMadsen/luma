@@ -796,6 +796,33 @@ final class ClientModelTests: XCTestCase {
         XCTAssertEqual(client.visibilityReports, [true, true, false])
     }
 
+    /// Cosmos holds a card it chose this Mac for until the panel reports itself in
+    /// front, so a report that arrives while another operation is in flight must
+    /// wait behind it rather than be dropped: dropping it would leave the card
+    /// waiting until it expired and repaired to another screen.
+    @MainActor
+    func testAForegroundReportWaitsBehindTheOperationInFlightInsteadOfBeingDropped() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        client.visibilityReports.removeAll()
+        let released = XCTestExpectation(description: "the request finishes")
+        client.sendHandler = { _ in
+            try await Task.sleep(for: .milliseconds(300))
+            released.fulfill()
+            return try fixtureAdmission()
+        }
+        model.draft = "Find cafés near me"
+        model.send()
+        XCTAssertTrue(model.busy)
+        model.setVisible(true)
+        XCTAssertEqual(client.visibilityReports, [], "nothing goes out over the request in flight")
+        await fulfillment(of: [released], timeout: 2)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(client.visibilityReports, [true], "and then it goes")
+    }
+
     // MARK: Acknowledging the owner before the wire does
 
     /// The typed line becomes the Now line the instant it is sent, the send control

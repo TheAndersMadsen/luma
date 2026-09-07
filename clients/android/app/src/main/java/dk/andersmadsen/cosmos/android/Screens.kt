@@ -24,6 +24,16 @@ fun SurfaceState.sessionStatus(): SessionStatus = when {
     else -> SessionStatus.DISCONNECTED
 }
 
+/**
+ * Something Cosmos chose this device for is held until this device reports itself
+ * in front. Cosmos decides where a reply belongs before anyone is looking at
+ * anything, so a card or a command can be bound for an app that was not in front
+ * at the time; the notification is the only way to ask the owner to open it, and
+ * opening it is what reports the foreground and releases what waits. It says that
+ * something is ready and never what.
+ */
+fun SurfaceState.awaitsForeground(): Boolean = invitation != null && !visible
+
 /** SPEAKING mirrors delivered playback; THINKING covers a command in flight; nothing here starts audio. */
 fun SurfaceState.assistantState(): AssistantState = when {
     speaking -> AssistantState.SPEAKING
@@ -201,11 +211,21 @@ fun suggestions(screenContext: Boolean): List<String> = listOfNotNull(
 /** A prompt ending in an ellipsis is a starter for the field; the others are complete requests. */
 fun isComplete(suggestion: String): Boolean = !suggestion.trimEnd().endsWith('…')
 
-/** Where the phone asks Cosmos to continue; the phone itself sends no target and lets Cosmos decide. */
+/**
+ * Where a reply continues. Cosmos chooses the screen from what the answer is and
+ * which screen suits it, so [ANYWHERE] names nothing at all and is the default;
+ * the rest are an override that stays available. This phone is not one of them:
+ * naming the device a request came from earns nothing in the runtime's ranking,
+ * so offering it would promise something this client cannot keep.
+ */
 enum class Destination(val label: String, val target: String) {
-    PHONE("This phone", ""), MAC("Mac", "macos"), LINUX("Linux PC", "linux"), TV("TV", "android_tv"), BROWSER("Browser", "browser");
+    ANYWHERE("Wherever it fits", ""), MAC("Mac", "macos"), LINUX("Linux PC", "linux"),
+    TV("TV", "android_tv"), BROWSER("Browser", "browser");
 
-    companion object { fun forTarget(target: String): Destination = entries.firstOrNull { it.target == target } ?: PHONE }
+    /** True while no destination is named, which is the default and the point of it. */
+    val names: Boolean get() = target.isNotEmpty()
+
+    companion object { fun forTarget(target: String): Destination = entries.firstOrNull { it.target == target } ?: ANYWHERE }
 }
 
 /**

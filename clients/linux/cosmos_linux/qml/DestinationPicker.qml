@@ -1,15 +1,21 @@
 import QtQuick
 import QtQuick.Controls
 
-// "→ This screen" by default. Opening it lists the devices by friendly name;
-// the choice holds for this session only and is sent with the next request.
+// No destination by default: Cosmos chooses the screen from what the answer is,
+// and the chip is an offer rather than a step. Opening it lists the other
+// devices by friendly name; a named one shows as "→ Shield TV" and clears from
+// the chip itself. The choice holds for this session only.
 Chip {
     id: chip
     property var s: backend.state
-    text: s.destinationChip
-    active: s.target.length > 0
-    Accessible.name: S.DESTINATION_TITLE + ": " + s.destinationChip
+    property bool named: s.target.length > 0
+    text: named ? s.destinationChip : S.DESTINATION_TITLE
+    active: named
+    closable: named
+    closeName: S.DESTINATION_CLEAR
+    Accessible.name: S.DESTINATION_TITLE + ": " + (named ? s.destinationChip : S.ANY_DEVICE)
     onClicked: menu.open()
+    onClosed: backend.setTarget("")
 
     Menu {
         id: menu

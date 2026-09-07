@@ -10,10 +10,14 @@ use uuid::Uuid;
 /// What this build enrolls at: the newest profile it understands. An
 /// installation the owner approved earlier keeps its own, which the challenge
 /// carries, so publishing a new profile never stops it from connecting.
-pub(crate) const PROFILE: &str = "native-device-action-v4";
-/// Every approval profile this build can still hold a connection under.
-pub(crate) const KNOWN_APPROVALS: [&str; 3] = [
+pub(crate) const PROFILE: &str = "native-audience-v6";
+/// Every approval profile this build can still hold a connection under, newest
+/// first. A fresh enrolment asks for `PROFILE`; an installation the owner
+/// approved under an earlier rung keeps working until they approve it again.
+pub(crate) const KNOWN_APPROVALS: [&str; 5] = [
     PROFILE,
+    "native-voice-input-v5",
+    "native-device-action-v4",
     "native-shared-speech-v3",
     "native-shared-display-v2",
 ];

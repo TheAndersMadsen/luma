@@ -56,15 +56,29 @@ class StatusLineTest(unittest.TestCase):
 
 
 class DestinationTest(unittest.TestCase):
-    def test_default_destinations_are_the_known_devices_by_friendly_name(self):
+    def test_no_destination_is_the_default_and_says_nothing(self):
+        """Cosmos chooses the screen from what the answer is, so the picker opens on
+        no destination at all and the chip is silent until the owner names one."""
         entries = destinations()
-        self.assertEqual([entry.name for entry in entries], ["This screen", "MacBook Pro", "Pixel 10 Pro", "Shield TV"])
+        self.assertIsNone(entries[0].target)
+        self.assertEqual(entries[0].name, "Wherever it fits")
+        self.assertEqual(entries[0].chip, "", "nothing is said while no destination is named")
+        self.assertEqual(destination_for(None).chip, "")
+        self.assertEqual(destination_for("plan9").chip, "", "an unknown target names no destination")
+
+    def test_naming_a_device_is_an_override_that_stays_available(self):
+        entries = destinations()
+        self.assertEqual([entry.name for entry in entries],
+                         ["Wherever it fits", "MacBook Pro", "Pixel 10 Pro", "Shield TV"])
         self.assertEqual([entry.target for entry in entries], [None, "macos", "android", "android_tv"])
         self.assertTrue(all(entry.online for entry in entries))
-        self.assertEqual(entries[0].chip, "→ This screen")
         self.assertEqual(destination_for("android").chip, "→ Pixel 10 Pro")
-        self.assertEqual(destination_for(None).name, "This screen")
-        self.assertEqual(destination_for("plan9").name, "This screen", "an unknown target falls back to this screen")
+
+    def test_this_computer_is_never_an_entry(self):
+        """Naming the device the request came from earns nothing in the runtime's
+        ranking, so offering it would be a promise this client cannot keep."""
+        self.assertNotIn("linux", [entry.target for entry in destinations()])
+        self.assertNotIn("This screen", [entry.name for entry in destinations()])
 
     def test_room_members_replace_the_defaults_and_keep_offline_ones_greyed(self):
         members = [
@@ -74,12 +88,12 @@ class DestinationTest(unittest.TestCase):
             {"platform": "browser", "name": "Chrome"},
         ]
         entries = destinations(members)
-        self.assertEqual([entry.name for entry in entries], ["This screen", "Pixel 10 Pro", "MacBook Pro"])
+        self.assertEqual([entry.name for entry in entries], ["Wherever it fits", "Pixel 10 Pro", "MacBook Pro"])
         self.assertEqual([entry.online for entry in entries], [True, False, True])
         self.assertIsNone(entries[0].target)
 
     def test_targets_match_the_shared_library_grammar(self):
-        self.assertEqual(viewstate.TARGETS, ("linux", "macos", "android", "android_tv"))
+        self.assertEqual(viewstate.TARGETS, ("macos", "android", "android_tv"))
 
 
 class ChipsAndPromptsTest(unittest.TestCase):

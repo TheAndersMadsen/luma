@@ -54,7 +54,7 @@ class SessionService : Service() {
             return START_NOT_STICKY
         }
         if (watching == null) watching = scope.launch {
-            controller.state.map { it.sessionStatus() to (it.invitation != null && !it.visible) }.distinctUntilChanged()
+            controller.state.map { it.sessionStatus() to it.awaitsForeground() }.distinctUntilChanged()
                 .collect { (status, waiting) -> manager.notify(NOTIFICATION_ID, notification(status, waiting)) }
         }
         return START_NOT_STICKY

@@ -42,6 +42,38 @@ class ScreensTest {
         assertEquals("Reconnecting…", SessionStatus.RECONNECTING.label)
     }
 
+    /**
+     * Cosmos chooses the screen from what the answer is, so a card can be bound for
+     * this device while its app is behind everything else. The runtime holds it and
+     * hands it over when this device reports itself in front, so the panel must not
+     * assume one only ever arrives for an app already in front — and the quiet
+     * notification is what asks the owner to open it.
+     */
+    @Test
+    fun saysSomethingWaitsWhileThisDeviceIsNotInFrontAndShowsItWhenItIs() {
+        val waiting = Invitation(UUID.fromString("66666666-6666-4666-8666-666666666666"),
+            "card", "pin", "private", 4_102_444_800_000)
+        val behind = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor, visible = false,
+            invitation = waiting)
+        assertTrue(behind.awaitsForeground())
+        assertFalse("in front, nothing is held any more", behind.copy(visible = true).awaitsForeground())
+        assertFalse(behind.copy(invitation = null).awaitsForeground())
+        // The card itself arrives afterwards, for a device that was not in front
+        // when Cosmos decided; the panel renders it either way.
+        val arrived = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor, visible = false, display = card)
+        assertEquals(SheetBody.Reply(card), arrived.sheetBody(null))
+        assertEquals(TvStage.Answer(card.actionId, "An answer.", "An answer.", card), arrived.tvStage(null))
+    }
+
+    /**
+     * The television has no keyboard and no picker: its whole vocabulary of
+     * controls is the four below, and none of them names a destination.
+     */
+    @Test
+    fun theTelevisionOffersNoDestinationAtAll() {
+        assertEquals(listOf("RETRY", "CANCEL", "CONNECT", "ASK", "NONE"), TvControl.entries.map { it.name })
+    }
+
     @Test
     fun mirrorsPlaybackAndCommandsOnTheWaveform() {
         assertEquals(AssistantState.SPEAKING, SurfaceState(speaking = true, busy = true).assistantState())
@@ -150,14 +182,25 @@ class ScreensTest {
         assertNull(AssistContext.NoRole.chipLabel())
     }
 
+    /**
+     * Cosmos chooses the screen from what the answer is, so the phone asks the
+     * owner for nothing: no destination is the default, it names no target on the
+     * wire and it says nothing on screen. Naming one stays available.
+     */
     @Test
-    fun offersPlainDestinationsAndSendsNoTargetForThePhone() {
-        assertEquals("", Destination.PHONE.target)
-        assertEquals(listOf("This phone", "Mac", "Linux PC", "TV", "Browser"), Destination.entries.map { it.label })
+    fun noDestinationIsTheDefaultAndNamingOneIsAnOverride() {
+        assertEquals("", Destination.ANYWHERE.target)
+        assertFalse(Destination.ANYWHERE.names)
+        assertEquals(Destination.ANYWHERE, Destination.entries.first())
+        assertEquals(listOf("Wherever it fits", "Mac", "Linux PC", "TV", "Browser"), Destination.entries.map { it.label })
         assertEquals(listOf("", "macos", "linux", "android_tv", "browser"), Destination.entries.map { it.target })
         assertEquals(Destination.MAC, Destination.forTarget("macos"))
-        assertEquals(Destination.PHONE, Destination.forTarget(""))
-        assertEquals(Destination.PHONE, Destination.forTarget("pin"))
+        assertTrue(Destination.MAC.names)
+        assertEquals(Destination.ANYWHERE, Destination.forTarget(""))
+        assertEquals(Destination.ANYWHERE, Destination.forTarget("pin"))
+        // Naming the device a request came from earns nothing in the runtime's
+        // ranking, so this phone is never one of the entries.
+        assertFalse(Destination.entries.any { it.target == "android" || it.label.contains("phone") })
     }
 
     @Test

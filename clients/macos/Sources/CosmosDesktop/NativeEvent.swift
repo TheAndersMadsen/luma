@@ -11,14 +11,14 @@ struct NativeEvent: Decodable, Sendable {
         let approval: String
 
         func verified() throws -> PublicDescriptor {
-            // The action profile is what this build speaks; the speech profile
-            // still connects, renders and speaks, with no action channel until
-            // the owner reapproves this installation in Center.
-            guard platform == "macos",
-                  ["native-device-action-v4", "native-shared-speech-v3"].contains(approval) else {
+            // The audience profile is what a fresh enrollment asks for; every
+            // earlier rung still connects, renders and speaks with whatever it
+            // declared, and declares no audience until the owner reapproves
+            // this installation in Center.
+            guard platform == "macos", PublicDescriptor.knownApprovals.contains(approval) else {
                 throw ClientFailure.invalidResponse
             }
-            return try PublicDescriptor(enrollmentID: enrollmentId, publicKey: publicKey)
+            return try PublicDescriptor(enrollmentID: enrollmentId, publicKey: publicKey, approval: approval)
         }
     }
 

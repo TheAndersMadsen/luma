@@ -202,6 +202,18 @@ def policy_notice(state: State) -> str:
     return ""
 
 
+def window_in_front(*, shown: bool, hidden: bool, exposed: bool) -> bool:
+    """This window's own foreground report: on screen, not minimised, and not
+    covered or on another workspace.
+
+    Keyboard focus is deliberately not part of it. The report is availability,
+    never occupancy or identity, and a card Cosmos held for this computer is
+    handed over when it says it is in front — so a window the owner is looking
+    at while typing somewhere else must not claim to be gone.
+    """
+    return shown and not hidden and exposed
+
+
 def view_for(state: State, has_surface: bool, editing_server: bool) -> str:
     if editing_server or state.descriptor is None or not has_surface:
         return "setup"
@@ -804,7 +816,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         if controller is None:
             return
         hidden = (QWindow.Visibility.Hidden, QWindow.Visibility.Minimized)
-        controller.set_visible(window.isVisible() and window.visibility() not in hidden and window.isActive())
+        controller.set_visible(window_in_front(
+            shown=window.isVisible(),
+            hidden=window.visibility() in hidden,
+            exposed=window.isExposed(),
+        ))
 
     window.visibilityChanged.connect(lambda _visibility: report_visibility())
     window.activeChanged.connect(report_visibility)
@@ -823,6 +839,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         poller = QTimer()
         poller.setInterval(POLL_INTERVAL_MS)
         poller.timeout.connect(controller.drain)
+        # A reply can be bound for this computer while its window is behind
+        # something else; Cosmos holds it and hands it over the moment this
+        # client says it is in front. No compositor signal covers every way a
+        # window is uncovered, so the report is recomputed on the same tick the
+        # snapshots are drained on. `set_visible` sends nothing when the answer
+        # has not changed.
+        poller.timeout.connect(report_visibility)
         poller.start()
         socket_name = activation_socket_name()
         QLocalServer.removeServer(socket_name)

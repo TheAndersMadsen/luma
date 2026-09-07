@@ -17,7 +17,7 @@ from pathlib import Path
 
 from cosmos_linux import native
 from cosmos_linux.endpoint import fingerprint, fingerprint_of_encoded
-from cosmos_linux.events import APPROVAL_PROFILE, decode
+from cosmos_linux.events import KNOWN_APPROVALS, decode
 
 # The P-256 base point in uncompressed SEC1 form: a valid public key with no private half here.
 GENERATOR_SEC1 = bytes.fromhex(
@@ -264,7 +264,9 @@ class NativeSmokeTest(unittest.TestCase):
             self.assertEqual(event.operation, "prepare")
             self.assertTrue(event.ok, event.error)
             self.assertEqual(event.descriptor.platform, "linux")
-            self.assertEqual(event.descriptor.approval, APPROVAL_PROFILE)
+            # The shared library enrols at its own newest profile; this client
+            # accepts that one and every earlier rung it published.
+            self.assertIn(event.descriptor.approval, KNOWN_APPROVALS)
             self.assertEqual(event.descriptor.enrollment_id, str(enrollment_id))
             self.assertEqual(fingerprint_of_encoded(event.descriptor.public_key), fingerprint(GENERATOR_SEC1))
             self.assertFalse(event.connected)

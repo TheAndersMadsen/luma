@@ -356,7 +356,7 @@ final class PanelStateTests: XCTestCase {
             }
         }
         XCTAssertEqual(Words.usingSelection("Mail"), "Using: Mail selection")
-        XCTAssertEqual(Words.destinationChip("This Mac"), "→ This Mac")
+        XCTAssertEqual(Words.destinationChip("Shield TV"), "→ Shield TV")
         XCTAssertEqual(Words.shownOn("your phone"), "Shown on your phone")
         XCTAssertEqual(Words.chooseHint(3), "Press 1–3 or ↑↓ then ↩ to pick one.")
         XCTAssertEqual(Words.chooseHint(12), "Press 1–8 or ↑↓ then ↩ to pick one.")

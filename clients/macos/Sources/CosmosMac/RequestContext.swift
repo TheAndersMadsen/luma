@@ -80,16 +80,20 @@ public struct ContextChip: Equatable, Sendable {
     }
 }
 
-/// The "Continue on" choice. Labels name a kind of device and nothing about whether
-/// one is approved, visible or eligible; Cosmos alone decides that.
+/// Where a reply continues. Cosmos chooses the screen from what the answer is and
+/// which screen suits it, so `anywhere` is the default and names nothing at all;
+/// the rest are an override that stays available. This Mac is not one of them:
+/// naming the device a request came from earns nothing in the runtime's ranking,
+/// so offering it would promise something this client cannot keep. Labels name a
+/// kind of device and nothing about whether one is approved, visible or eligible.
 public enum Destination: String, CaseIterable, Identifiable, Sendable {
-    case thisMac, phone, linuxPC, tv, browser
+    case anywhere, phone, linuxPC, tv, browser
 
     public var id: String { rawValue }
 
     public var label: String {
         switch self {
-        case .thisMac: "This Mac"
+        case .anywhere: "Wherever it fits"
         case .phone: "Phone"
         case .linuxPC: "Linux PC"
         case .tv: "TV"
@@ -100,13 +104,17 @@ public enum Destination: String, CaseIterable, Identifiable, Sendable {
     /// The wire target; nil sends the request with no destination at all.
     public var target: String? {
         switch self {
-        case .thisMac: nil
+        case .anywhere: nil
         case .phone: "android"
         case .linuxPC: "linux"
         case .tv: "android_tv"
         case .browser: "browser"
         }
     }
+
+    /// What the chip says before sending. Nothing at all while no destination is
+    /// named, which is the default and the whole point of it.
+    public var chip: String? { target == nil ? nil : Words.destinationChip(label) }
 }
 
 /// What one explicit capture found.

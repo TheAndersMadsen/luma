@@ -314,10 +314,18 @@ fn descriptor_is_public_bounded_and_does_not_contain_connection_credentials() {
     // A fresh enrollment asks the owner to approve the newest profile this
     // build understands; an installation already approved at an earlier one
     // keeps it, because the challenge carries the record's own approval.
-    assert_eq!(value["approval"], "native-device-action-v4");
-    for approval in ["native-shared-speech-v3", "native-shared-display-v2"] {
+    assert_eq!(value["approval"], "native-audience-v6");
+    for approval in [
+        "native-voice-input-v5",
+        "native-device-action-v4",
+        "native-shared-speech-v3",
+        "native-shared-display-v2",
+    ] {
         assert!(crate::wire::known_approval(approval), "{approval}");
     }
+    // A rung this build has never heard of is refused, so a newer server
+    // cannot talk an older installation into a posture it cannot honour.
+    assert!(!crate::wire::known_approval("native-audience-v7"));
     assert!(!crate::wire::known_approval("native-shared-text-v1"));
     assert_eq!(value["platform"], "macos");
     assert!(serde_json::to_vec(&value).unwrap().len() < 1024);

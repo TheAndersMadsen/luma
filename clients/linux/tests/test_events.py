@@ -1,6 +1,6 @@
 import unittest
 
-from cosmos_linux.events import InvalidEvent, decode
+from cosmos_linux.events import APPROVAL_PROFILE, KNOWN_APPROVALS, InvalidEvent, decode
 from cosmos_linux.native import MAX_POLICY_BYTES
 
 from .fixtures import (
@@ -15,12 +15,25 @@ class EventDecodingTest(unittest.TestCase):
         self.assertEqual(event.operation, "prepare")
         self.assertTrue(event.ok)
         self.assertEqual(event.descriptor.platform, "linux")
-        self.assertEqual(event.descriptor.approval, "native-device-action-v4")
+        self.assertEqual(event.descriptor.approval, "native-audience-v6")
         self.assertTrue(event.needs_reconnect)
         self.assertIsNone(event.display)
 
+    def test_every_published_approval_rung_still_decodes(self):
+        """The newest profile is what this build enrols at; an installation the owner
+        approved earlier keeps its own, and the challenge carries that one."""
+        self.assertEqual(APPROVAL_PROFILE, "native-audience-v6")
+        self.assertEqual(KNOWN_APPROVALS, (
+            "native-audience-v6", "native-voice-input-v5", "native-device-action-v4",
+            "native-shared-speech-v3", "native-shared-display-v2",
+        ))
+        for approval in KNOWN_APPROVALS:
+            event = decode(encode(snapshot("prepare", descriptor={**descriptor(), "approval": approval})))
+            self.assertEqual(event.descriptor.approval, approval)
+
     def test_foreign_descriptor_is_rejected(self):
-        for change in ({"platform": "macos"}, {"approval": "native-display-v1"}, {"publicKey": "short"}):
+        for change in ({"platform": "macos"}, {"approval": "native-display-v1"},
+                       {"approval": "native-audience-v7"}, {"publicKey": "short"}):
             with self.assertRaises(InvalidEvent):
                 decode(encode(snapshot("prepare", descriptor={**descriptor(), **change})))
 

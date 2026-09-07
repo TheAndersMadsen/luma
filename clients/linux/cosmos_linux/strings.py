@@ -50,16 +50,19 @@ DEVICE_NAMES = {
 A_DEVICE = "a device"
 
 # -- destinations ------------------------------------------------------------
-THIS_SCREEN = "This screen"
+# Cosmos chooses the screen from what the answer is. Naming one is an override
+# the owner may reach for, never a step they have to take, so the default entry
+# is no destination at all and the chip says nothing until one is named.
+ANY_DEVICE = "Wherever it fits"
 DESTINATION_CHIP = "→ {name}"
 DESTINATION_NAMES = {
-    "linux": THIS_SCREEN,
     "macos": "MacBook Pro",
     "android": "Pixel 10 Pro",
     "android_tv": "Shield TV",
 }
 OFFLINE = "offline"
 DESTINATION_TITLE = "Send to"
+DESTINATION_CLEAR = "Send it wherever it fits"
 
 # -- context chip ------------------------------------------------------------
 USE_SELECTION = "Use selection"

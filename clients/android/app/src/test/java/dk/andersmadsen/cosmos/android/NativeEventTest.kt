@@ -209,6 +209,32 @@ class NativeEventTest {
         assertThrows(Exception::class.java) { NativeEvent.decode(base.format(choices.replace("\"kind\":\"choices\"", "\"kind\":\"menu\"")).toByteArray()) }
     }
 
+    /**
+     * A fresh enrollment asks for the newest profile; an installation the owner
+     * approved earlier keeps its own, and the challenge carries that one. A build
+     * that did not know the new word would refuse to connect the moment the owner
+     * reapproved this device, so every published rung still decodes.
+     */
+    @Test
+    fun everyPublishedApprovalRungStillDecodes() {
+        assertEquals("native-audience-v6", NativeEvent.APPROVAL)
+        assertEquals(
+            listOf("native-audience-v6", "native-voice-input-v5", "native-device-action-v4",
+                "native-shared-speech-v3", "native-shared-display-v2"),
+            NativeEvent.KNOWN_APPROVALS.toList(),
+        )
+        for (approval in NativeEvent.KNOWN_APPROVALS) {
+            val event = NativeEvent.decode(
+                base.format("null").replace("native-device-action-v4", approval).toByteArray())
+            assertEquals(approval, event.descriptor!!.approval)
+        }
+        for (foreign in listOf("native-audience-v7", "native-display-v1")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                NativeEvent.decode(base.format("null").replace("native-device-action-v4", foreign).toByteArray())
+            }
+        }
+    }
+
     @Test
     fun approvalLinkCarriesTheDescriptorAsAnUnpaddedFragment() {
         val descriptor = Descriptor("11111111-1111-4111-8111-111111111111", "k", "android", "native-shared-speech-v3")

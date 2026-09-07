@@ -15,15 +15,40 @@ final class PublicDescriptorTests: XCTestCase {
         XCTAssertEqual(descriptor.publicKey, publicKey)
         XCTAssertEqual(descriptor.fingerprint, fingerprint)
         XCTAssertEqual(descriptor.platform, "macos")
-        XCTAssertEqual(descriptor.approval, "native-shared-speech-v3")
+        XCTAssertEqual(descriptor.approval, "native-audience-v6")
         let encoded = try descriptor.encoded()
         XCTAssertLessThanOrEqual(encoded.count, 1024)
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: String])
         XCTAssertEqual(fields, [
             "enrollmentId": "11111111-1111-4111-8111-111111111111",
-            "publicKey": publicKey, "platform": "macos", "approval": "native-shared-speech-v3",
+            "publicKey": publicKey, "platform": "macos", "approval": "native-audience-v6",
         ])
         XCTAssertEqual(encoded, try descriptor.encoded())
+    }
+
+    /// A fresh enrollment asks for the newest profile; an installation the owner
+    /// approved earlier keeps its own, and the challenge carries that one. A
+    /// build that did not know the new word would refuse to connect the moment
+    /// the owner reapproved, so every published rung is accepted and carried
+    /// through to the approval link unchanged.
+    func testEveryPublishedApprovalRungIsAcceptedAndCarriedThrough() throws {
+        XCTAssertEqual(PublicDescriptor.currentApproval, "native-audience-v6")
+        XCTAssertEqual(PublicDescriptor.knownApprovals, [
+            "native-audience-v6", "native-voice-input-v5", "native-device-action-v4",
+            "native-shared-speech-v3", "native-shared-display-v2",
+        ])
+        for approval in PublicDescriptor.knownApprovals {
+            let descriptor = try PublicDescriptor(enrollmentID: enrollmentID, publicKey: publicKey,
+                                                  approval: approval)
+            XCTAssertEqual(descriptor.approval, approval)
+            let fields = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: try descriptor.encoded()) as? [String: String])
+            XCTAssertEqual(fields["approval"], approval)
+        }
+        XCTAssertThrowsError(try PublicDescriptor(enrollmentID: enrollmentID, publicKey: publicKey,
+                                                  approval: "native-audience-v7"))
+        XCTAssertThrowsError(try PublicDescriptor(enrollmentID: enrollmentID, publicKey: publicKey,
+                                                  approval: "native-display-v1"))
     }
 
     func testRawPublicPointProducesSameCanonicalDescriptor() throws {

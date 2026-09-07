@@ -145,7 +145,9 @@ public enum Words {
 
     // MARK: Destination
 
-    public static let thisMac = "This Mac"
+    /// Cosmos chooses the screen from what the answer is, so no destination is
+    /// the default. Naming one is an override that stays available; it is never
+    /// a step the owner has to take, and the chip says nothing until they do.
     public static let destinationTitle = "Send to"
     public static func destinationChip(_ name: String) -> String { "→ \(name)" }
 

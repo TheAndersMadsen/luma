@@ -95,7 +95,21 @@ data class NativeEvent(
     val ok: Boolean get() = error == null
 
     companion object {
-        const val APPROVAL = "native-device-action-v4"
+        /** The profile a fresh enrollment asks the owner to approve: the newest one this build understands. */
+        const val APPROVAL = "native-audience-v6"
+
+        /**
+         * Every profile this build can still hold a connection under, newest first.
+         * An installation the owner approved earlier keeps its own, which the
+         * challenge carries, so publishing a new profile never cuts it off — it
+         * only means Cosmos does not yet know what kind of screen this is. A build
+         * that did not know the new word would refuse to connect the moment the
+         * owner reapproved this device.
+         */
+        val KNOWN_APPROVALS = setOf(
+            APPROVAL, "native-voice-input-v5", "native-device-action-v4",
+            "native-shared-speech-v3", "native-shared-display-v2",
+        )
         private val OPERATIONS = setOf("prepare", "connect", "send_text", "send_text_to", "send_text_with_context",
             "retry_pending", "cancel", "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task",
             "report", "progress", "grant", "display", "speech", "invitation", "status", "task", "confirmation",
@@ -233,7 +247,7 @@ data class NativeEvent(
             val descriptor = value.optJSONObject("descriptor")?.let {
                 Descriptor(it.getString("enrollmentId"), it.getString("publicKey"), it.getString("platform"), it.getString("approval"))
             }
-            if (descriptor != null) require(descriptor.platform in setOf("android", "android_tv") && descriptor.approval == APPROVAL) { "foreign descriptor" }
+            if (descriptor != null) require(descriptor.platform in setOf("android", "android_tv") && descriptor.approval in KNOWN_APPROVALS) { "foreign descriptor" }
             val connected = value.getBoolean("connected")
             return NativeEvent(
                 operation = operation, error = error, connected = connected,
