@@ -99,12 +99,58 @@ final class PanelStateTests: XCTestCase {
     @MainActor
     func testExamplePromptsOnlySuggestWhatThisMacCanDo() {
         XCTAssertEqual(PanelState.examplePrompts(canReadSelection: false),
-                       ["Find cafés near me", "Show my notes about the kitchen"])
+                       ["Find cafés near me", "Show my notes"])
         XCTAssertEqual(PanelState.examplePrompts(canReadSelection: true).count, 3)
-        XCTAssertEqual(PanelState.examplePrompts(canReadSelection: true).last, "Summarise what I've selected")
+        XCTAssertEqual(PanelState.examplePrompts(canReadSelection: true).last, "Summarise my selection")
         for prompt in PanelState.examplePrompts(canReadSelection: true) {
             XCTAssertTrue(ClientModel.validText(prompt), "an example must be sendable as it stands")
+            // They are chips in one row under the field, so each one is short
+            // enough to read at a glance and is the whole request it sends.
+            XCTAssertLessThanOrEqual(prompt.count, 24, prompt)
         }
+    }
+
+    /// One notice at a time, and only about what the owner is doing now. The
+    /// room state they can act on outranks the message the last operation left,
+    /// and older news never stacks on top of either.
+    func testThePanelShowsOneNoticeOrNoneAtAll() {
+        XCTAssertNil(PanelState.notice(failure: nil), "a quiet panel says nothing at all")
+        XCTAssertNil(PanelState.notice(failure: nil, message: ClientModel.connectedMessage),
+                     "copy that only restates the stage is not a notice")
+
+        // A failure the owner can act on wins over everything else, and it is
+        // said once even when the message repeats it.
+        let blocked = PanelState.notice(failure: .storageBlocked, hasPending: true, retained: true,
+                                        message: ClientFailure.storageBlocked.message)
+        XCTAssertEqual(blocked, ClientFailure.storageBlocked.notice)
+
+        // A retained connection is a notice only while nothing is rejoining it.
+        XCTAssertNotNil(PanelState.notice(failure: nil, retained: true))
+        XCTAssertNil(PanelState.notice(failure: nil, retained: true, rejoining: true))
+
+        // An unsettled request outranks the message, and the message is the
+        // last thing left to say.
+        XCTAssertEqual(PanelState.notice(failure: nil, hasPending: true, message: "Anything"),
+                       ClientFailure.uncertainRequest.notice)
+        XCTAssertEqual(PanelState.notice(failure: nil, message: "Cosmos has your request.")?.happened,
+                       "Cosmos has your request.")
+    }
+
+    /// A client older than the runtime is not a red block over the ask field.
+    /// Nothing about it can be acted on from here, so it is one quiet sentence
+    /// beside the mark and nothing else.
+    func testBeingOlderThanTheRuntimeReadsAsOneQuietSentence() {
+        XCTAssertNil(PanelState.notice(failure: .invalidResponse))
+        XCTAssertNil(PanelState.notice(failure: nil, message: ClientFailure.invalidResponse.message))
+        XCTAssertEqual(PanelState.statusNote(.connected, justConnected: false, failure: .invalidResponse),
+                       Words.needsNewerCosmos)
+        XCTAssertLessThanOrEqual(Words.needsNewerCosmos.count, 40, "one short line, not a paragraph")
+        XCTAssertFalse(Words.needsNewerCosmos.hasSuffix("."), "the status line is a line, not a paragraph")
+        // Everything else about the connection reads exactly as it did.
+        XCTAssertNil(PanelState.statusNote(.connected, justConnected: false, failure: nil))
+        XCTAssertEqual(PanelState.statusNote(.connected, justConnected: true, failure: nil), Words.connected)
+        XCTAssertEqual(PanelState.statusNote(.reconnecting, justConnected: false, failure: nil),
+                       Words.reconnecting)
     }
 
     func testDigitsPickOnlyTheOptionsCosmosOffered() {
@@ -167,8 +213,12 @@ final class PanelStateTests: XCTestCase {
         let technical = ["hash", "digest", "uuid", "json", "generation", "incarnation",
                          "0x", "null", "errsec", "http/", "stack"]
         for failure in PanelState.failures {
-            let notice = try XCTUnwrap(PanelState.notice(failure.message))
+            // A client older than the runtime is the one failure the panel says
+            // quietly in the status line instead.
+            guard failure != .invalidResponse else { continue }
+            let notice = try XCTUnwrap(PanelState.notice(failure: failure))
             XCTAssertEqual(notice, failure.notice)
+            XCTAssertEqual(PanelState.notice(failure: nil, message: failure.message), failure.notice)
             let next = try XCTUnwrap(notice.next, "\(failure) never says what to do")
             for sentence in [notice.happened, next] {
                 XCTAssertTrue(sentence.hasSuffix(".") || sentence.hasSuffix("…"), sentence)
@@ -178,8 +228,8 @@ final class PanelStateTests: XCTestCase {
                 }
             }
         }
-        XCTAssertNil(PanelState.notice(""))
-        XCTAssertEqual(PanelState.notice("Cosmos has your request."),
+        XCTAssertNil(PanelState.notice(failure: nil, message: ""))
+        XCTAssertEqual(PanelState.notice(failure: nil, message: "Cosmos has your request."),
                        Notice(happened: "Cosmos has your request."),
                        "a sentence the model already wrote passes through unchanged")
         XCTAssertFalse(ClientFailure.uncertainRequest.notice.isFailure,
@@ -293,9 +343,9 @@ final class PanelStateTests: XCTestCase {
     func testTheWordsFileStaysFreeOfTechnicalVocabulary() throws {
         let mirror = [
             Words.setupTitle, Words.setupLede, Words.setupAction, Words.approveTitle, Words.approveLede,
-            Words.approveWaiting, Words.emptyTitle, Words.emptyLede, Words.contextExplains,
+            Words.approveWaiting, Words.needsNewerCosmos, Words.contextExplains,
             Words.accessibilityOff, Words.accessibilityAction, Words.connectedLede,
-            Words.cannotConfirmDetail, Words.nowhereDetail, Words.shortcutHint,
+            Words.cannotConfirmDetail, Words.nowhereDetail, Words.attachText,
             Words.exampleCafes, Words.exampleNotes, Words.exampleSelection,
         ]
         let technical = ["hash", "digest", "uuid", "json", "generation", "incarnation", "fence", "0x"]

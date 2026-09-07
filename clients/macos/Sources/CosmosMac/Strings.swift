@@ -87,14 +87,15 @@ public enum Words {
     public static let speaking = "Speaking"
     public static let noPlaces = "No matching places found."
     public static let viewOnMaps = "View on Google Maps"
-    public static let emptyTitle = "Ask anything"
-    public static let emptyLede = "Replies appear here, or on the device that suits them best."
+    /// The suggestions under the ask field. They are chips, so each one is the
+    /// whole request it sends and short enough to read at a glance.
     public static let exampleCafes = "Find cafés near me"
-    public static let exampleNotes = "Show my notes about the kitchen"
-    public static let exampleSelection = "Summarise what I've selected"
-    public static let shortcutHint = "⌘↩ send · esc close · ⌘K send to"
-    /// While a ceremony is up ⌘↩ answers it, so the ask bar stops claiming it sends.
-    public static let shortcutHintConfirming = "esc close · ⌘K send to"
+    public static let exampleNotes = "Show my notes"
+    public static let exampleSelection = "Summarise my selection"
+    public static let overLimit = "Too long to send"
+    /// A build older than the runtime it is talking to. It is a fact about this
+    /// Mac, said once and quietly, never a red block over the ask field.
+    public static let needsNewerCosmos = "Some replies need a newer Cosmos"
 
     // MARK: Destination
 
@@ -104,6 +105,7 @@ public enum Words {
 
     // MARK: Context
 
+    public static let attachText = "Attach text"
     public static let useSelection = "Use selection"
     public static let useClipboard = "Use clipboard"
     public static func usingSelection(_ app: String) -> String { "Using: \(app) selection" }
@@ -164,8 +166,6 @@ public enum Words {
 
     // MARK: What this Mac may do at all
 
-    public static let noTaskPolicy = "No tasks are set up for this Mac."
-    public static let noTaskPolicyDetail = "Add them in Center → Devices when you want some."
     public static let actionsUnavailable =
         "This build of Cosmos cannot run tasks on this Mac yet. Nothing was run."
     public static let actionsUnavailableDetail = "Update Cosmos and ask again."

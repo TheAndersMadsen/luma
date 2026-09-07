@@ -116,6 +116,10 @@ struct NativeEvent: Decodable, Sendable {
     let confirmation: ConfirmationRequest?
     /// The command Cosmos retired, and why.
     let revoked: RevokedTask?
+    /// The owner's own policy this connection delivered, named but not carried:
+    /// the document's own bytes are read separately. Null means this Mac holds
+    /// none and may carry nothing out.
+    let policy: HeldPolicy?
     let eventsSkipped: UInt64
 
     static func decode(_ bytes: Data) throws -> NativeEvent {
@@ -125,7 +129,7 @@ struct NativeEvent: Decodable, Sendable {
                   ["prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending",
                    "cancel", "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task", "report",
                    "progress", "grant", "display", "speech", "invitation", "status", "task", "confirmation",
-                   "disconnect", "heartbeat"].contains(event.operation),
+                   "policy", "disconnect", "heartbeat"].contains(event.operation),
                   ["ok", "error"].contains(event.outcome),
                   (event.outcome == "ok") == (event.error == nil),
                   event.error.map({ $0.utf8.count <= 64 }) ?? true else {
@@ -154,6 +158,11 @@ struct NativeEvent: Decodable, Sendable {
         case "invalid_response", "invalid_journal", "panic": return .invalidResponse
         case "denied": return .approvalRequired
         case "busy": return .busy
+        // Cosmos replaced the command between this Mac reading the snapshot and
+        // the report reaching the library. The report closed nothing, which is
+        // neither a failed effect nor a fault in the connection: there is
+        // simply nothing left to say about that command.
+        case "stale_task": return nil
         case "no_pending_operation", "disconnected", "expired", "stale", "unavailable", "no_admission",
              "no_display", "no_speech", "no_task", "no_confirmation":
             return .connectionUnavailable

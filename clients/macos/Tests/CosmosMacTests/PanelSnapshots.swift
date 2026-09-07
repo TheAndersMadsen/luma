@@ -18,11 +18,10 @@ final class PanelSnapshots: XCTestCase {
             throw XCTSkip("Set COSMOS_UX_SHOTS to a directory to write the panel screenshots.")
         }
         let output = URL(fileURLWithPath: directory, isDirectory: true)
-        let policy = try Self.sleeperPolicy()
-        defer { try? FileManager.default.removeItem(at: policy) }
         let client = try MockClientBridge()
+        client.deliver(try Self.sleeperPolicy())
         let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
-                                authenticator: StubAuthenticator(), policyURL: policy)
+                                authenticator: StubAuthenticator())
         model.prepare()
         try await until { !model.busy && model.descriptor != nil }
         model.connect()
@@ -48,6 +47,37 @@ final class PanelSnapshots: XCTestCase {
         try await until { !model.canCancelTask }
     }
 
+    /// The panel before anything is asked, and the same panel with a reply on
+    /// it. The first is the whole point of the quiet panel: one line and a
+    /// field, with the suggestions as chips under it.
+    func testRendersTheQuietPanelAndAReply() async throws {
+        guard let directory = ProcessInfo.processInfo.environment["COSMOS_UX_SHOTS"] else {
+            throw XCTSkip("Set COSMOS_UX_SHOTS to a directory to write the panel screenshots.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        let client = try MockClientBridge()
+        client.deliver(try Self.sleeperPolicy())
+        let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
+                                authenticator: StubAuthenticator())
+        model.prepare()
+        try await until { !model.busy && model.descriptor != nil }
+        model.connect()
+        try await until { !model.busy && model.snapshot.phase == .connected }
+        model.setVisible(true)
+        // "Connected" stands for a moment and then fades; the empty panel is
+        // what is left after it.
+        try await Task.sleep(for: .seconds(3))
+        try render(model, to: output.appendingPathComponent("ux-mac-quiet-empty.png"))
+
+        model.draft = "What's the weather in Copenhagen?"
+        model.send()
+        try await until { !model.busy }
+        client.publish(ClientSnapshot(phase: .connected, visible: true, display: try Self.reply(),
+                                      status: try Self.shownHere()))
+        try await Task.sleep(for: .milliseconds(200))
+        try render(model, to: output.appendingPathComponent("ux-mac-quiet-reply.png"))
+    }
+
     /// One PNG of the panel exactly as the application draws it: the real
     /// SwiftUI view in a real window, cached to a bitmap, in the dark
     /// appearance the owner's Mac uses. `ImageRenderer` cannot rasterize the
@@ -55,7 +85,9 @@ final class PanelSnapshots: XCTestCase {
     private func render(_ model: ClientModel, to url: URL) throws {
         let hosting = NSHostingView(rootView: AssistantPanel(model: model))
         hosting.appearance = NSAppearance(named: .darkAqua)
-        let height = max(hosting.fittingSize.height, 220)
+        // The panel's own ideal height, so a quiet panel photographs as short
+        // as it actually is.
+        let height = max(hosting.fittingSize.height, 120)
         let frame = NSRect(x: 0, y: 0, width: CosmosTokens.panelWidth, height: height)
         let window = NSWindow(contentRect: frame, styleMask: [.borderless, .fullSizeContentView],
                               backing: .buffered, defer: false)
@@ -82,14 +114,8 @@ final class PanelSnapshots: XCTestCase {
     // MARK: Fixtures
 
     /// One harmless entry that runs long enough to photograph.
-    static func sleeperPolicy() throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("cosmos-shots-\(UUID().uuidString).json")
-        try Data("""
-        {"version":1,"commands":{"entries":[{"id":"project-tests","label":"Project tests",
-          "argv":["/bin/sleep","120"],"cwd":"/usr/bin","mutates":true,"budgetMs":120000}]}}
-        """.utf8).write(to: url)
-        return url
+    static func sleeperPolicy() throws -> (document: Data, held: HeldPolicy) {
+        try fixturePolicy(commands: fixtureCommands([entry()]))
     }
 
     static func entry() -> CommandEntry {
@@ -110,6 +136,22 @@ final class PanelSnapshots: XCTestCase {
             descriptionDigest: "5630269f110ea730effc829a754c9ecb27e240f2a7a95a6b433c866f05ab906c",
             risk: .high, attestation: .deviceOwnerAuth, privacy: "private",
             expiresAtMs: expiresAtMs)
+    }
+
+    static func reply() throws -> DisplayCard {
+        try DisplayCard(
+            actionID: UUID(uuidString: "7b2fa0f2-0000-4000-8000-000000000011")!,
+            turnID: UUID(uuidString: "9c02a0f2-0000-4000-8000-000000000012")!,
+            generation: 3, contentDigest: String(repeating: "d", count: 64),
+            expiresAtMs: 1_757_260_000_000,
+            content: .text("It's 17 degrees and overcast in Copenhagen, with light rain expected "
+                           + "around six this evening."),
+            privacy: "near_user")
+    }
+
+    static func shownHere() throws -> TurnStatus {
+        try TurnStatus(turnID: UUID(uuidString: "9c02a0f2-0000-4000-8000-000000000012")!,
+                       generation: 3, state: .shown, surfacePlatform: "macos", privacy: "near_user")
     }
 
     static func task() throws -> DeviceTask {

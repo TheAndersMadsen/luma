@@ -16,6 +16,63 @@ func fixtureDescriptor() throws -> PublicDescriptor {
     )
 }
 
+/// The surface the owner approved in Center, as every fixture policy names it.
+let fixtureSurface = UUID(uuidString: "5f1e0000-0000-4000-8000-0000000000a1")!
+
+/// One delivered policy: the exact compact document the runtime serializes, and
+/// the record the snapshot names it by. Sections are present exactly where the
+/// record carries a revision for them.
+func fixturePolicy(surface: UUID = fixtureSurface, approval: UInt64 = 4,
+                   actions: String? = nil, actionsRevision: UInt64? = 2,
+                   commands: String? = nil,
+                   commandsRevision: UInt64? = 3) throws -> (document: Data, held: HeldPolicy) {
+    var parts = ["\"version\":1", "\"surfaceId\":\"\(surface.uuidString.lowercased())\"",
+                 "\"approvalRevision\":\(approval)"]
+    if let actions { parts.append("\"actions\":\(actions)") }
+    if let commands { parts.append("\"commands\":\(commands)") }
+    let document = Data(("{" + parts.joined(separator: ",") + "}").utf8)
+    let held = try HeldPolicy(surfaceID: surface, approvalRevision: approval,
+                              actionsRevision: actions == nil ? nil : actionsRevision,
+                              commandsRevision: commands == nil ? nil : commandsRevision,
+                              digest: CanonicalJSON.hexDigest(document), byteLength: document.count)
+    return (document, held)
+}
+
+/// The `actions` section as the runtime writes it for this Mac: one revision,
+/// the class ceiling the owner spent, and the open list itself.
+func fixtureActions(hosts: [String] = [], apps: [DeviceApp] = [], roots: [DeviceRoot] = [],
+                    revision: UInt64 = 2, maximumClass: String = "shared_room") -> String {
+    var open: [String] = []
+    if !hosts.isEmpty {
+        open.append("\"hosts\":[" + hosts.map { "\"\($0)\"" }.joined(separator: ",") + "]")
+    }
+    if !apps.isEmpty {
+        open.append("\"apps\":[" + apps.map { "{\"id\":\"\($0.id)\",\"label\":\"\($0.label)\"}" }
+            .joined(separator: ",") + "]")
+    }
+    if !roots.isEmpty {
+        open.append("\"roots\":[" + roots
+            .map { "{\"id\":\"\($0.id)\",\"label\":\"\($0.label)\",\"path\":\"\($0.path)\"}" }
+            .joined(separator: ",") + "]")
+    }
+    return "{\"revision\":\(revision),\"maximumClass\":\"\(maximumClass)\",\"open\":{"
+        + open.joined(separator: ",") + "}}"
+}
+
+/// The `commands` section, which only macOS is ever sent.
+func fixtureCommands(_ entries: [CommandEntry], revision: UInt64 = 3,
+                     maximumClass: String = "private", offerOutput: Bool = false) -> String {
+    let list = entries.map { entry in
+        "{\"id\":\"\(entry.id)\",\"label\":\"\(entry.label)\",\"argv\":["
+            + entry.argv.map { "\"\($0)\"" }.joined(separator: ",")
+            + "],\"cwd\":\"\(entry.cwd)\",\"mutates\":\(entry.mutates),"
+            + "\"budgetMs\":\(entry.budgetMs)}"
+    }
+    return "{\"revision\":\(revision),\"maximumClass\":\"\(maximumClass)\","
+        + "\"offerOutputToCognition\":\(offerOutput),\"entries\":["
+        + list.joined(separator: ",") + "]}"
+}
+
 func fixtureAdmission(duplicate: Bool = false) throws -> TextAdmission {
     try TextAdmission(turnID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
                       generation: 1, duplicate: duplicate)
@@ -62,6 +119,11 @@ final class MockClientBridge: ClientBridge {
     var progressMessages: [(UInt32, Int64)] = []
     var grants: [(Bool, Attestation?, ConfirmationRequest)] = []
     var speechAudioHandler: ((SpeechReply) async throws -> Data)?
+    /// The copy this connection has delivered. Every snapshot the runtime sends
+    /// while connected names it, so every snapshot published here does too.
+    var delivered: HeldPolicy?
+    var policyDocuments: [String: Data] = [:]
+    private(set) var policyReads: [HeldPolicy] = []
     var disconnectCalls = 0
     var prepareHandler: ((ServerEndpoint) async throws -> PublicDescriptor)?
     var connectHandler: (() async throws -> Void)?
@@ -74,8 +136,20 @@ final class MockClientBridge: ClientBridge {
         descriptor = try fixtureDescriptor()
     }
     func publish(_ value: ClientSnapshot) {
+        var value = value
+        if value.phase == .connected, value.policy == nil { value.policy = delivered }
         snapshot = value
         onChange?(value)
+    }
+    /// Hand this connection one policy document to deliver and to serve.
+    func deliver(_ policy: (document: Data, held: HeldPolicy)) {
+        policyDocuments[policy.held.digest] = policy.document
+        delivered = policy.held
+    }
+    func devicePolicy(_ held: HeldPolicy) async throws -> Data {
+        policyReads.append(held)
+        guard let bytes = policyDocuments[held.digest] else { throw ClientFailure.connectionUnavailable }
+        return bytes
     }
     func prepare(server: ServerEndpoint) async throws -> PublicDescriptor {
         prepareServers.append(server)
@@ -166,6 +240,18 @@ final class ClientModelTests: XCTestCase {
         defer { subscription.cancel() }
         await fulfillment(of: [done], timeout: 2)
         XCTAssertEqual(model.snapshot.phase, .connected, file: file, line: line)
+    }
+
+    @MainActor
+    private func until(_ condition: () -> Bool, timeout: Duration = .seconds(5),
+                       file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                return XCTFail("condition never held", file: file, line: line)
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     @MainActor
@@ -287,6 +373,54 @@ final class ClientModelTests: XCTestCase {
         model.retryPending()
         XCTAssertEqual(client.retryCalls, 0)
         XCTAssertFalse(model.busy)
+    }
+
+    /// Before anything is asked, a person reads at most one short line. A
+    /// connected panel with nothing happening has nothing to read at all: no
+    /// title, no lede, no notice, and nothing about what this Mac may be asked
+    /// to do — that belongs in Center.
+    @MainActor
+    func testAQuietPanelHasNothingToReadBeforeAnythingIsAsked() async throws {
+        let client = try MockClientBridge()
+        let entry = CommandEntry(id: "project-tests", label: "Project tests", argv: ["/usr/bin/true"],
+                                 cwd: "/usr/bin", mutates: false, budgetMs: 20_000)
+        client.deliver(try fixturePolicy(commands: fixtureCommands([entry])))
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        try await until { model.policy != nil }
+
+        XCTAssertEqual(model.stage, .connected)
+        XCTAssertNil(model.notice, "a settled connection is not news")
+        XCTAssertNil(model.statusLine)
+        XCTAssertNil(model.nowLine)
+        XCTAssertNil(model.taskCard, "an owner with tasks set up is not told so unprompted")
+        XCTAssertNil(model.ceremony)
+        XCTAssertNil(model.context)
+        XCTAssertNil(model.display)
+        XCTAssertNil(model.speech)
+        XCTAssertFalse(model.sending)
+        XCTAssertEqual(model.waveformPhase, .idle)
+        // The suggestions are chips, not prose, and each one is a whole request.
+        XCTAssertEqual(PanelState.examplePrompts(canReadSelection: false).count, 2)
+
+        // Older news stays out of the way, and the panel says one thing at most
+        // when the owner next asks something.
+        client.publish(ClientSnapshot(phase: .connected, hasUnknownOutcome: true))
+        XCTAssertNil(model.notice, "an earlier request's outcome is history, not a state")
+    }
+
+    /// An answer this build cannot read is a fact about this Mac, said once and
+    /// quietly beside the mark, never a red block over the ask field.
+    @MainActor
+    func testAnUnverifiableAnswerReadsAsOneQuietLineAndNotAsAnError() async throws {
+        let client = try MockClientBridge()
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        client.publish(ClientSnapshot(phase: .connected, failure: .invalidResponse))
+        XCTAssertNil(model.notice)
+        XCTAssertEqual(model.connectionNote, Words.needsNewerCosmos)
     }
 
     @MainActor

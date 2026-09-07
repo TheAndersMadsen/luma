@@ -144,25 +144,35 @@ enum OptionalSymbols {
     ) -> Int32
 
     typealias Handle = @convention(c) (OpaquePointer?) -> Int32
-    typealias Report = @convention(c) (OpaquePointer?, UnsafePointer<UInt8>?, Int) -> Int32
+    /// A report names the command it is about, so a task the runtime replaced
+    /// between the snapshot and this call is refused instead of closed.
+    typealias Report = @convention(c) (
+        OpaquePointer?, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
+    ) -> Int32
     typealias Progress = @convention(c) (OpaquePointer?, UInt32, Int64) -> Int32
     typealias Grant = @convention(c) (OpaquePointer?, Int32, UnsafePointer<UInt8>?, Int) -> Int32
+    typealias Copy = @convention(c) (
+        OpaquePointer?, UnsafeMutablePointer<UInt8>?, Int, UnsafeMutablePointer<Int>?
+    ) -> Int32
 
     static let sendTextTo: SendTextTo? = resolve("cosmos_surface_send_text_to")
     static let sendTextWithContext: SendTextWithContext? = resolve("cosmos_surface_send_text_with_context")
-    // The four device-action calls are looked up the same way and only ever
+    // The five device-action calls are looked up the same way and only ever
     // called through these pointers, so a library without them leaves the
     // feature reported as unavailable instead of failing to bind at first use.
     static let acknowledgeTask: Handle? = resolve("cosmos_surface_acknowledge_task")
     static let report: Report? = resolve("cosmos_surface_report")
     static let progress: Progress? = resolve("cosmos_surface_progress")
     static let grant: Grant? = resolve("cosmos_surface_grant")
+    static let devicePolicy: Copy? = resolve("cosmos_surface_device_policy")
 
     static let capabilities = ClientCapabilities(
         targets: sendTextTo != nil, context: sendTextWithContext != nil,
-        // All four, or none: this Mac must be able to acknowledge, report,
-        // stay live and answer a ceremony before it carries anything out.
+        // All five, or none: this Mac must be able to read what the owner
+        // allowed, acknowledge, report, stay live and answer a ceremony before
+        // it carries anything out.
         actions: acknowledgeTask != nil && report != nil && progress != nil && grant != nil
+            && devicePolicy != nil
     )
 
     private static func resolve<Function>(_ name: String) -> Function? {
@@ -225,7 +235,8 @@ actor NativeWorker {
     }
 
     func enqueue(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil,
-                 report: Data? = nil, progress: (sequence: UInt32, elapsedMs: Int64)? = nil,
+                 report: (actionID: UUID, body: Data)? = nil,
+                 progress: (sequence: UInt32, elapsedMs: Int64)? = nil,
                  grant: (granted: Bool, attestation: Attestation?)? = nil) throws {
         guard let handle else { throw ClientFailure.connectionUnavailable }
         let status: Int32
@@ -235,9 +246,17 @@ actor NativeWorker {
             status = call(handle)
         case .report:
             guard let call = OptionalSymbols.report else { throw ClientFailure.featureUnavailable }
-            guard let report, !report.isEmpty, report.count <= 16 * 1024 else { throw ClientFailure.invalidText }
-            status = report.withUnsafeBytes { bytes in
-                call(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            guard let report, !report.body.isEmpty, report.body.count <= 16 * 1024 else {
+                throw ClientFailure.invalidText
+            }
+            // The action id exactly as the snapshot spelled it: the runtime
+            // refuses a report for anything but the command it currently holds.
+            let action = Data(report.actionID.uuidString.lowercased().utf8)
+            status = action.withUnsafeBytes { action in
+                report.body.withUnsafeBytes { body in
+                    call(handle, action.bindMemory(to: UInt8.self).baseAddress, action.count,
+                         body.bindMemory(to: UInt8.self).baseAddress, body.count)
+                }
             }
         case .progress:
             guard let call = OptionalSymbols.progress else { throw ClientFailure.featureUnavailable }
@@ -353,6 +372,25 @@ actor NativeWorker {
         var bytes = [UInt8](repeating: 0, count: expectedLength)
         var written = 0
         let status = cosmos_surface_speech_audio(handle, &bytes, bytes.count, &written)
+        guard status == COSMOS_SURFACE_OK, written == expectedLength else {
+            throw status == COSMOS_SURFACE_EMPTY ? ClientFailure.connectionUnavailable : .invalidResponse
+        }
+        return Data(bytes)
+    }
+
+    /// The owner's own policy document for this installation, exactly as the
+    /// snapshot named it. A build that cannot read one holds none, and holding
+    /// none means this Mac carries nothing out.
+    func devicePolicy(expectedLength: Int) throws -> Data {
+        guard let handle, let call = OptionalSymbols.devicePolicy else {
+            throw ClientFailure.featureUnavailable
+        }
+        guard expectedLength > 0, expectedLength <= Int(COSMOS_SURFACE_MAX_POLICY_BYTES) else {
+            throw ClientFailure.invalidResponse
+        }
+        var bytes = [UInt8](repeating: 0, count: expectedLength)
+        var written = 0
+        let status = call(handle, &bytes, bytes.count, &written)
         guard status == COSMOS_SURFACE_OK, written == expectedLength else {
             throw status == COSMOS_SURFACE_EMPTY ? ClientFailure.connectionUnavailable : .invalidResponse
         }

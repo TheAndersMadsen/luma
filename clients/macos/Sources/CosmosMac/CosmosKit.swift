@@ -314,13 +314,35 @@ public enum PanelState {
         failures.contains { $0.message == message }
     }
 
-    /// The two sentences the panel shows for one model message: what happened and
-    /// what to do. A message the model wrote itself is already a plain sentence and
-    /// is passed through; a fixed failure is replaced by its calmer pair.
-    public static func notice(_ message: String) -> Notice? {
-        guard !message.isEmpty else { return nil }
-        if let failure = failures.first(where: { $0.message == message }) { return failure.notice }
+    /// The one notice the panel may show, or none at all.
+    ///
+    /// Only what is about what the owner is doing now, and only one thing: the
+    /// room state they can act on outranks the message the last operation left,
+    /// and older news never stacks on top of either. A client older than the
+    /// runtime is not a notice at all — nothing about it can be acted on from
+    /// here, so it is one quiet sentence in the status line instead.
+    public static func notice(failure: ClientFailure?, hasPending: Bool = false,
+                              retained: Bool = false, rejoining: Bool = false,
+                              message: String = "", stage: PanelStage = .connected) -> Notice? {
+        if let failure, failure != .invalidResponse { return failure.notice }
+        if hasPending { return ClientFailure.uncertainRequest.notice }
+        if retained, !rejoining {
+            return Notice(happened: "This Mac still holds a signed connection.",
+                          next: "Reconnect to resolve it before sending another request.")
+        }
+        guard !message.isEmpty, !restatesStage(message, stage: stage) else { return nil }
+        if let failure = failures.first(where: { $0.message == message }) {
+            return failure == .invalidResponse ? nil : failure.notice
+        }
         return Notice(happened: message)
+    }
+
+    /// The quiet line beside the mark: the connection while it is changing, or
+    /// the one sentence for a Cosmos this Mac is too old to read.
+    public static func statusNote(_ status: ConnectionStatus, justConnected: Bool,
+                                  failure: ClientFailure?) -> String? {
+        if failure == .invalidResponse { return Words.needsNewerCosmos }
+        return connectionNote(status, justConnected: justConnected)
     }
 
     /// The three prompts on the empty panel. The selection example appears only where

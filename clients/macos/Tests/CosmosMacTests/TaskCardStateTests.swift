@@ -275,7 +275,7 @@ final class TaskCardStateTests: XCTestCase {
         let client = try MockClientBridge()
         // All four calls, or none: a build that cannot report must not run.
         client.capabilities = ClientCapabilities(targets: true, context: true, actions: false)
-        let model = try await connected(client, policy: Self.workingPolicyFile())
+        let model = try await connected(client, policy: Self.workingPolicy())
         client.publish(ClientSnapshot(phase: .connected, task: try Self.task()))
         try await settle(model)
         XCTAssertEqual(model.taskCard?.state, Words.notDone)
@@ -289,7 +289,7 @@ final class TaskCardStateTests: XCTestCase {
 
     func testAMutatingCommandWithoutDeviceOwnerAuthIsRefusedBeforeAnythingIsSpawned() async throws {
         let client = try MockClientBridge()
-        let model = try await connected(client, policy: Self.workingPolicyFile())
+        let model = try await connected(client, policy: Self.workingPolicy())
         client.publish(ClientSnapshot(phase: .connected, task: try Self.task()))
         try await settle(model)
         XCTAssertTrue(client.acknowledgedTasks.isEmpty,
@@ -303,7 +303,7 @@ final class TaskCardStateTests: XCTestCase {
     func testTheCeremonyAnswerCarriesTheAttestationAndTheCommandThenRuns() async throws {
         let client = try MockClientBridge()
         let authenticator = StubAuthenticator()
-        let model = try await connected(client, policy: Self.workingPolicyFile(),
+        let model = try await connected(client, policy: Self.workingPolicy(),
                                         authenticator: authenticator)
         client.publish(ClientSnapshot(phase: .connected, confirmation: Self.request))
         XCTAssertEqual(model.ceremony?.question,
@@ -324,7 +324,7 @@ final class TaskCardStateTests: XCTestCase {
 
     func testDecliningAnswersNoAndDismissingAnswersNothing() async throws {
         let client = try MockClientBridge()
-        let model = try await connected(client, policy: Self.workingPolicyFile())
+        let model = try await connected(client, policy: Self.workingPolicy())
         client.publish(ClientSnapshot(phase: .connected, confirmation: Self.request))
         model.answerCeremony(granted: false)
         try await until { client.grants.count == 1 }
@@ -335,7 +335,7 @@ final class TaskCardStateTests: XCTestCase {
         // A ceremony that goes away unanswered denies by fail-safe default, and
         // the panel says what happened rather than nothing.
         let second = try MockClientBridge()
-        let dismissed = try await connected(second, policy: Self.workingPolicyFile())
+        let dismissed = try await connected(second, policy: Self.workingPolicy())
         second.publish(ClientSnapshot(phase: .connected, confirmation: Self.request))
         second.publish(ClientSnapshot(phase: .connected))
         XCTAssertTrue(second.grants.isEmpty, "dismissal answers nothing at all")
@@ -344,7 +344,7 @@ final class TaskCardStateTests: XCTestCase {
 
     func testARepeatedCommandProducesNoSecondEffect() async throws {
         let client = try MockClientBridge()
-        let model = try await connected(client, policy: Self.workingPolicyFile())
+        let model = try await connected(client, policy: Self.workingPolicy())
         // An open the policy refuses is reported once; a repeat with the same key
         // re-sends that report and re-verifies nothing again.
         let denied = try Self.task(operation: .open(locator: .https(url: "https://evil.example/x"),
@@ -372,8 +372,7 @@ final class TaskCardStateTests: XCTestCase {
     func testStoppingARunningCommandReportsCancelledAndSaysSo() async throws {
         for stoppedByCosmos in [false, true] {
             let client = try MockClientBridge()
-            let policy = try Self.sleeperPolicyFile()
-            let model = try await connected(client, policy: policy)
+            let model = try await connected(client, policy: try Self.sleeperPolicy())
             let task = try Self.task(entry: Self.sleeper)
             // The whole path: the ceremony is answered here, with device-owner
             // authentication, before anything is spawned.
@@ -406,7 +405,7 @@ final class TaskCardStateTests: XCTestCase {
 
     func testAnInvitationForATaskIsPresenceWithNoContent() async throws {
         let client = try MockClientBridge()
-        let model = try await connected(client, policy: try Self.workingPolicyFile())
+        let model = try await connected(client, policy: try Self.workingPolicy())
         client.publish(ClientSnapshot(
             phase: .connected,
             waiting: WaitingReply(id: UUID(uuidString: "aaaa0000-0000-4000-8000-000000000001")!,
@@ -421,34 +420,88 @@ final class TaskCardStateTests: XCTestCase {
         XCTAssertEqual(model.activity, .none)
     }
 
-    func testNoOwnerPolicyIsSaidPlainlyAndRefusesEverything() async throws {
+    /// Holding no copy is an ordinary state, and it is still a report rather
+    /// than silence: this Mac carries nothing out and says so.
+    func testHoldingNoPolicyRefusesEverythingWithoutSayingSoInAdvance() async throws {
         let client = try MockClientBridge()
-        let model = try await connected(client, policy: URL(fileURLWithPath: "/no/such/policy.json"))
-        XCTAssertFalse(model.hasTaskPolicy)
-        XCTAssertEqual(Words.noTaskPolicy, "No tasks are set up for this Mac.")
+        let model = try await connected(client)
+        XCTAssertNil(model.policy)
+        XCTAssertTrue(client.policyReads.isEmpty, "nothing was delivered, so nothing was read")
         client.publish(ClientSnapshot(phase: .connected, task: try Self.task()))
         try await settle(model)
         XCTAssertEqual(client.reports.first?.0, ActionReport.refusal(.notPermitted))
         XCTAssertTrue(client.acknowledgedTasks.isEmpty)
     }
 
-    // MARK: Helpers
+    /// The copy lives exactly as long as the connection that carried it, and it
+    /// is read once however often the same document is named again.
+    func testThePolicyIsHeldFromTheConnectionAndDroppedWithIt() async throws {
+        let client = try MockClientBridge()
+        let policy = try Self.workingPolicy()
+        let model = try await connected(client, policy: policy)
+        XCTAssertEqual(model.policy?.entry("project-tests")?.argv, ["/usr/bin/true"])
+        XCTAssertEqual(model.policy?.hosts, ["github.com"])
+        XCTAssertEqual(client.policyReads.count, 1)
 
-    /// A policy file naming one harmless entry, so the whole path can run in a
-    /// test without touching anything of the owner's.
-    static func workingPolicyFile() throws -> URL {
+        // The same copy again is the same copy: nothing is re-read.
+        client.publish(ClientSnapshot(phase: .connected))
+        client.publish(ClientSnapshot(phase: .connected, visible: true))
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(client.policyReads.count, 1)
+
+        // The connection ends and the copy goes with it.
+        client.publish(ClientSnapshot(phase: .disconnected))
+        XCTAssertNil(model.policy)
+
+        // Reconnecting delivers it again, and this Mac reads it again.
+        client.publish(ClientSnapshot(phase: .connected))
+        try await until { model.policy != nil }
+        XCTAssertEqual(client.policyReads.count, 2)
+    }
+
+    /// A document for another surface or another approval is somebody else's
+    /// permission. It is never held, and this Mac then carries nothing out.
+    func testAPolicyForAnotherApprovalLeavesThisMacHoldingNothing() async throws {
+        let client = try MockClientBridge()
+        let model = try await connected(client, policy: try Self.workingPolicy())
+        XCTAssertNotNil(model.policy)
+
         let entry = CommandEntry(id: "project-tests", label: "Project tests",
                                  argv: ["/usr/bin/true"], cwd: "/usr/bin",
                                  mutates: true, budgetMs: 20_000)
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("cosmos-policy-\(UUID().uuidString).json")
-        let file = """
-        {"version":1,"open":{"hosts":["github.com"]},
-         "commands":{"entries":[{"id":"\(entry.id)","label":"\(entry.label)",
-          "argv":["/usr/bin/true"],"cwd":"/usr/bin","mutates":true,"budgetMs":20000}]}}
-        """
-        try Data(file.utf8).write(to: url)
-        return url
+        let other = try fixturePolicy(approval: 5, commands: fixtureCommands([entry]))
+        client.deliver(other)
+        client.publish(ClientSnapshot(phase: .connected, policy: other.held))
+        try await until { model.policy == nil }
+        XCTAssertEqual(client.policyReads.count, 1, "a copy for another approval is not even read")
+
+        client.publish(ClientSnapshot(phase: .connected, task: try Self.task(), policy: other.held))
+        try await settle(model)
+        XCTAssertEqual(client.reports.first?.0, ActionReport.refusal(.notPermitted))
+    }
+
+    /// A document that is not the one the snapshot named is refused whole.
+    func testADocumentThatIsNotTheOneNamedIsRefusedWhole() async throws {
+        let client = try MockClientBridge()
+        let policy = try Self.workingPolicy()
+        client.policyDocuments[policy.held.digest] = Data("{\"version\":1}".utf8)
+        client.delivered = policy.held
+        let model = try await connected(client)
+        try await until { !client.policyReads.isEmpty }
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertNil(model.policy, "half an allowlist is worse than none")
+    }
+
+    // MARK: Helpers
+
+    /// A delivered policy naming one harmless entry, so the whole path can run
+    /// in a test without touching anything of the owner's.
+    static func workingPolicy() throws -> (document: Data, held: HeldPolicy) {
+        let entry = CommandEntry(id: "project-tests", label: "Project tests",
+                                 argv: ["/usr/bin/true"], cwd: "/usr/bin",
+                                 mutates: true, budgetMs: 20_000)
+        return try fixturePolicy(actions: fixtureActions(hosts: ["github.com"]),
+                                 commands: fixtureCommands([entry]))
     }
 
     /// One entry that runs long enough to be stopped mid-flight.
@@ -456,14 +509,8 @@ final class TaskCardStateTests: XCTestCase {
                                       argv: ["/bin/sleep", "60"], cwd: "/usr/bin",
                                       mutates: true, budgetMs: 60_000)
 
-    static func sleeperPolicyFile() throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("cosmos-policy-\(UUID().uuidString).json")
-        try Data("""
-        {"version":1,"commands":{"entries":[{"id":"long-task","label":"Long task",
-          "argv":["/bin/sleep","60"],"cwd":"/usr/bin","mutates":true,"budgetMs":60000}]}}
-        """.utf8).write(to: url)
-        return url
+    static func sleeperPolicy() throws -> (document: Data, held: HeldPolicy) {
+        try fixturePolicy(commands: fixtureCommands([sleeper]))
     }
 
     static func task(operation: DeviceOperation? = nil, channel: String = "action.run",
@@ -485,15 +532,20 @@ final class TaskCardStateTests: XCTestCase {
             privacy: "shared_room")
     }
 
-    private func connected(_ client: MockClientBridge, policy: URL,
+    /// A connected model holding exactly the policy this connection delivered.
+    private func connected(_ client: MockClientBridge,
+                           policy: (document: Data, held: HeldPolicy)? = nil,
                            authenticator: StubAuthenticator? = nil) async throws -> ClientModel {
-        addTeardownBlock { try? FileManager.default.removeItem(at: policy) }
+        if let policy { client.deliver(policy) }
         let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
-                                authenticator: authenticator ?? StubAuthenticator(), policyURL: policy)
+                                authenticator: authenticator ?? StubAuthenticator())
         model.prepare()
         try await until { !model.busy && model.descriptor != nil }
         model.connect()
         try await until { !model.busy && model.snapshot.phase == .connected }
+        if policy != nil, client.capabilities.actions {
+            try await until { model.policy != nil }
+        }
         return model
     }
 

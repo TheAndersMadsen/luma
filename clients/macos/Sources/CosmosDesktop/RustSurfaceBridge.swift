@@ -161,7 +161,15 @@ final class RustSurfaceBridge: ClientBridge {
 
     func report(_ report: ActionReport, for task: DeviceTask) async throws {
         try requireCurrent(task)
-        _ = try await perform(.report, report: report.encoded())
+        _ = try await perform(.report, report: (task.actionID, report.encoded()))
+    }
+
+    func devicePolicy(_ held: HeldPolicy) async throws -> Data {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        guard snapshot.phase == .connected, snapshot.policy == held else {
+            throw ClientFailure.connectionUnavailable
+        }
+        return try await worker.devicePolicy(expectedLength: held.byteLength)
     }
 
     func progress(sequence: UInt32, elapsedMs: Int64, for task: DeviceTask) async throws {
@@ -224,7 +232,8 @@ final class RustSurfaceBridge: ClientBridge {
     }
 
     private func perform(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil,
-                         report: Data? = nil, progress: (sequence: UInt32, elapsedMs: Int64)? = nil,
+                         report: (actionID: UUID, body: Data)? = nil,
+                         progress: (sequence: UInt32, elapsedMs: Int64)? = nil,
                          grant: (granted: Bool, attestation: Attestation?)? = nil,
                          allowDisconnect: Bool = false) async throws -> NativeEvent {
         guard !busy, !closing, !disconnecting || allowDisconnect else { throw ClientFailure.busy }
@@ -313,7 +322,9 @@ final class RustSurfaceBridge: ClientBridge {
             status: event.connected ? event.status : nil,
             task: event.connected ? event.task : nil,
             confirmation: event.connected ? event.confirmation : nil,
-            revoked: event.connected ? event.revoked : nil
+            revoked: event.connected ? event.revoked : nil,
+            // The copy is dropped with the connection that carried it.
+            policy: event.connected ? event.policy : nil
         )
         if event.operation == expectedOperation { completion = event }
     }

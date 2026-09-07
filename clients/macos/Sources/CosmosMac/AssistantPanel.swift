@@ -16,6 +16,8 @@ public struct AssistantPanel: View {
     @State private var editingServer = false
     @State private var detailsShown = false
     @State private var focusedChoice: Int?
+    /// Whether the ask bar's own attach choices are open.
+    @State private var attachShown = false
     @FocusState private var askFocused: Bool
     /// Hiding the panel is not cancelling the turn; the controller owns the window.
     var onClose: (@MainActor () -> Void)?
@@ -70,10 +72,10 @@ public struct AssistantPanel: View {
     /// The ask field wears its focus ring only while this window actually takes keys.
     private var asking: Bool { askFocused && commands.windowIsKey }
 
-    /// The nebula belongs to the welcome and empty states and never sits behind content.
-    private var showsNebula: Bool {
-        model.stage != .connected || isEmptyState
-    }
+    /// The nebula belongs to the welcome screens, where there is room for it.
+    /// A quiet connected panel is the ask field and nothing else, so the nebula
+    /// would sit behind the one thing on it.
+    private var showsNebula: Bool { model.stage != .connected }
 
     /// Something about the room itself is unresolved and the owner may have to act.
     private var needsAttention: Bool {
@@ -81,10 +83,17 @@ public struct AssistantPanel: View {
             || model.snapshot.needsReconnect || model.snapshot.pendingOpen
     }
 
+    /// Anything about the turn in hand: a reply, a state, or the request that
+    /// has just left. The response card exists exactly when one of them does.
+    private var hasResponse: Bool {
+        model.display != nil || model.speech != nil || model.statusLine != nil
+            || model.nowLine != nil || model.sending
+    }
+
+    /// Nothing has been asked and nothing is happening here. The panel is then
+    /// the mark, the ask field and one row of suggestions: nothing to read.
     private var isEmptyState: Bool {
-        model.display == nil && model.speech == nil && model.statusLine == nil
-            && model.nowLine == nil && !model.sending
-            && model.ceremony == nil && model.taskCard == nil
+        !hasResponse && model.ceremony == nil && model.taskCard == nil
     }
 
     // MARK: Header
@@ -92,7 +101,7 @@ public struct AssistantPanel: View {
     private var header: some View {
         HStack(spacing: 10) {
             CosmosMark(size: 20)
-            Text(Words.appName).font(.system(size: 14, weight: .semibold))
+            Text(Words.appName).font(.system(size: 13, weight: .medium))
             if let note = model.connectionNote {
                 Text(note)
                     .font(.system(size: 12))
@@ -301,10 +310,7 @@ public struct AssistantPanel: View {
                              cancel: model.cancelTask)
                     .transition(.opacity)
             }
-            if isEmptyState { emptyState } else if !(model.display == nil && model.speech == nil
-                && model.statusLine == nil && model.nowLine == nil && !model.sending) {
-                responseCard
-            }
+            if hasResponse { responseCard }
             // A quiet, empty panel offers only the ask field; the room's own controls
             // appear once there is a turn to act on, or a room state to get out of.
             // The panel never leaves the owner looking at a problem with no action.
@@ -330,46 +336,6 @@ public struct AssistantPanel: View {
                 }
             }
         }
-    }
-
-    /// Nebula, one line of welcome and three prompts that work on this Mac today.
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(Words.emptyTitle).font(.system(size: 22, weight: .semibold))
-            Text(Words.emptyLede)
-                .font(.system(size: 13)).foregroundStyle(CosmosTokens.secondary)
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(PanelState.examplePrompts(canReadSelection: model.canReadSelection), id: \.self) { prompt in
-                    Button {
-                        model.draft = prompt
-                        askFocused = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "sparkle").font(.system(size: 10))
-                                .foregroundStyle(CosmosTokens.accent)
-                                .accessibilityHidden(true)
-                            Text(prompt).font(.system(size: 13))
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(maxWidth: CosmosTokens.readingWidth, alignment: .leading)
-                        .background(CosmosTokens.surface.opacity(0.65),
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(CosmosTokens.border.opacity(0.7), lineWidth: 1))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Example: \(prompt)")
-                }
-            }
-            .accessibilityIdentifier("example-prompts")
-            // What this Mac may be asked to do, said once and calmly, rather
-            // than left to be discovered when nothing happens.
-            if !model.hasTaskPolicy { TaskPolicyNote().padding(.top, 4) }
-        }
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The kit's response card: the state on top, the Now line under it, the delivered
@@ -468,11 +434,12 @@ public struct AssistantPanel: View {
 
     // MARK: Ask bar
 
-    /// Pinned under the response area. Return or Command-Return sends.
+    /// Pinned under the response area: one field, the two things that go with it,
+    /// and nothing to read. Return or Command-Return sends.
     private var askBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            contextRow
-            HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 8) {
+                attachButton
                 TextField(Words.askPlaceholder, text: $model.draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
@@ -488,25 +455,57 @@ public struct AssistantPanel: View {
                     .onKeyPress(.upArrow) { moveChoice(-1) }
                     .onKeyPress(.downArrow) { moveChoice(1) }
                     .onKeyPress(.return) { takeChoice() }
-                    .accessibilityLabel("Ask Cosmos")
+                    .accessibilityLabel(Words.askPlaceholder)
                     .accessibilityIdentifier("public-request")
                 sendButton
             }
-            HStack(spacing: 10) {
-                destinationChip
-                Spacer()
+            HStack(spacing: 8) {
                 if model.draft.utf8.count > 4000 {
-                    Text("Over the 4,000-byte limit. Shorten the request before sending.")
-                        .foregroundStyle(CosmosTokens.error)
-                } else {
-                    Text(model.ceremony == nil ? Words.shortcutHint : Words.shortcutHintConfirming)
+                    Text(Words.overLimit)
+                        .font(.system(size: 11)).foregroundStyle(CosmosTokens.error)
+                } else if let chip = model.context {
+                    contextChip(chip)
+                } else if showsSuggestions {
+                    suggestions
                 }
+                Spacer(minLength: 8)
+                destinationChip
             }
-            .font(.system(size: 11)).foregroundStyle(CosmosTokens.secondary)
         }
         .padding(.horizontal, CosmosTokens.padding)
         .padding(.top, 10)
         .padding(.bottom, 14)
+        .animation(reduceMotion ? nil : .easeOut(duration: CosmosTokens.motionDuration),
+                   value: showsSuggestions)
+    }
+
+    /// The suggestions: one row of small chips, each the whole request it sends.
+    /// They are there to start from, so they go the moment there is a draft.
+    private var showsSuggestions: Bool {
+        isEmptyState && model.draft.isEmpty && model.context == nil
+    }
+
+    private var suggestions: some View {
+        HStack(spacing: 6) {
+            ForEach(PanelState.examplePrompts(canReadSelection: model.canReadSelection), id: \.self) { prompt in
+                Button {
+                    model.draft = prompt
+                    askFocused = true
+                } label: {
+                    Text(prompt)
+                        .font(.system(size: 11))
+                        .foregroundStyle(CosmosTokens.secondary)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(CosmosTokens.surface.opacity(0.8), in: Capsule())
+                        .overlay(Capsule().strokeBorder(CosmosTokens.border, lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Ask: \(prompt)")
+            }
+        }
+        .transition(.opacity)
+        .accessibilityIdentifier("example-prompts")
     }
 
     private var sendButton: some View {
@@ -532,51 +531,78 @@ public struct AssistantPanel: View {
         .padding(.bottom, 4)
     }
 
-    /// "Using: Safari selection ×" once text is attached; otherwise the two explicit
-    /// ways to attach it. Nothing is read until one of them is used.
-    @ViewBuilder
-    private var contextRow: some View {
-        if let chip = model.context {
-            HStack(spacing: 10) {
-                HStack(spacing: 6) {
-                    Image(systemName: chip.source == .selection ? "text.cursor" : "doc.on.clipboard")
-                        .font(.system(size: 10)).accessibilityHidden(true)
-                    Text(chip.caption).font(.system(size: 12, weight: .medium))
-                    Button(action: model.clearContext) {
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(CosmosTokens.secondary)
-                    .help(Words.removeContext)
-                    .accessibilityLabel(Words.removeContext)
-                }
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(CosmosTokens.accent.opacity(0.12), in: Capsule())
-                .overlay(Capsule().strokeBorder(CosmosTokens.accent.opacity(0.5), lineWidth: 1))
-                .help("\(Words.contextExplains) \(chip.label).")
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Attached text")
-                .accessibilityValue("\(chip.label) from \(chip.app). \(Words.contextExplains)")
-                .accessibilityIdentifier("context-chip")
-                Text(Words.contextExplains)
-                    .font(.system(size: 11)).foregroundStyle(CosmosTokens.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-        } else {
-            HStack(spacing: 8) {
-                Button(action: model.useSelection) { chipLabel("text.cursor", Words.useSelection) }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut("u", modifiers: [.command, .shift])
-                    .help("Attach the text selected in the app you were using (⇧⌘U)")
-                    .accessibilityLabel("Use the selected text from the app you were using")
-                Button(action: model.useClipboard) { chipLabel("doc.on.clipboard", Words.useClipboard) }
-                    .buttonStyle(.plain)
-                    .help("Attach the clipboard's text")
-                    .accessibilityLabel("Use the clipboard text")
-                Spacer(minLength: 0)
-            }
+    /// One small affordance for the two ways to attach text, so the ask bar
+    /// carries a control rather than two labels. Nothing is read until one of
+    /// them is used, and ⇧⌘U still takes the selection without opening it.
+    private var attachButton: some View {
+        Button { attachShown.toggle() } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CosmosTokens.secondary)
+                .frame(width: 28, height: 28)
+                .background(CosmosTokens.surface.opacity(0.8), in: Circle())
+                .overlay(Circle().strokeBorder(CosmosTokens.border, lineWidth: 1))
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .disabled(!model.capabilities.context)
+        .help("\(Words.attachText) (⇧⌘U for the selection)")
+        .accessibilityLabel(Words.attachText)
+        .accessibilityIdentifier("attach-text")
+        .padding(.bottom, 4)
+        .popover(isPresented: $attachShown, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 2) {
+                attachChoice(Words.useSelection, symbol: "text.cursor") { model.useSelection() }
+                attachChoice(Words.useClipboard, symbol: "doc.on.clipboard") { model.useClipboard() }
+            }
+            .padding(6)
+            .frame(width: 190)
+        }
+    }
+
+    private func attachChoice(_ title: String, symbol: String,
+                              action: @escaping @MainActor () -> Void) -> some View {
+        Button {
+            attachShown = false
+            action()
+            askFocused = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 11)).frame(width: 14)
+                    .accessibilityHidden(true)
+                Text(title).font(.system(size: 13))
+                Spacer(minLength: 12)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    /// "Using: Safari selection ×" once text is attached. What it means is on the
+    /// chip itself, not spelled out beside it.
+    private func contextChip(_ chip: ContextChip) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: chip.source == .selection ? "text.cursor" : "doc.on.clipboard")
+                .font(.system(size: 10)).accessibilityHidden(true)
+            Text(chip.caption).font(.system(size: 11, weight: .medium))
+            Button(action: model.clearContext) {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(CosmosTokens.secondary)
+            .help(Words.removeContext)
+            .accessibilityLabel(Words.removeContext)
+        }
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(CosmosTokens.accent.opacity(0.12), in: Capsule())
+        .overlay(Capsule().strokeBorder(CosmosTokens.accent.opacity(0.5), lineWidth: 1))
+        .help("\(Words.contextExplains) \(chip.label).")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Attached text")
+        .accessibilityValue("\(chip.label) from \(chip.app). \(Words.contextExplains)")
+        .accessibilityIdentifier("context-chip")
     }
 
     /// The destination is visible before sending and never a surprise. Plain kinds of
@@ -663,29 +689,12 @@ public struct AssistantPanel: View {
 
     // MARK: Notices
 
-    /// Failure, pending, retry and unknown-outcome copy stays visible whenever it
-    /// applies: one sentence on what happened, one on what to do.
+    /// Exactly one notice, or none: what happened and what to do about it. The
+    /// model decides which one; older news never stacks on top of it, and a
+    /// state the panel already shows is not repeated as prose.
     @ViewBuilder
     private func notices(_ stage: PanelStage) -> some View {
-        let snapshot = model.snapshot
-        let retained = snapshot.needsReconnect || snapshot.pendingOpen
-        // One thing at a time, newest first. Older news never stacks on top of the
-        // thing the owner has to act on now.
-        if let failure = snapshot.failure, failure.message != model.message {
-            noticeView(failure.notice)
-        } else if snapshot.hasPending {
-            noticeView(Notice(happened: "The last request's outcome is not settled.",
-                              next: "Retry that exact request before sending another."))
-        } else if retained, !model.rejoining {
-            noticeView(Notice(happened: "This Mac still holds a signed connection.",
-                              next: "Reconnect to resolve it before sending another request."))
-        } else if snapshot.hasUnknownOutcome {
-            noticeView(Notice(happened: "An earlier request has an unknown outcome.",
-                              next: "It was not sent again. Carry on when you are ready."))
-        }
-        if let notice = model.notice, !PanelState.restatesStage(model.message, stage: stage) {
-            noticeView(notice, identifier: "operation-status")
-        }
+        if let notice = model.notice { noticeView(notice) }
         if stage != .connected, !model.shortcutMessage.isEmpty {
             Text(model.shortcutMessage).font(.system(size: 11)).foregroundStyle(CosmosTokens.secondary)
         }
@@ -709,7 +718,7 @@ public struct AssistantPanel: View {
         if model.busy { progressDot }
     }
 
-    private func noticeView(_ notice: Notice, identifier: String? = nil) -> some View {
+    private func noticeView(_ notice: Notice) -> some View {
         let tint = notice.isFailure ? CosmosTokens.error : CosmosTokens.secondary
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
@@ -749,7 +758,7 @@ public struct AssistantPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(identifier ?? "notice")
+        .accessibilityIdentifier("notice")
     }
 
     // MARK: Pieces
@@ -769,20 +778,6 @@ public struct AssistantPanel: View {
             .lineSpacing(3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: CosmosTokens.readingWidth, alignment: .leading)
-    }
-
-    /// The quiet outlined chip the ask bar's own actions wear.
-    private func chipLabel(_ symbol: String, _ text: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: symbol).font(.system(size: 10)).accessibilityHidden(true)
-            Text(text)
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(CosmosTokens.secondary)
-        .padding(.horizontal, 9).padding(.vertical, 4)
-        .background(CosmosTokens.surface.opacity(0.8), in: Capsule())
-        .overlay(Capsule().strokeBorder(CosmosTokens.border, lineWidth: 1))
-        .contentShape(Capsule())
     }
 
     private var progressDot: some View {

@@ -79,10 +79,27 @@ public final class ClientModel: ObservableObject {
     // MARK: Device actions
     private let executor = ActionExecutor()
     private let authenticator: any DeviceOwnerAuthenticating
-    private let policyURL: URL
-    /// This installation's own copy of the owner's policy. Nil means the owner
-    /// has set nothing up for this Mac, which is an ordinary, calm state.
-    private var policy: DevicePolicy?
+    /// This installation's own copy of the owner's policy, as this connection
+    /// delivered it. Nil means it holds none, which is an ordinary, calm state
+    /// and means it may do nothing at all.
+    private(set) var policy: DevicePolicy?
+    /// The copy this model has already decided about, so a re-delivery of the
+    /// same document is idempotent.
+    private var policySeen: HeldPolicy?
+    /// The surface and approval revision this connection's policy belongs to.
+    /// A copy naming another is somebody else's permission.
+    private var policyBinding: PolicyBinding?
+    private var loadingPolicy: Task<Void, Never>?
+
+    private struct PolicyBinding: Equatable {
+        let surfaceID: UUID
+        let approvalRevision: UInt64
+
+        init(_ held: HeldPolicy) {
+            surfaceID = held.surfaceID
+            approvalRevision = held.approvalRevision
+        }
+    }
     /// The command being carried out here, and the clock its elapsed time and
     /// its progress messages both read. Starting or finishing one is what turns
     /// the panel's own clock on and off; no frame from Cosmos marks it.
@@ -104,15 +121,12 @@ public final class ClientModel: ObservableObject {
     public init(client: any ClientBridge, initialServerOrigin: String,
                 contextProvider: (any ContextProvider)? = nil,
                 authenticator: (any DeviceOwnerAuthenticating)? = nil,
-                policyURL: URL = DevicePolicy.defaultURL,
                 reconnectDelays: [Duration] = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12), .seconds(30)]) {
         self.client = client
         self.contextProvider = contextProvider ?? SystemContextProvider()
         self.authenticator = authenticator ?? DeviceOwnerAuthenticator()
-        self.policyURL = policyURL
         self.reconnectDelays = reconnectDelays
         serverInput = initialServerOrigin
-        policy = DevicePolicy.load(from: policyURL)
         snapshot = client.snapshot
         client.onChange = { [weak self] value in self?.snapshot = value }
     }
@@ -179,9 +193,11 @@ public final class ClientModel: ObservableObject {
     public var statusLine: StatusLine? { snapshot.status.map(PanelState.statusLine) }
     /// Which newer library calls this build can make; fixed for the process.
     public var capabilities: ClientCapabilities { client.capabilities }
-    /// The quiet line under the header: "Reconnecting…", a fading "Connected", or nothing.
+    /// The quiet line under the header: "Reconnecting…", a fading "Connected",
+    /// the one sentence for a Cosmos this Mac is too old to read, or nothing.
     public var connectionNote: String? {
-        PanelState.connectionNote(connectionStatus, justConnected: justConnected)
+        PanelState.statusNote(connectionStatus, justConnected: justConnected,
+                              failure: snapshot.failure)
     }
     /// How many options the current choice list offers, or nil when there is none.
     public var choiceCount: Int? {
@@ -210,13 +226,16 @@ public final class ClientModel: ObservableObject {
     }
     /// Whether Cosmos may read a selection at all on this Mac.
     public var canReadSelection: Bool { capabilities.context && contextProvider.canReadSelection }
-    /// The panel's own notice for the current message: what happened, what to do.
+    /// The one notice the panel may show: what happened, and what to do about
+    /// it. A permission the owner can grant right now outranks everything else.
     public var notice: Notice? {
         if accessibilityBlocked {
             return Notice(happened: Words.accessibilityOff, next: Words.accessibilityAction,
                           detail: Self.accessibilityDetail)
         }
-        return PanelState.notice(message)
+        return PanelState.notice(failure: snapshot.failure, hasPending: snapshot.hasPending,
+                                 retained: snapshot.needsReconnect || snapshot.pendingOpen,
+                                 rejoining: rejoining, message: message, stage: stage)
     }
 
     public var statusText: String {
@@ -550,9 +569,6 @@ public final class ClientModel: ObservableObject {
     /// Report the panel's own visibility. Cosmos routes a shared card here only while
     /// this is true; it never treats the report as occupancy or identity.
     public func setVisible(_ visible: Bool) {
-        // Opening the panel is the moment to re-read the owner's own list, so
-        // tasks added in Center appear here without restarting this Mac.
-        if visible { reloadPolicy() }
         if panelVisible != visible { panelVisible = visible }
         guard wantedVisible != visible else { return }
         wantedVisible = visible
@@ -582,9 +598,6 @@ public final class ClientModel: ObservableObject {
 
     // MARK: Device actions
 
-    /// Whether the owner has set anything up for this Mac at all. The panel says
-    /// so plainly rather than leaving an empty capability to be discovered.
-    public var hasTaskPolicy: Bool { !(policy?.isEmpty ?? true) }
     /// The task card as the panel draws it, or nil when there is nothing to say.
     public var taskCard: TaskCardModel? { TaskCard.card(activity, now: clock) }
     /// The ceremony this Mac is the venue for, if one is on screen.
@@ -595,10 +608,53 @@ public final class ClientModel: ObservableObject {
     /// A running command this Mac can stop. Closing the panel does not.
     public var canCancelTask: Bool { running != nil }
 
-    /// Re-reads the owner's own copy. Cheap, and it means adding a task in
-    /// Center takes effect without restarting this Mac's client.
-    public func reloadPolicy() {
-        policy = DevicePolicy.load(from: policyURL)
+    /// Holds exactly what the owner allowed on this connection, and nothing
+    /// while there is no connection.
+    ///
+    /// The snapshot names the copy; the bytes are read out of the library and
+    /// verified here against that digest, that surface and that approval
+    /// revision. A document this Mac will not act on leaves it holding nothing
+    /// rather than half a permission.
+    private func syncPolicy() {
+        guard snapshot.phase == .connected, let held = snapshot.policy else {
+            dropPolicy(refused: false)
+            return
+        }
+        // This exact copy was already decided about; re-delivery changes nothing.
+        guard policySeen != held else { return }
+        policySeen = held
+        let binding = PolicyBinding(held)
+        guard policyBinding == nil || policyBinding == binding else {
+            // A copy for another surface or another approval is not this
+            // connection's permission, whatever the snapshot said.
+            dropPolicy(refused: true)
+            return
+        }
+        loadingPolicy = Task { [weak self] in await self?.holdPolicy(held, binding: binding) }
+    }
+
+    private func holdPolicy(_ held: HeldPolicy, binding: PolicyBinding) async {
+        let bytes = try? await client.devicePolicy(held)
+        // A copy that was replaced while it was being read is not this one.
+        guard policySeen == held else { return }
+        guard let bytes, let delivered = DevicePolicy.decode(bytes, held: held) else {
+            dropPolicy(refused: bytes != nil)
+            return
+        }
+        policy = delivered
+        policyBinding = binding
+    }
+
+    /// Holding nothing is an ordinary state: this Mac then carries nothing out.
+    /// A refusal keeps what was seen, so the same bad copy is not read again; a
+    /// connection that ends takes its copy and its binding with it.
+    private func dropPolicy(refused: Bool) {
+        policy = nil
+        guard !refused else { return }
+        policySeen = nil
+        policyBinding = nil
+        loadingPolicy?.cancel()
+        loadingPolicy = nil
     }
 
     /// Why this Mac could not ask for the evidence the ceremony needs, if it
@@ -610,6 +666,8 @@ public final class ClientModel: ObservableObject {
     }
 
     private func syncActions() {
+        // What the owner allowed is settled before anything is decided with it.
+        syncPolicy()
         syncConfirmation()
         syncRevocation()
         syncInvitation()
@@ -630,7 +688,6 @@ public final class ClientModel: ObservableObject {
         guard shownConfirmation != request.grantID else { return }
         shownConfirmation = request.grantID
         answeredConfirmation = nil
-        reloadPolicy()
         taskOutput = nil
         activity = .confirming
     }
@@ -665,7 +722,6 @@ public final class ClientModel: ObservableObject {
         guard let task = snapshot.task else { return }
         guard boundTask != task.actionID else { return }
         boundTask = task.actionID
-        reloadPolicy()
         carrying?.cancel()
         carrying = Task { [weak self] in await self?.carryOut(task) }
     }
@@ -689,6 +745,9 @@ public final class ClientModel: ObservableObject {
             activity = Self.activity(for: earlier, task: task)
             return
         }
+        // The owner's copy is what this command is checked against, so a task
+        // that arrives with one still being read waits for it.
+        await loadingPolicy?.value
         guard let policy else { await refuse(.notPermitted, for: task); return }
         let planned: PlannedAction
         switch policy.plan(task.operation) {

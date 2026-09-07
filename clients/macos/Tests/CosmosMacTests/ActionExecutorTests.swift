@@ -491,51 +491,139 @@ final class ActionExecutorTests: XCTestCase {
         XCTAssertNil(stoppedEvidence["exitCode"])
     }
 
-    // MARK: The policy file
+    // MARK: The delivered policy
 
-    func testThePolicyFileIsReadWholeOrNotAtAll() throws {
-        // The same file name and the same `open` section the Linux client reads,
-        // plus the `commands` section only macOS has.
-        XCTAssertEqual(DevicePolicy.fileName, "device-actions.json")
-        let good = """
-        {"version":1,
-         "open":{"hosts":["github.com"],
-          "apps":[{"id":"dev.zed.Zed","label":"Zed"}],
-          "roots":[{"id":"repo","label":"Projects","path":"/Users/owner/Projects"}],
-          "openers":[{"suffixes":[".pdf"],"argv":["zathura","{path}"]}]},
-         "commands":{"entries":[{"id":"project-tests","label":"Project tests",
-          "argv":["./revival","check","cosmos"],"cwd":"/Users/owner/Projects/ai-pin-revival",
-          "mutates":true,"budgetMs":900000}]}}
-        """
-        let policy = try XCTUnwrap(DevicePolicy.decode(Data(good.utf8)))
+    /// The copy is read against what the snapshot said it is, and against every
+    /// bound the runtime itself applies when the owner saves it. Anything out
+    /// of shape anywhere leaves this Mac holding nothing at all.
+    func testTheDeliveredPolicyIsHeldWholeOrNotAtAll() throws {
+        let app = DeviceApp(id: "dev.zed.Zed", label: "Zed")
+        let root = DeviceRoot(id: "repo", label: "Projects", path: "/Users/owner/Projects")
+        let delivered = try fixturePolicy(
+            actions: fixtureActions(hosts: ["github.com"], apps: [app], roots: [root]),
+            commands: fixtureCommands([Self.entry])
+        )
+        let policy = try XCTUnwrap(DevicePolicy.decode(delivered.document, held: delivered.held))
         XCTAssertEqual(policy.hosts, ["github.com"])
+        XCTAssertEqual(policy.apps, [app])
+        XCTAssertEqual(policy.root("repo")?.path, "/Users/owner/Projects")
         XCTAssertEqual(policy.entry("project-tests")?.argv, ["./revival", "check", "cosmos"])
         XCTAssertEqual(policy.entry("project-tests")?.entryDigest, Self.entry.entryDigest)
-        XCTAssertEqual(policy.root("repo")?.path, "/Users/owner/Projects")
-        XCTAssertEqual(policy.apps.first?.id, "dev.zed.Zed")
         XCTAssertFalse(policy.isEmpty)
-        XCTAssertTrue(DevicePolicy().isEmpty)
-        // A file with nothing in it allows nothing, and that is not an error.
-        XCTAssertEqual(DevicePolicy.decode(Data(#"{"version":1}"#.utf8)), DevicePolicy())
 
-        // A half-read allowlist is worse than none: an unversioned, malformed,
-        // mistyped or out-of-bounds file allows nothing at all.
-        for bad in [
-            #"{"open":{"hosts":["github.com"]}}"#,
-            #"{"version":2,"open":{"hosts":["github.com"]}}"#,
-            #"{"version":1,"open":{"host":["github.com"]}}"#,
-            #"{"version":1,"commands":{"entry":[]}}"#,
-            #"{"version":1,"open":{"roots":[{"id":"repo","path":"relative"}]}}"#,
-            #"{"version":1,"open":{"roots":[{"id":"repo","path":"/a","extra":1}]}}"#,
-            #"{"version":1,"commands":{"entries":[{"id":"x","label":"X","argv":[],"cwd":"/tmp","mutates":false,"budgetMs":1000}]}}"#,
-            #"{"version":1,"commands":{"entries":[{"id":"x","label":"X","argv":["../../bin/sh"],"cwd":"/tmp","mutates":false,"budgetMs":1000}]}}"#,
-            #"{"version":1,"commands":{"entries":[{"id":"x","label":"X","argv":["/bin/true"],"cwd":"/tmp","mutates":false}]}}"#,
-            #"{"version":1,"commands":{"entries":[{"id":"x","label":"X","argv":["/bin/true"],"cwd":"/tmp","mutates":false,"budgetMs":900001}]}}"#,
-            "not json",
+        // The owner allowed device actions and no commands at all, or the other
+        // way round: both are ordinary, and each is held for what it says.
+        let openOnly = try fixturePolicy(actions: fixtureActions(hosts: ["github.com"]))
+        XCTAssertEqual(DevicePolicy.decode(openOnly.document, held: openOnly.held)?.entries, [])
+        let runOnly = try fixturePolicy(commands: fixtureCommands([Self.entry]))
+        XCTAssertEqual(DevicePolicy.decode(runOnly.document, held: runOnly.held)?.hosts, [])
+
+        // Not the document the snapshot named: a different length, a digest
+        // that does not match, or bytes that are not it at all.
+        var shortened = delivered.held
+        shortened = try HeldPolicy(surfaceID: shortened.surfaceID,
+                                   approvalRevision: shortened.approvalRevision,
+                                   actionsRevision: shortened.actionsRevision,
+                                   commandsRevision: shortened.commandsRevision,
+                                   digest: shortened.digest,
+                                   byteLength: shortened.byteLength - 1)
+        XCTAssertNil(DevicePolicy.decode(delivered.document, held: shortened))
+        let wrongDigest = try HeldPolicy(surfaceID: delivered.held.surfaceID,
+                                        approvalRevision: delivered.held.approvalRevision,
+                                        actionsRevision: delivered.held.actionsRevision,
+                                        commandsRevision: delivered.held.commandsRevision,
+                                        digest: String(repeating: "c", count: 64),
+                                        byteLength: delivered.held.byteLength)
+        XCTAssertNil(DevicePolicy.decode(delivered.document, held: wrongDigest))
+
+        // Somebody else's permission: another surface, or another approval.
+        let elsewhere = try fixturePolicy(surface: UUID(uuidString: "5f1e0000-0000-4000-8000-0000000000b2")!,
+                                          commands: fixtureCommands([Self.entry]))
+        XCTAssertNil(DevicePolicy.decode(elsewhere.document, held: runOnly.held))
+        let laterApproval = try fixturePolicy(approval: 9, commands: fixtureCommands([Self.entry]))
+        XCTAssertNil(DevicePolicy.decode(laterApproval.document, held: runOnly.held))
+
+        // A section is present at exactly the revision the snapshot named.
+        let drifted = try fixturePolicy(commands: fixtureCommands([Self.entry], revision: 4),
+                                        commandsRevision: 3)
+        XCTAssertNil(DevicePolicy.decode(drifted.document, held: drifted.held))
+
+        // Half an allowlist is worse than none: an unknown field, a section
+        // this Mac's manifest does not declare, a missing class, an empty open
+        // list, or an entry out of the runtime's own bounds.
+        for actions in [
+            fixtureActions(hosts: ["github.com"]).replacingOccurrences(of: "\"open\"", with: "\"route\""),
+            fixtureActions(hosts: ["github.com"]).replacingOccurrences(of: "\"maximumClass\"", with: "\"class\""),
+            fixtureActions(hosts: ["github.com"]).replacingOccurrences(of: "shared_room", with: "everyone"),
+            fixtureActions(hosts: ["github.com", "github.com"]),
+            fixtureActions(hosts: ["fine.example", "a.example"]),
+            fixtureActions(hosts: ["Not-A-Host"]),
+            fixtureActions(),
         ] {
-            XCTAssertNil(DevicePolicy.decode(Data(bad.utf8)), bad)
+            let bad = try fixturePolicy(actions: actions)
+            XCTAssertNil(DevicePolicy.decode(bad.document, held: bad.held), actions)
         }
-        XCTAssertNil(DevicePolicy.load(from: URL(fileURLWithPath: "/no/such/device-actions.json")),
-                     "no file is no policy, and that is not an error")
+        for commands in [
+            fixtureCommands([]),
+            fixtureCommands([CommandEntry(id: "x", label: "X", argv: [], cwd: "/tmp",
+                                          mutates: false, budgetMs: 1000)]),
+            fixtureCommands([CommandEntry(id: "x", label: "X", argv: ["../../bin/sh"], cwd: "/tmp",
+                                          mutates: false, budgetMs: 1000)]),
+            fixtureCommands([CommandEntry(id: "x", label: "X", argv: ["/bin/true"], cwd: "relative",
+                                          mutates: false, budgetMs: 1000)]),
+            fixtureCommands([CommandEntry(id: "x", label: "X", argv: ["/bin/true"], cwd: "/tmp",
+                                          mutates: false, budgetMs: 900_001)]),
+            fixtureCommands([Self.entry]).replacingOccurrences(of: "\"offerOutputToCognition\":false,",
+                                                              with: ""),
+            fixtureCommands([Self.entry]).replacingOccurrences(of: "\"budgetMs\"", with: "\"budget\""),
+        ] {
+            let bad = try fixturePolicy(commands: commands)
+            XCTAssertNil(DevicePolicy.decode(bad.document, held: bad.held), commands)
+        }
+
+        // And a document that is not a version 1 object at all.
+        for text in ["not json", "[]", "{\"version\":2}", "{}"] {
+            let bytes = Data(text.utf8)
+            let held = try HeldPolicy(surfaceID: fixtureSurface, approvalRevision: 4,
+                                      actionsRevision: nil, commandsRevision: 3,
+                                      digest: CanonicalJSON.hexDigest(bytes),
+                                      byteLength: bytes.count)
+            XCTAssertNil(DevicePolicy.decode(bytes, held: held), text)
+        }
+
+        // The snapshot record itself is bounded: a nil surface, a zero
+        // revision, a short digest or a document over the cap is no record.
+        XCTAssertThrowsError(try HeldPolicy(surfaceID: fixtureSurface, approvalRevision: 0,
+                                            actionsRevision: 1, commandsRevision: nil,
+                                            digest: String(repeating: "a", count: 64), byteLength: 10))
+        XCTAssertThrowsError(try HeldPolicy(surfaceID: fixtureSurface, approvalRevision: 1,
+                                            actionsRevision: nil, commandsRevision: nil,
+                                            digest: String(repeating: "a", count: 64), byteLength: 10))
+        XCTAssertThrowsError(try HeldPolicy(surfaceID: fixtureSurface, approvalRevision: 1,
+                                            actionsRevision: 1, commandsRevision: nil,
+                                            digest: "short", byteLength: 10))
+        XCTAssertThrowsError(try HeldPolicy(surfaceID: fixtureSurface, approvalRevision: 1,
+                                            actionsRevision: 1, commandsRevision: nil,
+                                            digest: String(repeating: "a", count: 64),
+                                            byteLength: DevicePolicy.maximumBytes + 1))
+    }
+
+    /// The snapshot names the copy in the shape the library sends.
+    func testTheSnapshotPolicyRecordDecodesFromTheSnapshotShape() throws {
+        let record = """
+        {"surfaceId":"5f1e0000-0000-4000-8000-0000000000a1","approvalRevision":4,
+         "actionsRevision":null,"commandsRevision":3,
+         "digest":"\(String(repeating: "a", count: 64))","byteLength":128}
+        """
+        let held = try JSONDecoder().decode(HeldPolicy.self, from: Data(record.utf8))
+        XCTAssertEqual(held.surfaceID, fixtureSurface)
+        XCTAssertEqual(held.approvalRevision, 4)
+        XCTAssertNil(held.actionsRevision, "a section it was given nothing for is null, not zero")
+        XCTAssertEqual(held.commandsRevision, 3)
+        for bad in [record.replacingOccurrences(of: "\"commandsRevision\":3", with: "\"commandsRevision\":null"),
+                    record.replacingOccurrences(of: "\"byteLength\":128", with: "\"byteLength\":0"),
+                    record.replacingOccurrences(of: String(repeating: "a", count: 64), with: "A")] {
+            XCTAssertThrowsError(try JSONDecoder().decode(HeldPolicy.self, from: Data(bad.utf8)), bad)
+        }
     }
 }

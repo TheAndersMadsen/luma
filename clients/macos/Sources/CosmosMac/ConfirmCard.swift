@@ -208,19 +208,3 @@ struct ConfirmCardView: View {
         .accessibilityHidden(true)
     }
 }
-
-/// The one calm line the panel shows when the owner has set nothing up for this
-/// Mac. It is information, not a problem to solve.
-struct TaskPolicyNote: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(Words.noTaskPolicy).font(.system(size: 12)).foregroundStyle(CosmosTokens.secondary)
-            Text(Words.noTaskPolicyDetail).font(.system(size: 12)).foregroundStyle(CosmosTokens.secondary)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: CosmosTokens.readingWidth, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(Words.noTaskPolicy) \(Words.noTaskPolicyDetail)")
-        .accessibilityIdentifier("task-policy-note")
-    }
-}

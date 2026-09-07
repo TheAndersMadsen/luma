@@ -385,6 +385,41 @@ public struct RevokedTask: Equatable, Sendable {
     }
 }
 
+/// The owner's own policy for this installation, named but not repeated: the
+/// snapshot says which document is held and how long it is, and the document
+/// itself is copied out of the library and verified against this.
+///
+/// Nil on the snapshot is an ordinary state: this Mac holds no copy, so it may
+/// do nothing at all.
+public struct HeldPolicy: Equatable, Sendable {
+    public let surfaceID: UUID
+    public let approvalRevision: UInt64
+    /// Nil where the owner granted this Mac no device actions at all.
+    public let actionsRevision: UInt64?
+    /// Nil where it may run no commands.
+    public let commandsRevision: UInt64?
+    public let digest: String
+    public let byteLength: Int
+
+    public init(surfaceID: UUID, approvalRevision: UInt64, actionsRevision: UInt64?,
+                commandsRevision: UInt64?, digest: String, byteLength: Int) throws {
+        let revision = { (value: UInt64) in value > 0 && value <= 9_007_199_254_740_991 }
+        guard surfaceID != DisplayCard.nilUUID, revision(approvalRevision),
+              actionsRevision.map(revision) ?? true, commandsRevision.map(revision) ?? true,
+              actionsRevision != nil || commandsRevision != nil,
+              digest.count == 64, digest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
+              (1...DevicePolicy.maximumBytes).contains(byteLength) else {
+            throw ClientFailure.invalidResponse
+        }
+        self.surfaceID = surfaceID
+        self.approvalRevision = approvalRevision
+        self.actionsRevision = actionsRevision
+        self.commandsRevision = commandsRevision
+        self.digest = digest
+        self.byteLength = byteLength
+    }
+}
+
 /// What this Mac says happened, and only what it observed. A non-zero exit code
 /// is a command that ran, so it is completed evidence, not a failure.
 public struct ActionReport: Equatable, Sendable {
@@ -524,6 +559,9 @@ public struct ClientSnapshot: Equatable, Sendable {
     public var confirmation: ConfirmationRequest?
     /// The command Cosmos retired, and why.
     public var revoked: RevokedTask?
+    /// The owner's own policy this connection delivered, if one is held. It
+    /// names the document; the bytes are fetched and verified separately.
+    public var policy: HeldPolicy?
 
     public init(phase: ClientPhase = .disconnected, hasPending: Bool = false,
                 admission: TextAdmission? = nil, failure: ClientFailure? = nil,
@@ -532,7 +570,7 @@ public struct ClientSnapshot: Equatable, Sendable {
                 visible: Bool = false, display: DisplayCard? = nil, speech: SpeechReply? = nil,
                 waiting: WaitingReply? = nil, status: TurnStatus? = nil,
                 task: DeviceTask? = nil, confirmation: ConfirmationRequest? = nil,
-                revoked: RevokedTask? = nil) {
+                revoked: RevokedTask? = nil, policy: HeldPolicy? = nil) {
         self.phase = phase
         self.hasPending = hasPending
         self.pendingOpen = pendingOpen
@@ -549,6 +587,7 @@ public struct ClientSnapshot: Equatable, Sendable {
         self.task = task
         self.confirmation = confirmation
         self.revoked = revoked
+        self.policy = policy
     }
 }
 
@@ -634,6 +673,9 @@ public protocol ClientBridge: AnyObject {
     func speechAudio(for reply: SpeechReply) async throws -> Data
     /// Acknowledge the exact reply only after its audio played to the end.
     func acknowledgeSpeech(_ reply: SpeechReply) async throws
+    /// The exact bytes of the delivered policy the snapshot named. They are
+    /// verified against that record before this Mac holds anything.
+    func devicePolicy(_ held: HeldPolicy) async throws -> Data
     /// Acknowledge that this Mac bound the exact command from its own copy of
     /// the owner's policy and that it is legal here. It claims no outcome.
     func acknowledgeTask(_ task: DeviceTask) async throws

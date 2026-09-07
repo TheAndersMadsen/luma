@@ -267,6 +267,25 @@ extension RevokedTask: Decodable {
     }
 }
 
+extension HeldPolicy: Decodable {
+    private enum Keys: String, CodingKey {
+        case surfaceId, approvalRevision, actionsRevision, commandsRevision, digest, byteLength
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        // A section this installation was given nothing for is null, not zero.
+        try self.init(
+            surfaceID: container.decode(UUID.self, forKey: .surfaceId),
+            approvalRevision: container.decode(UInt64.self, forKey: .approvalRevision),
+            actionsRevision: container.decodeIfPresent(UInt64.self, forKey: .actionsRevision),
+            commandsRevision: container.decodeIfPresent(UInt64.self, forKey: .commandsRevision),
+            digest: container.decode(String.self, forKey: .digest),
+            byteLength: container.decode(Int.self, forKey: .byteLength)
+        )
+    }
+}
+
 extension TurnStatus: Decodable {
     private enum Keys: String, CodingKey { case turnId, generation, state, surfacePlatform, privacy }
 

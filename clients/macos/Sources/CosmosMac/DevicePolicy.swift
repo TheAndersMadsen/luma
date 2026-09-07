@@ -5,9 +5,16 @@ import Foundation
 /// This installation's own copy of the owner's device-action policy, and the
 /// verification every command passes before anything happens on this Mac.
 ///
-/// Nothing here trusts what Cosmos said. The runtime sends an entry id and two
-/// digests; the argv comes from this file and from nowhere else. A host, an
-/// application, a root or a task label that is not written here is refused,
+/// The copy is the owner's own statement, written once in Center and delivered
+/// by Cosmos over the connection this Mac already holds, bound to the surface
+/// and the approval revision that connection was opened at. Delivery is not
+/// authority: it is a cache of one revision, it is never written to disk, it is
+/// dropped with the connection that carried it, and an installation holding
+/// none does nothing at all.
+///
+/// Nothing here trusts what Cosmos said afterwards. The runtime sends an entry
+/// id and two digests; the argv comes from this copy and from nowhere else. A
+/// host, an application, a root or a task that is not written here is refused,
 /// whatever arrived on the wire.
 
 // MARK: Canonical JSON
@@ -215,8 +222,8 @@ public struct Filesystem: Sendable {
 
 // MARK: The policy
 
-/// The owner's own list, as this installation holds it. An empty policy is a
-/// perfectly ordinary state: this Mac then does nothing and says so.
+/// The owner's own list, as this installation holds it. Holding none at all is
+/// a perfectly ordinary state: this Mac then does nothing and says so.
 public struct DevicePolicy: Equatable, Sendable {
     public let hosts: [String]
     public let apps: [DeviceApp]
@@ -236,33 +243,37 @@ public struct DevicePolicy: Equatable, Sendable {
     public func entry(_ id: String) -> CommandEntry? { entries.first { $0.id == id } }
     public func root(_ id: String) -> DeviceRoot? { roots.first { $0.id == id } }
 
-    /// Where the owner keeps this Mac's copy: the same file name and the same
-    /// `open` section the Linux client reads, plus the `commands` section only
-    /// macOS has. Runtime data lives in Application Support, never in a checkout.
-    public static let fileName = "device-actions.json"
+    /// The whole document, exactly as the runtime bounds it before it commits
+    /// one. A larger policy is refused where the owner writes it, so a
+    /// truncated allowlist never reaches this Mac.
+    public static let maximumBytes = 8 * 1024
+    /// The classes the owner can spend. `maximumClass` is a ceiling they
+    /// already spent; a copy can never raise it.
+    static let classes = ["public", "shared_room", "near_user", "private"]
 
-    public static var defaultURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Cosmos/" + fileName, isDirectory: false)
-    }
-
-    /// Reads the file if it is there. A missing file means no policy, which is
-    /// not an error; a malformed or over-cap one allows nothing at all, because
-    /// a half-read allowlist is worse than none.
-    public static func load(from url: URL = DevicePolicy.defaultURL) -> DevicePolicy? {
-        guard let data = try? Data(contentsOf: url), !data.isEmpty, data.count <= 16 * 1024 else { return nil }
-        return decode(data)
-    }
-
-    /// The owner's file as this Mac will act on it. Every section it understands
-    /// is checked field by field, so a typo inside one is refused rather than
-    /// quietly widening or narrowing what this Mac may do.
-    public static func decode(_ data: Data) -> DevicePolicy? {
-        guard data.count <= 16 * 1024,
+    /// The delivered copy, read against what the snapshot said it is.
+    ///
+    /// The bytes have to be the exact document the snapshot named — its length
+    /// and its SHA-256 — and it has to be the owner's statement about *this*
+    /// connection: another surface or another approval revision is somebody
+    /// else's permission and is never held here. Every section is then checked
+    /// field by field against the bounds the runtime itself applies when the
+    /// owner saves it, because half an allowlist is worse than none: anything
+    /// out of shape anywhere refuses the whole document and this Mac then holds
+    /// nothing at all.
+    public static func decode(_ data: Data, held: HeldPolicy) -> DevicePolicy? {
+        guard data.count == held.byteLength, !data.isEmpty, data.count <= maximumBytes,
+              CanonicalJSON.hexDigest(data) == held.digest,
               let parsed = try? JSONSerialization.jsonObject(with: data),
               let document = parsed as? [String: Any],
-              document["version"] as? Int == 1 else {
+              Set(document.keys).isSubset(of: ["version", "surfaceId", "approvalRevision",
+                                               "actions", "commands"]),
+              document["version"] as? Int == 1,
+              (document["surfaceId"] as? String).flatMap(UUID.init(uuidString:)) == held.surfaceID,
+              number(document["approvalRevision"]) == held.approvalRevision,
+              // A section is present exactly where the snapshot named its revision.
+              (document["actions"] != nil) == (held.actionsRevision != nil),
+              (document["commands"] != nil) == (held.commandsRevision != nil) else {
             return nil
         }
         var hosts: [String] = []
@@ -270,56 +281,80 @@ public struct DevicePolicy: Equatable, Sendable {
         var roots: [DeviceRoot] = []
         var entries: [CommandEntry] = []
 
-        if let value = document["open"] {
-            // `openers` belongs to the Linux client, which reads the same
-            // section; this Mac opens through the workspace and ignores it.
-            guard let open = value as? [String: Any],
-                  Set(open.keys).isSubset(of: ["hosts", "apps", "roots", "openers"]) else { return nil }
+        if let revision = held.actionsRevision {
+            // This Mac's manifest declares neither navigation nor a player, so
+            // the runtime never sends `route` or `play` here; a document that
+            // carries one is not this installation's permission.
+            guard let actions = document["actions"] as? [String: Any],
+                  Set(actions.keys) == ["revision", "maximumClass", "open"],
+                  number(actions["revision"]) == revision,
+                  classes.contains(actions["maximumClass"] as? String ?? ""),
+                  let open = actions["open"] as? [String: Any],
+                  Set(open.keys).isSubset(of: ["hosts", "apps", "roots"]) else { return nil }
             if let listed = open["hosts"] {
                 guard let listed = listed as? [String] else { return nil }
-                hosts = listed.map { $0.lowercased() }
+                hosts = listed
             }
+            // Hosts arrive sorted and without repeats.
+            guard zip(hosts, hosts.dropFirst()).allSatisfy({ $0 < $1 }) else { return nil }
             if let listed = open["apps"] {
                 guard let listed = listed as? [Any] else { return nil }
                 for value in listed {
-                    guard let entry = value as? [String: Any],
-                          Set(entry.keys).isSubset(of: ["id", "label", "desktop"]),
-                          let id = entry["id"] as? String else { return nil }
-                    apps.append(DeviceApp(id: id, label: entry["label"] as? String ?? id))
+                    guard let entry = value as? [String: Any], Set(entry.keys) == ["id", "label"],
+                          let id = entry["id"] as? String,
+                          let label = entry["label"] as? String else { return nil }
+                    apps.append(DeviceApp(id: id, label: label))
                 }
             }
             if let listed = open["roots"] {
                 guard let listed = listed as? [Any] else { return nil }
                 for value in listed {
                     guard let entry = value as? [String: Any],
-                          Set(entry.keys).isSubset(of: ["id", "label", "path"]),
-                          let id = entry["id"] as? String,
+                          Set(entry.keys) == ["id", "label", "path"],
+                          let id = entry["id"] as? String, let label = entry["label"] as? String,
                           let path = entry["path"] as? String else { return nil }
-                    roots.append(DeviceRoot(id: id, label: entry["label"] as? String ?? id, path: path))
+                    roots.append(DeviceRoot(id: id, label: label, path: path))
                 }
             }
+            // A section the owner left empty is not delivered at all.
+            guard !hosts.isEmpty || !apps.isEmpty || !roots.isEmpty else { return nil }
         }
 
-        if let value = document["commands"] {
-            guard let commands = value as? [String: Any],
-                  Set(commands.keys).isSubset(of: ["entries"]) else { return nil }
-            if let listed = commands["entries"] {
-                guard let listed = listed as? [Any] else { return nil }
-                for value in listed {
-                    guard let entry = value as? [String: Any],
-                          Set(entry.keys) == ["id", "label", "argv", "cwd", "mutates", "budgetMs"],
-                          let id = entry["id"] as? String, let label = entry["label"] as? String,
-                          let argv = entry["argv"] as? [String], let cwd = entry["cwd"] as? String,
-                          let mutates = entry["mutates"] as? Bool,
-                          let budget = (entry["budgetMs"] as? NSNumber)?.int64Value else { return nil }
-                    entries.append(CommandEntry(id: id, label: label, argv: argv, cwd: cwd,
-                                                mutates: mutates, budgetMs: budget))
-                }
+        if let revision = held.commandsRevision {
+            guard let commands = document["commands"] as? [String: Any],
+                  Set(commands.keys) == ["revision", "maximumClass", "offerOutputToCognition", "entries"],
+                  number(commands["revision"]) == revision,
+                  classes.contains(commands["maximumClass"] as? String ?? ""),
+                  boolean(commands["offerOutputToCognition"]) != nil,
+                  let listed = commands["entries"] as? [Any],
+                  (1...8).contains(listed.count) else { return nil }
+            for value in listed {
+                guard let entry = value as? [String: Any],
+                      Set(entry.keys) == ["id", "label", "argv", "cwd", "mutates", "budgetMs"],
+                      let id = entry["id"] as? String, let label = entry["label"] as? String,
+                      let argv = entry["argv"] as? [String], let cwd = entry["cwd"] as? String,
+                      let mutates = boolean(entry["mutates"]),
+                      let budget = number(entry["budgetMs"]).flatMap({ Int64(exactly: $0) }) else { return nil }
+                entries.append(CommandEntry(id: id, label: label, argv: argv, cwd: cwd,
+                                            mutates: mutates, budgetMs: budget))
             }
         }
 
         let policy = DevicePolicy(hosts: hosts, apps: apps, roots: roots, entries: entries)
         return policy.wellFormed ? policy : nil
+    }
+
+    /// A whole number as JSON writes one. A boolean is not a number here, so a
+    /// `true` never passes for a revision or a budget.
+    static func number(_ value: Any?) -> UInt64? {
+        guard let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+              value.int64Value >= 0, Double(value.int64Value) == value.doubleValue else { return nil }
+        return UInt64(value.int64Value)
+    }
+
+    static func boolean(_ value: Any?) -> Bool? {
+        guard let value = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+        return value.boolValue
     }
 
     /// Exactly the caps Cosmos applies at policy-write time. This Mac holds a
