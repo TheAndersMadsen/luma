@@ -3,8 +3,8 @@
 //! owns admission, retries and RTC fencing. Snapshots cross as bytes.
 use super::{
     Bindings, CLOSED, Command, CosmosSurface, INVALID_ARGUMENT, MAX_CONFIG, MAX_CONTEXT,
-    MAX_CONTEXT_APP, MAX_JOURNAL, MAX_TEXT, OK, config, parse_context, parse_target, parse_text,
-    spawn,
+    MAX_CONTEXT_APP, MAX_JOURNAL, MAX_TEXT, OK, config, parse_action_id, parse_context,
+    parse_target, parse_text, spawn,
 };
 use cosmos_surface_client::{PlatformError, SecureStore, Signer};
 use jni::{
@@ -224,23 +224,40 @@ command!(
     Command::Disconnect
 );
 
-/// Say what this device observed, once, after it observed it. `report` is the
-/// bounded UTF-8 JSON of the report shape; reporting a completion for an
-/// effect the platform did not observe is a false outcome claim, which the
+/// Say what this device observed, once, after it observed it. `actionId` is
+/// the action the report is about, exactly as the snapshot spelled it, so a
+/// command swapped between this call and the worker closes nothing. `report`
+/// is the bounded UTF-8 JSON of the report shape; reporting a completion for
+/// an effect the platform did not observe is a false outcome claim, which the
 /// shared client's own validation refuses.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_report(
     env: JNIEnv,
     _class: JClass,
     handle: jlong,
+    action_id: JByteArray,
     report: JByteArray,
 ) -> jint {
+    let action = match required_bytes(&env, &action_id, 64) {
+        Ok(bytes) => bytes,
+        Err(code) => return code,
+    };
+    let action_id = match parse_action_id(&action) {
+        Ok(id) => id,
+        Err(code) => return code,
+    };
     let bytes = match required_bytes(&env, &report, 16 * 1024) {
         Ok(bytes) => bytes,
         Err(code) => return code,
     };
     match cosmos_surface_client::Report::parse(&bytes) {
-        Ok(report) => enqueue(handle, Command::Report(report)),
+        Ok(report) => enqueue(
+            handle,
+            Command::Report {
+                action_id,
+                report: Box::new(report),
+            },
+        ),
         Err(_) => INVALID_ARGUMENT,
     }
 }
@@ -422,6 +439,25 @@ pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_poll(
         return std::ptr::null_mut();
     };
     env.byte_array_from_slice(&event)
+        .map_or(std::ptr::null_mut(), |array| array.into_raw())
+}
+
+/// The owner's own policy document for this installation, or null when this
+/// installation holds none — which is an ordinary state and means it may do
+/// nothing at all. The snapshot names its digest; these are its exact bytes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_devicePolicy(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jbyteArray {
+    let Some(surface) = surface(handle) else {
+        return std::ptr::null_mut();
+    };
+    let Some(document) = surface.policy_document() else {
+        return std::ptr::null_mut();
+    };
+    env.byte_array_from_slice(&document)
         .map_or(std::ptr::null_mut(), |array| array.into_raw())
 }
 

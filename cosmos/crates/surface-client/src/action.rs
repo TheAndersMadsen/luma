@@ -697,3 +697,303 @@ impl Report {
         serde_json::from_slice(bytes).map_err(|_| Error::InvalidInput)
     }
 }
+
+// ---------------------------------------------------------------------------
+// The owner's policy for this installation
+// ---------------------------------------------------------------------------
+
+/// The longest policy document this client will hold. The whole `policy`
+/// frame — this document, its digest and the frame's own stamp — has to fit
+/// the 12 KiB transport envelope, so the runtime refuses to commit a policy
+/// larger than this instead of delivering a truncated allowlist. Half an
+/// allowlist is worse than none.
+pub const MAX_POLICY_BYTES: usize = 8 * 1024;
+pub const MAX_HOSTS: usize = 16;
+pub const MAX_APPS: usize = 8;
+pub const MAX_ROOTS: usize = 4;
+pub const MAX_HOST_BYTES: usize = 253;
+pub const MAX_ROOT_PATH_BYTES: usize = 256;
+pub const MAX_COMMAND_ENTRIES: usize = 8;
+pub const MIN_ARGV: usize = 1;
+pub const MAX_ARGV: usize = 12;
+pub const MAX_ARGV_BYTES: usize = 256;
+
+/// A bare registrable host: lowercase, dotted, no scheme, port, userinfo or
+/// path. Byte-for-byte the rule the runtime applies when the owner saves it.
+pub fn declared_host(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_HOST_BYTES
+        && value == value.to_ascii_lowercase()
+        && !value.starts_with('.')
+        && !value.ends_with('.')
+        && !value.contains("..")
+        && value.contains('.')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+}
+
+fn unique<'a>(values: impl Iterator<Item = &'a str>) -> bool {
+    let mut seen: Vec<&str> = values.collect();
+    let count = seen.len();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.len() == count
+}
+
+/// One application the owner declared this installation may open.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyApp {
+    pub id: String,
+    pub label: String,
+}
+
+/// One directory the owner declared, named by the id the runtime mints file
+/// locators against. The path is this installation's own; the runtime never
+/// resolves it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyRoot {
+    pub id: String,
+    pub label: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenPolicy {
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub apps: Vec<PolicyApp>,
+    #[serde(default)]
+    pub roots: Vec<PolicyRoot>,
+}
+
+impl OpenPolicy {
+    fn valid(&self) -> bool {
+        self.hosts.len() <= MAX_HOSTS
+            && self.hosts.iter().all(|host| declared_host(host))
+            && self.hosts.windows(2).all(|pair| pair[0] < pair[1])
+            && self.apps.len() <= MAX_APPS
+            && self.apps.iter().all(|app| {
+                Locator::App { id: app.id.clone() }.valid() && text(&app.label, MAX_LABEL_BYTES)
+            })
+            && self.roots.len() <= MAX_ROOTS
+            && self.roots.iter().all(|root| {
+                token(&root.id, MAX_ROOT_ID_BYTES)
+                    && text(&root.label, MAX_LABEL_BYTES)
+                    && root.path.starts_with('/')
+                    && text(&root.path, MAX_ROOT_PATH_BYTES)
+                    && !root.path.split('/').any(|part| part == "..")
+            })
+            && unique(self.apps.iter().map(|app| app.id.as_str()))
+            && unique(self.roots.iter().map(|root| root.id.as_str()))
+            && (!self.hosts.is_empty() || !self.apps.is_empty() || !self.roots.is_empty())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteApp {
+    GoogleMaps,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RoutePolicy {
+    pub app: RouteApp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayPolicy {
+    pub providers: Vec<String>,
+}
+
+/// What this installation may be asked to open, route to or play, at the
+/// owner's own revision of that permission. `maximumClass` is a ceiling the
+/// owner already spent, never one this copy can raise.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActionPolicy {
+    pub revision: u64,
+    pub maximum_class: crate::display::Privacy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<OpenPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<RoutePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play: Option<PlayPolicy>,
+}
+
+impl ActionPolicy {
+    fn valid(&self) -> bool {
+        self.revision > 0
+            && self.maximum_class <= crate::display::Privacy::Private
+            && self.open.as_ref().is_none_or(OpenPolicy::valid)
+            && self.play.as_ref().is_none_or(|play| {
+                (1..=MAX_PROVIDERS).contains(&play.providers.len())
+                    && play.providers.iter().all(|p| provider_id(p))
+                    && play.providers.windows(2).all(|pair| pair[0] < pair[1])
+            })
+            && (self.open.is_some() || self.route.is_some() || self.play.is_some())
+    }
+}
+
+/// One command the owner authored. `argv` is fixed here and comes from
+/// nowhere else: there is no shell, no interpolation and no parameter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyEntry {
+    pub id: String,
+    pub label: String,
+    pub argv: Vec<String>,
+    pub cwd: String,
+    pub mutates: bool,
+    pub budget_ms: i64,
+}
+
+impl PolicyEntry {
+    fn valid(&self) -> bool {
+        token(&self.id, MAX_ENTRY_ID_BYTES)
+            && text(&self.label, MAX_LABEL_BYTES)
+            && (MIN_ARGV..=MAX_ARGV).contains(&self.argv.len())
+            && self.argv.iter().all(|value| {
+                !value.is_empty()
+                    && value.len() <= MAX_ARGV_BYTES
+                    && !value.chars().any(char::is_control)
+            })
+            && self.cwd.starts_with('/')
+            && text(&self.cwd, MAX_ROOT_PATH_BYTES)
+            && !self.cwd.split('/').any(|part| part == "..")
+            && !self.argv[0].split('/').any(|part| part == "..")
+            && (1..=MAX_BUDGET_MS).contains(&self.budget_ms)
+    }
+
+    /// What this installation must find in its own copy before it spawns
+    /// anything, byte-for-byte the runtime's binding.
+    pub fn argv_digest(&self) -> String {
+        let canonical = serde_json::json!(["cosmos.device-command.argv", 1, self.argv, self.cwd]);
+        sha256_hex(canonical.to_string().as_bytes())
+    }
+
+    /// The whole entry, so an owner editing it between the decision and the
+    /// dispatch invalidates the command instead of changing what runs.
+    pub fn entry_digest(&self) -> String {
+        let canonical = serde_json::json!([
+            "cosmos.device-command.entry",
+            1,
+            self.id,
+            self.label,
+            self.argv_digest(),
+            self.mutates,
+            self.budget_ms,
+        ]);
+        sha256_hex(canonical.to_string().as_bytes())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommandPolicy {
+    pub revision: u64,
+    pub maximum_class: crate::display::Privacy,
+    pub offer_output_to_cognition: bool,
+    pub entries: Vec<PolicyEntry>,
+}
+
+impl CommandPolicy {
+    fn valid(&self) -> bool {
+        self.revision > 0
+            && self.maximum_class <= crate::display::Privacy::Private
+            && (1..=MAX_COMMAND_ENTRIES).contains(&self.entries.len())
+            && self.entries.iter().all(PolicyEntry::valid)
+            && unique(self.entries.iter().map(|entry| entry.id.as_str()))
+    }
+}
+
+/// The owner's committed statement about this exact installation, delivered
+/// over the connection it already holds and bound to the approval revision
+/// that connection was opened at. It is a cache of what the owner approved in
+/// Center, never a new authority: the platform still verifies every command
+/// against this copy, and an installation holding no copy does nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicePolicy {
+    pub version: u8,
+    pub surface_id: Uuid,
+    pub approval_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<ActionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<CommandPolicy>,
+}
+
+impl DevicePolicy {
+    /// Exactly the bounds the runtime applies at policy-write time. A copy
+    /// out of shape is refused whole rather than half-read.
+    pub fn valid(&self) -> bool {
+        self.version == 1
+            && !self.surface_id.is_nil()
+            && self.approval_revision > 0
+            && (self.actions.is_some() || self.commands.is_some())
+            && self.actions.as_ref().is_none_or(ActionPolicy::valid)
+            && self.commands.as_ref().is_none_or(CommandPolicy::valid)
+    }
+
+    /// The one serialization the whole fleet hashes: compact JSON in
+    /// declaration order, absent sections omitted. Both implementations
+    /// recompute it, so a drift refuses the policy instead of quietly
+    /// widening or narrowing what a device may do.
+    pub fn document(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn content_digest(&self) -> String {
+        sha256_hex(self.document().as_bytes())
+    }
+
+    /// Parse the bounded UTF-8 JSON document. A document over the cap, out of
+    /// shape or carrying a field this client does not understand is no
+    /// policy at all.
+    pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.is_empty() || bytes.len() > MAX_POLICY_BYTES {
+            return Err(Error::InvalidInput);
+        }
+        let policy: Self = serde_json::from_slice(bytes).map_err(|_| Error::InvalidInput)?;
+        if !policy.valid() {
+            return Err(Error::InvalidInput);
+        }
+        Ok(policy)
+    }
+
+    pub fn entry(&self, id: &str) -> Option<&PolicyEntry> {
+        self.commands
+            .as_ref()?
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+    }
+
+    pub fn root(&self, id: &str) -> Option<&PolicyRoot> {
+        self.actions
+            .as_ref()?
+            .open
+            .as_ref()?
+            .roots
+            .iter()
+            .find(|root| root.id == id)
+    }
+}
+
+/// The delivered copy as this installation holds it: the exact document the
+/// runtime serialized, the digest both sides recomputed, and the parsed
+/// policy the platform verifies against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyDocument {
+    pub digest: String,
+    pub document: String,
+    pub policy: DevicePolicy,
+}

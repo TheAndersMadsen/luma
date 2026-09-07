@@ -462,12 +462,18 @@ async fn deliver(
     // The turn status each native origin last received; a terminal state
     // ends a turn's status frames.
     let mut statused: BTreeMap<String, TurnStatus> = BTreeMap::new();
+    // The peer session and policy digest each installation last received
+    // (None = it holds no copy). A client clears its copy whenever it joins,
+    // so a new peer session is delivered to again rather than left holding
+    // nothing.
+    let mut policies: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
     loop {
         let members = participants.lock().await.clone();
         sent.retain(|(identity, _), _| members.contains_key(identity));
         invited.retain(|identity, _| members.contains_key(identity));
         confirmed.retain(|identity, _| members.contains_key(identity));
         statused.retain(|identity, _| members.contains_key(identity));
+        policies.retain(|identity, _| members.contains_key(identity));
         speaking.retain(|(identity, _), job| {
             if !members.contains_key(identity) {
                 job.abort();
@@ -526,6 +532,55 @@ async fn deliver(
                 _ => return Err(Error::Unavailable),
             };
             if let RoomProof::Native(proof) = &member.proof {
+                // The owner's own statement about this installation, sent
+                // once per change over the connection it already holds. It
+                // follows the connection rather than the foreground, because
+                // a device has to hold the copy before it can refuse against
+                // it, and it is dropped with the connection an approval
+                // revision change closes.
+                let policy = match tokio::time::timeout(
+                    ADMISSION_TIMEOUT,
+                    runtime.store.runtime(
+                        principal,
+                        RuntimeOperation::DevicePolicyFor {
+                            connection: connection.clone(),
+                        },
+                    ),
+                )
+                .await
+                .map_err(|_| Error::Unavailable)?
+                {
+                    Ok(RuntimeResult::DevicePolicyFor(policy)) => policy,
+                    Err(
+                        crate::ambiance::RuntimeError::InvalidOrigin
+                        | crate::ambiance::RuntimeError::Stale
+                        | crate::ambiance::RuntimeError::NotFound,
+                    ) => None,
+                    _ => return Err(Error::Unavailable),
+                };
+                let current = (
+                    member.sid.clone(),
+                    policy.as_ref().map(|policy| policy.content_digest()),
+                );
+                if policies.get(identity) != Some(&current) {
+                    sequence = sequence
+                        .checked_add(1)
+                        .filter(|n| *n <= 9_007_199_254_740_991)
+                        .ok_or(Error::Unavailable)?;
+                    let stamp = InputStamp {
+                        epoch,
+                        sequence,
+                        instance_id: Uuid::new_v4(),
+                    };
+                    let payload = policy_payload(policy.as_deref(), &stamp);
+
+                    if !received(session.invoke(identity, payload).await, &stamp) {
+                        leave(runtime, principal, &member.proof).await;
+                        participants.lock().await.remove(identity);
+                        continue 'member;
+                    }
+                    policies.insert(identity.clone(), current);
+                }
                 let invitation = match tokio::time::timeout(
                     ADMISSION_TIMEOUT,
                     runtime.store.runtime(
@@ -1130,6 +1185,36 @@ fn revoke_payload(
         "reason": reason,
     })
     .to_string()
+}
+
+/// The owner's own policy for one installation, or its withdrawal. It is
+/// idempotent by construction: the loop sends it only when the digest
+/// changes, and re-delivering the same document changes nothing. A document
+/// that does not fit the envelope is never truncated — the installation is
+/// told it holds no policy instead, which leaves it doing nothing.
+fn policy_payload(
+    policy: Option<&crate::ambiance::action::DevicePolicy>,
+    stamp: &InputStamp,
+) -> String {
+    let withdrawn = || {
+        serde_json::json!({
+            "version": 1, "kind": "policy", "stamp": stamp,
+            "digest": serde_json::Value::Null, "policy": serde_json::Value::Null,
+        })
+        .to_string()
+    };
+    let Some(policy) = policy.filter(|policy| policy.fits()) else {
+        return withdrawn();
+    };
+    let payload = serde_json::json!({
+        "version": 1, "kind": "policy", "stamp": stamp,
+        "digest": policy.content_digest(), "policy": policy,
+    })
+    .to_string();
+    if payload.len() > cosmos_rtc::MAX_PAYLOAD {
+        return withdrawn();
+    }
+    payload
 }
 
 /// The ceremony frame. Its description is composed by policy from the bound

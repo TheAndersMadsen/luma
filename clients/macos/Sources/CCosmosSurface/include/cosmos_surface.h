@@ -26,7 +26,8 @@ enum {
     COSMOS_SURFACE_MAX_CONTEXT_BYTES = 8000,
     COSMOS_SURFACE_MAX_JOURNAL_BYTES = 32768,
     COSMOS_SURFACE_MAX_EVENT_BYTES = 16384,
-    COSMOS_SURFACE_MAX_SPEECH_BYTES = 1048576
+    COSMOS_SURFACE_MAX_SPEECH_BYTES = 1048576,
+    COSMOS_SURFACE_MAX_POLICY_BYTES = 8192
 };
 
 /* All callback buffers belong to Rust and are borrowed only for the call.
@@ -148,8 +149,14 @@ int32_t cosmos_surface_acknowledge_task(CosmosSurface *surface);
  * "cancelled" promises this platform can prove nothing started or that it
  * stopped it; otherwise report "unknown". `output` is the command's own bytes,
  * at most 6144 of them, allowed only with command evidence; Cosmos routes it
- * as private content, never into its ledger. Exactly one report per task. */
-int32_t cosmos_surface_report(CosmosSurface *surface, const uint8_t *report,
+ * as private content, never into its ledger. Exactly one report per task.
+ * `action_id` is the task's own actionId, exactly as the snapshot spelled it
+ * (36 UTF-8 bytes, no NUL). A report for anything but the current task is
+ * refused with error "stale_task" and closes nothing: a task the runtime
+ * replaced between reading the snapshot and this call is a different command,
+ * and claiming its outcome would be a false outcome claim. */
+int32_t cosmos_surface_report(CosmosSurface *surface, const uint8_t *action_id,
+                             size_t action_id_length, const uint8_t *report,
                              size_t length);
 /* Progress for a running task: a sequence from 1 to 60 and elapsed
  * milliseconds. Unsequenced and idempotent, it consumes no ordered slot, and
@@ -172,13 +179,44 @@ int32_t cosmos_surface_grant(CosmosSurface *surface, int32_t granted,
  * *written to the required size. Bytes are audio/mpeg. */
 int32_t cosmos_surface_speech_audio(CosmosSurface *surface, uint8_t *output,
                                    size_t capacity, size_t *written);
+/* Copy the owner's own device-action policy for this installation (the
+ * snapshot's policy.byteLength, at most MAX_POLICY_BYTES). EMPTY when this
+ * installation holds none, which is an ordinary state and means it may do
+ * nothing at all; BUFFER_TOO_SMALL sets *written to the required size. The
+ * bytes are the exact compact UTF-8 JSON document the runtime serialized and
+ * whose SHA-256 is policy.digest:
+ *   {"version":1,"surfaceId":UUID,"approvalRevision":integer,
+ *    "actions":{"revision":integer,
+ *               "maximumClass":"public|shared_room|near_user|private",
+ *               "open":{"hosts":[HOST],"apps":[{"id","label"}],
+ *                       "roots":[{"id","label","path"}]}?,
+ *               "route":{"app":"google_maps"}?,
+ *               "play":{"providers":[ID]}?}?,
+ *    "commands":{"revision":integer,"maximumClass":CLASS,
+ *                "offerOutputToCognition":bool,
+ *                "entries":[{"id","label","argv":[STRING],"cwd",
+ *                            "mutates":bool,"budgetMs":integer}]}?}
+ * This is a cache of what the owner approved in Center for THIS installation,
+ * delivered over the connection it already holds and bound to the approval
+ * revision that connection was opened at; it is never an authority of its
+ * own. Verify every task against this copy exactly as against a local file: a
+ * host, application, root, provider or entry id that is not in it is
+ * report{outcome:"refused",evidence:{kind:"declined",reason:"not_permitted"}},
+ * and argv comes from the entry keyed by entryId here and from nowhere else.
+ * A section this installation's manifest does not declare is never present.
+ * The copy is dropped when the connection is, so reapproving the installation
+ * in Center leaves it holding nothing until the new policy arrives; while it
+ * holds nothing it carries nothing out. Do not persist it: it is a cache of a
+ * revision, and a stale file is exactly the problem it replaces. */
+int32_t cosmos_surface_device_policy(CosmosSurface *surface, uint8_t *output,
+                                    size_t capacity, size_t *written);
 int32_t cosmos_surface_disconnect(CosmosSurface *surface);
 
 /* Nonblocking safe JSON snapshot, UTF-8 bytes without a trailing NUL:
  * {version:1,kind:"state",operation:"prepare|connect|send_text|send_text_to|
  * send_text_with_context|retry_pending|cancel|set_visible|acknowledge|
  * acknowledge_speech|acknowledge_task|report|progress|grant|display|speech|
- * invitation|status|task|confirmation|disconnect|heartbeat",
+ * invitation|status|task|confirmation|policy|disconnect|heartbeat",
  * outcome:"ok|error",error:null|STATIC_CODE,
  * connected:bool,pendingOpen:bool,needsReconnect:bool,
  * descriptor:null|PUBLIC_DESCRIPTOR,
@@ -228,6 +266,9 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
  * privacy:"public|shared_room|near_user|private",expiresAtMs:integer},
  * revoked:null|{actionId:UUID,reason:"cancelled|preempted|superseded|expired|
  * revalidation_failed"},
+ * policy:null|{surfaceId:UUID,approvalRevision:integer,
+ * actionsRevision:null|integer,commandsRevision:null|integer,
+ * digest:HEX64,byteLength:integer},
  * eventsSkipped:N}
  * A "choices" card is a numbered list of two to eight options; render every
  * id, title and detail verbatim in order. A later request may name an item
@@ -274,6 +315,12 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
  * bytes with cosmos_surface_speech_audio and acknowledge after full playback.
  * credits holds one inert token list per attribution string, in order; render
  * every token verbatim as text or one HTTPS link, never as markup.
+ * A "policy" operation reports that the owner's own policy for this
+ * installation arrived or was withdrawn; null means this installation holds
+ * no copy and must carry nothing out. Read its bytes with
+ * cosmos_surface_device_policy; the client has already verified the document
+ * against its digest, this surface, this connection's approval revision and
+ * every bound the runtime applies when the owner saves it.
  * A "display" operation reports a delivered or retired card; the client has
  * already verified its digest, connection binding and credit grammar.
  * pendingOpen requires explicit connect to recover the saved signed open.

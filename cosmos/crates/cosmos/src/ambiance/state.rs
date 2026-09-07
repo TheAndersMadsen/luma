@@ -225,6 +225,12 @@ pub enum RuntimeOperation {
     Confirmation {
         connection: RoomProof,
     },
+    /// The owner's own device-action policy for a connected installation, as
+    /// that installation should hold it. Native only, and never anyone
+    /// else's: a browser member has no policy of its own.
+    DevicePolicyFor {
+        connection: RoomProof,
+    },
     /// What this installation must be told to stop carrying out, and why.
     Revocations {
         connection: RoomProof,
@@ -466,6 +472,7 @@ pub enum RuntimeResult {
     DeviceActionBound(super::action::Operation),
     PrivatePolicy(Option<super::personal::Approval>),
     DeviceActionPolicy(Option<super::action::Approval>),
+    DevicePolicyFor(Option<Box<super::action::DevicePolicy>>),
     DeviceCommandPolicy(Option<super::action::CommandApproval>),
     NativePresence {
         connected: bool,
@@ -2872,6 +2879,20 @@ impl RuntimeState {
             RuntimeOperation::Invitation { connection } => {
                 let record = self.room_record(records, &connection, now)?;
                 RuntimeResult::Invitation(self.invitation_for(record.surface_id, now))
+            }
+            // The connection proves which installation is asking, and the
+            // policy is that installation's own. Anything else — a browser
+            // member, a revoked or reapproved record, a connection that is no
+            // longer current — has no policy to receive.
+            RuntimeOperation::DevicePolicyFor { connection } => {
+                let record = self.room_record(records, &connection, now)?;
+                if !matches!(connection, RoomProof::Native(_)) {
+                    return Err(RuntimeError::InvalidOrigin);
+                }
+                RuntimeResult::DevicePolicyFor(
+                    self.device_policy(records, record.surface_id)?
+                        .map(Box::new),
+                )
             }
             // The ceremony is minted only once the venue's own foreground is
             // reporting, so the thirty-second clock starts at the sentence a

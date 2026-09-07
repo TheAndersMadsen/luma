@@ -12,8 +12,9 @@ mod transport;
 mod wire;
 
 pub use action::{
-    Attestation, Confirmation, DeclineReason, Description, Evidence, Locator, Operation,
-    PlaybackState, Position, Report, ReportOutcome, RevokeReason, Revoked, Risk, Task,
+    ActionPolicy, Attestation, CommandPolicy, Confirmation, DeclineReason, Description,
+    DevicePolicy, Evidence, Locator, Operation, PlaybackState, PolicyApp, PolicyDocument,
+    PolicyEntry, PolicyRoot, Position, Report, ReportOutcome, RevokeReason, Revoked, Risk, Task,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 pub use display::{
@@ -211,6 +212,10 @@ pub struct Status {
     pub confirmation: Option<Confirmation>,
     /// The last command the runtime told this installation to stop, and why.
     pub revoked: Option<action::Revoked>,
+    /// The owner's own policy for this installation, as the runtime last
+    /// delivered it on this connection. `None` is an ordinary state and
+    /// means this installation may do nothing at all.
+    pub policy: Option<action::PolicyDocument>,
     /// The foreground visibility Cosmos last accepted for this connection.
     pub visible: bool,
     /// The committed status of this installation's own current turn.
@@ -252,6 +257,7 @@ pub struct Client {
     task: tokio::sync::watch::Sender<Option<Task>>,
     confirmation: tokio::sync::watch::Sender<Option<Confirmation>>,
     revoked: tokio::sync::watch::Sender<Option<action::Revoked>>,
+    policy: tokio::sync::watch::Sender<Option<action::PolicyDocument>>,
     visible: bool,
 }
 
@@ -322,6 +328,7 @@ impl Client {
             task: tokio::sync::watch::channel(None).0,
             confirmation: tokio::sync::watch::channel(None).0,
             revoked: tokio::sync::watch::channel(None).0,
+            policy: tokio::sync::watch::channel(None).0,
             visible: false,
         })
     }
@@ -358,6 +365,18 @@ impl Client {
 
     pub fn task(&self) -> Option<Task> {
         self.status().task
+    }
+
+    /// Wakes when the runtime delivers or withdraws the owner's policy for
+    /// this installation. It is a cache of what the owner approved in Center
+    /// and never an authority of its own: the platform verifies every
+    /// command against this copy, and with no copy it carries nothing out.
+    pub fn policy_changes(&self) -> tokio::sync::watch::Receiver<Option<action::PolicyDocument>> {
+        self.policy.subscribe()
+    }
+
+    pub fn policy(&self) -> Option<action::PolicyDocument> {
+        self.status().policy
     }
 
     /// Wakes when a ceremony starts or ends here. The platform renders the
@@ -419,6 +438,7 @@ impl Client {
         self.task.send_replace(None);
         self.confirmation.send_replace(None);
         self.revoked.send_replace(None);
+        self.policy.send_replace(None);
         self.visible = false;
         tokio::time::timeout(Duration::from_secs(2), self.cleanup.finish())
             .await
@@ -480,6 +500,9 @@ impl Client {
                 .clone()
                 .filter(|request| connected && now < request.expires_at_ms),
             revoked: self.revoked.borrow().filter(|_| connected),
+            // A policy belongs to the approval revision its connection was
+            // opened at, so losing the connection drops the copy with it.
+            policy: self.policy.borrow().clone().filter(|_| connected),
         }
     }
 
@@ -577,6 +600,7 @@ impl Client {
         let expected = display::Expected {
             surface_id: connection.surface_id,
             incarnation: connection.incarnation,
+            approval_revision: connection.approval_revision,
         };
         let room = match response {
             Ok(value) => value,
@@ -608,6 +632,7 @@ impl Client {
         self.task.send_replace(None);
         self.confirmation.send_replace(None);
         self.revoked.send_replace(None);
+        self.policy.send_replace(None);
         self.visible = false;
         self.session = Some(
             transport::Connection::connect(
@@ -622,6 +647,7 @@ impl Client {
                     task: self.task.clone(),
                     confirmation: self.confirmation.clone(),
                     revoked: self.revoked.clone(),
+                    policy: self.policy.clone(),
                 },
             )
             .await?,

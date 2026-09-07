@@ -241,8 +241,13 @@ enum Command {
     /// Bind the current command locally and say it is legal here. Never an
     /// outcome, and never sent for a command this platform will not attempt.
     AcknowledgeTask,
-    /// Say what happened, once, after the platform observed it.
-    Report(cosmos_surface_client::Report),
+    /// Say what happened, once, after the platform observed it. It names
+    /// the action it is about, so a command that was swapped between the
+    /// platform's own read and this queue closes nothing.
+    Report {
+        action_id: Uuid,
+        report: Box<cosmos_surface_client::Report>,
+    },
     /// Say the current command is still running.
     Progress {
         sequence: u64,
@@ -306,6 +311,19 @@ fn parse_context(app: &[u8], context: &[u8]) -> Result<ScreenContext, i32> {
 /// copy. Snapshots carry its identity and length, never the bytes.
 type SpeechAudio = Arc<Mutex<Option<(Uuid, Vec<u8>)>>>;
 
+/// The owner's policy document for this installation, shared with the
+/// platform's own buffer copy. Snapshots carry its digest and length; this is
+/// the exact document the runtime serialized and both sides hashed.
+type PolicyDocument = Arc<Mutex<Option<Vec<u8>>>>;
+
+/// The two payloads a snapshot names but never repeats. The worker publishes
+/// them; a platform copies the bytes out on its own thread.
+#[derive(Clone)]
+struct Buffers {
+    speech: SpeechAudio,
+    policy: PolicyDocument,
+}
+
 #[derive(Default)]
 struct Events {
     snapshots: VecDeque<Vec<u8>>,
@@ -332,6 +350,7 @@ pub struct CosmosSurface {
     shutdown: watch::Sender<bool>,
     events: Arc<Mutex<Events>>,
     speech_audio: SpeechAudio,
+    policy_document: PolicyDocument,
     closed: Arc<AtomicBool>,
     callbacks_finished: Mutex<Option<sync_mpsc::Receiver<i32>>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -347,6 +366,15 @@ impl CosmosSurface {
             Err(mpsc::error::TrySendError::Full(_)) => QUEUE_FULL,
             Err(mpsc::error::TrySendError::Closed(_)) => CLOSED,
         }
+    }
+
+    /// A copy of the owner's policy document, if this installation holds one.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn policy_document(&self) -> Option<Vec<u8>> {
+        self.policy_document
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// A copy of the current spoken reply's audio bytes, if one is current.
@@ -543,6 +571,22 @@ fn confirmation(value: Option<&cosmos_surface_client::Confirmation>) -> Value {
     })
 }
 
+/// The owner's own policy for this installation, named but not repeated: the
+/// document itself is copied out with cosmos_surface_device_policy, and a
+/// platform that already holds this digest has nothing to re-read.
+fn policy(value: Option<&cosmos_surface_client::PolicyDocument>) -> Value {
+    value.map_or(Value::Null, |held| {
+        json!({
+            "surfaceId": held.policy.surface_id.to_string(),
+            "approvalRevision": held.policy.approval_revision,
+            "actionsRevision": held.policy.actions.as_ref().map(|actions| actions.revision),
+            "commandsRevision": held.policy.commands.as_ref().map(|commands| commands.revision),
+            "digest": held.digest,
+            "byteLength": held.document.len(),
+        })
+    })
+}
+
 fn speech(value: Option<&Speech>) -> Value {
     value.map_or(Value::Null, |speech| {
         json!({
@@ -589,6 +633,7 @@ fn snapshot(
         "status": status.as_ref().map_or(Value::Null, |s| self::status(s.turn_status.as_ref())),
         "task": status.as_ref().map_or(Value::Null, |s| task(s.task.as_ref())),
         "confirmation": status.as_ref().map_or(Value::Null, |s| confirmation(s.confirmation.as_ref())),
+        "policy": status.as_ref().map_or(Value::Null, |s| policy(s.policy.as_ref())),
         "revoked": status.as_ref().and_then(|s| s.revoked).map(|revoked| json!({
             "actionId": revoked.action_id.to_string(), "reason": revoked.reason,
         })),
@@ -601,7 +646,7 @@ async fn run(
     mut commands: mpsc::Receiver<Command>,
     mut shutdown: watch::Receiver<bool>,
     events: Arc<Mutex<Events>>,
-    speech_audio: SpeechAudio,
+    buffers: Buffers,
     shutdown_scope: &mut Option<TransportShutdown>,
 ) {
     let signer: Arc<dyn Signer> = callbacks.clone();
@@ -651,6 +696,10 @@ async fn run(
     // task or the confirmation it names, which is the same wake.
     let mut tasks = client.task_changes();
     let mut confirmations = client.confirmation_changes();
+    // The owner's policy for this installation. It arrives and is withdrawn
+    // on its own, so a platform learns it may act — or may no longer — as
+    // soon as the runtime says so rather than at the next command.
+    let mut policies = client.policy_changes();
     // The platform's last requested foreground state. It is re-reported after
     // every new connection because visibility lives on the connection.
     let mut wanted_visible = false;
@@ -663,9 +712,14 @@ async fn run(
         Status,
         Task,
         Confirmation,
+        Policy,
     }
+    let publish_policy = |client: &Client| {
+        *buffers.policy.lock().unwrap_or_else(|e| e.into_inner()) =
+            client.policy().map(|held| held.document.into_bytes());
+    };
     let publish_speech = |client: &Client| {
-        *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = client
+        *buffers.speech.lock().unwrap_or_else(|e| e.into_inner()) = client
             .speech()
             .map(|speech| (speech.action_id, speech.audio));
     };
@@ -682,6 +736,7 @@ async fn run(
             changed = statuses.changed() => { if changed.is_err() { break; } Wake::Status }
             changed = tasks.changed() => { if changed.is_err() { break; } Wake::Task }
             changed = confirmations.changed() => { if changed.is_err() { break; } Wake::Confirmation }
+            changed = policies.changed() => { if changed.is_err() { break; } Wake::Policy }
             _ = heartbeat.tick() => Wake::Heartbeat,
             command = commands.recv() => match command { Some(command) => Wake::Command(command), None => break },
         };
@@ -728,6 +783,16 @@ async fn run(
                 );
                 continue;
             }
+            Wake::Policy => {
+                // The document is published before the snapshot names it, so
+                // a platform reading the snapshot can always copy the bytes.
+                publish_policy(&client);
+                push(
+                    &events,
+                    snapshot(Some(&client), &descriptor, "policy", None),
+                );
+                continue;
+            }
             Wake::Heartbeat => None,
             Wake::Command(command) => Some(command),
         };
@@ -766,7 +831,7 @@ async fn run(
             Some(Command::Acknowledge) => "acknowledge",
             Some(Command::AcknowledgeSpeech) => "acknowledge_speech",
             Some(Command::AcknowledgeTask) => "acknowledge_task",
-            Some(Command::Report(_)) => "report",
+            Some(Command::Report { .. }) => "report",
             Some(Command::Progress { .. }) => "progress",
             Some(Command::Grant { .. }) => "grant",
             Some(Command::Disconnect) => "disconnect",
@@ -833,8 +898,16 @@ async fn run(
                             return None;
                         }
                     },
-                    Some(Command::Report(report)) => match client.task() {
-                        Some(task) => client.report(&task, report).await,
+                    // A report names the action it is about. A task that was
+                    // swapped between the platform's own read and this drain
+                    // is a different command, and closing it from here would
+                    // claim an outcome nobody observed.
+                    Some(Command::Report { action_id, report }) => match client.task() {
+                        Some(task) if task.action_id == action_id => client.report(&task, *report).await,
+                        Some(_) => {
+                            push(&events, snapshot(Some(&client), &descriptor, operation, Some("stale_task")));
+                            return None;
+                        }
                         None => {
                             push(&events, snapshot(Some(&client), &descriptor, operation, Some("no_task")));
                             return None;
@@ -863,6 +936,7 @@ async fn run(
         };
         if let Some(result) = result {
             publish_speech(&client);
+            publish_policy(&client);
             push(
                 &events,
                 snapshot(
@@ -874,7 +948,8 @@ async fn run(
             );
         }
     }
-    *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *buffers.speech.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *buffers.policy.lock().unwrap_or_else(|e| e.into_inner()) = None;
     // The client journals before side effects; dropping an in-flight future
     // leaves recoverable uncertainty. Shutdown never retries the saved input.
     let _ = tokio::time::timeout(Duration::from_secs(5), client.disconnect()).await;
@@ -942,13 +1017,17 @@ fn spawn(config: Config, callbacks: Arc<dyn Bindings>) -> Result<Box<CosmosSurfa
         let (shutdown, stop) = watch::channel(false);
         let (finished, callbacks_finished) = sync_mpsc::channel();
         let events = Arc::new(Mutex::new(Events::default()));
-        let speech_audio: SpeechAudio = Arc::new(Mutex::new(None));
+        let buffers = Buffers {
+            speech: Arc::new(Mutex::new(None)),
+            policy: Arc::new(Mutex::new(None)),
+        };
         let closed = Arc::new(AtomicBool::new(false));
         let mut handle = Box::new(CosmosSurface {
             commands,
             shutdown,
             events: events.clone(),
-            speech_audio: speech_audio.clone(),
+            speech_audio: buffers.speech.clone(),
+            policy_document: buffers.policy.clone(),
             closed: closed.clone(),
             callbacks_finished: Mutex::new(Some(callbacks_finished)),
             worker: None,
@@ -985,7 +1064,7 @@ fn spawn(config: Config, callbacks: Arc<dyn Bindings>) -> Result<Box<CosmosSurfa
                         receiver,
                         stop,
                         events.clone(),
-                        speech_audio,
+                        buffers,
                         &mut shutdown_scope,
                     ))
                 }));
@@ -1058,15 +1137,24 @@ command!(cosmos_surface_acknowledge_task, Command::AcknowledgeTask);
 command!(cosmos_surface_disconnect, Command::Disconnect);
 
 /// # Safety
-/// The handle must be live; report must be readable for length bytes until
-/// return.
+/// The handle must be live; action_id and report must be readable for their
+/// lengths until return.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cosmos_surface_report(
     surface: *mut CosmosSurface,
+    action_id: *const u8,
+    action_id_length: usize,
     report: *const u8,
     length: usize,
 ) -> i32 {
     boundary(|| {
+        let action = match unsafe { optional_bytes(action_id, action_id_length, 64) } {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) | Err(_) => return INVALID_ARGUMENT,
+        };
+        let Ok(action_id) = parse_action_id(action) else {
+            return INVALID_ARGUMENT;
+        };
         let bytes = match unsafe { optional_bytes(report, length, 16 * 1024) } {
             Ok(Some(bytes)) => bytes,
             Ok(None) | Err(_) => return INVALID_ARGUMENT,
@@ -1074,8 +1162,25 @@ pub unsafe extern "C" fn cosmos_surface_report(
         let Ok(report) = cosmos_surface_client::Report::parse(bytes) else {
             return INVALID_ARGUMENT;
         };
-        unsafe { enqueue(surface, Command::Report(report)) }
+        unsafe {
+            enqueue(
+                surface,
+                Command::Report {
+                    action_id,
+                    report: Box::new(report),
+                },
+            )
+        }
     })
+}
+
+/// The action a report is about, exactly as the snapshot spelled it.
+fn parse_action_id(bytes: &[u8]) -> Result<Uuid, i32> {
+    let text = std::str::from_utf8(bytes).map_err(|_| INVALID_ARGUMENT)?;
+    Uuid::parse_str(text)
+        .ok()
+        .filter(|id| !id.is_nil() && id.to_string().eq_ignore_ascii_case(text))
+        .ok_or(INVALID_ARGUMENT)
 }
 
 /// # Safety
@@ -1167,6 +1272,50 @@ pub unsafe extern "C" fn cosmos_surface_speech_audio(
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let Some((_, bytes)) = audio.as_ref() else {
+            return EMPTY;
+        };
+        unsafe {
+            *written = bytes.len();
+        }
+        if capacity < bytes.len() {
+            return BUFFER_TOO_SMALL;
+        }
+        // SAFETY: Caller owns enough writable bytes, disjoint from Rust storage.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
+        }
+        OK
+    })
+}
+
+/// # Safety
+/// The handle must be live, written must be writable, and output must be writable
+/// for capacity bytes. Output may be null only when capacity is zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_device_policy(
+    surface: *mut CosmosSurface,
+    output: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> i32 {
+    boundary(|| {
+        if written.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        unsafe {
+            *written = 0;
+        }
+        if output.is_null() && capacity != 0 {
+            return INVALID_ARGUMENT;
+        }
+        let Some(surface) = (unsafe { surface.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        let document = surface
+            .policy_document
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(bytes) = document.as_ref() else {
             return EMPTY;
         };
         unsafe {

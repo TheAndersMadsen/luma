@@ -172,6 +172,7 @@ pub(crate) struct Outputs {
     pub(crate) task: watch::Sender<Option<crate::action::Task>>,
     pub(crate) confirmation: watch::Sender<Option<crate::action::Confirmation>>,
     pub(crate) revoked: watch::Sender<Option<crate::action::Revoked>>,
+    pub(crate) policy: watch::Sender<Option<crate::action::PolicyDocument>>,
 }
 
 impl Outputs {
@@ -183,6 +184,7 @@ impl Outputs {
         self.task.send_replace(None);
         self.confirmation.send_replace(None);
         self.revoked.send_replace(None);
+        self.policy.send_replace(None);
     }
 }
 
@@ -229,6 +231,13 @@ fn answer(
             }
             Ok((Incoming::Confirm(confirmation), reply)) => {
                 outputs.confirmation.send_replace(confirmation);
+                Ok(reply)
+            }
+            // The owner's own copy for this installation, or its withdrawal.
+            // It authorizes nothing on arrival: it is what the platform
+            // verifies the next command against.
+            Ok((Incoming::Policy(policy), reply)) => {
+                outputs.policy.send_replace(policy);
                 Ok(reply)
             }
             // A revoke supersedes remaining work. The platform stops what it

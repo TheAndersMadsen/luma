@@ -142,7 +142,7 @@ where
 /// The class the runtime routed content at. A platform treats anything above
 /// `shared_room` as private: shown only while it is the foreground of an
 /// unlocked personal device, never previewed, never spoken.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Privacy {
     Public,
@@ -279,6 +279,14 @@ enum Frame {
         #[serde(deserialize_with = "explicit_request")]
         request: Option<ConfirmRequest>,
     },
+    Policy {
+        version: u8,
+        stamp: Stamp,
+        #[serde(deserialize_with = "explicit_digest")]
+        digest: Option<String>,
+        #[serde(deserialize_with = "explicit_policy")]
+        policy: Option<crate::action::DevicePolicy>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -328,6 +336,23 @@ where
     Option::deserialize(deserializer)
 }
 
+/// An explicit null withdraws the owner's copy, which is a real state: the
+/// installation then holds no policy and does nothing. A frame that omits
+/// either field is a shape the runtime never sends.
+fn explicit_policy<'de, D>(deserializer: D) -> Result<Option<crate::action::DevicePolicy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
+fn explicit_digest<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
 pub(crate) enum Incoming {
     Render(Display),
     Clear(Uuid),
@@ -337,6 +362,7 @@ pub(crate) enum Incoming {
     Act(crate::action::Task),
     Revoke(Uuid, crate::action::RevokeReason),
     Confirm(Option<crate::action::Confirmation>),
+    Policy(Option<crate::action::PolicyDocument>),
 }
 
 /// The exact bound connection this frame must name.
@@ -344,6 +370,10 @@ pub(crate) enum Incoming {
 pub(crate) struct Expected {
     pub(crate) surface_id: Uuid,
     pub(crate) incarnation: Uuid,
+    /// The approval revision this connection was opened at. The owner's
+    /// policy is a statement about that exact approval, so a copy naming any
+    /// other revision is refused rather than held.
+    pub(crate) approval_revision: u64,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -878,6 +908,43 @@ pub(crate) fn parse_frame(
             }
             (Incoming::Clear(action_id), stamp)
         }
+        // The owner's own statement about this installation, delivered over
+        // the connection it already holds. It grants nothing by arriving:
+        // the platform still verifies every command against this copy, and
+        // an explicit null withdraws it, which leaves the device doing
+        // nothing at all.
+        Frame::Policy {
+            version,
+            stamp,
+            digest,
+            policy,
+        } => {
+            if version != 1 || !valid_stamp(&stamp) {
+                return Err(Error::InvalidResponse);
+            }
+            let document = match (policy, digest) {
+                (None, None) => None,
+                (Some(policy), Some(digest)) => {
+                    let document = policy.document();
+                    if !policy.valid()
+                        || document.len() > crate::action::MAX_POLICY_BYTES
+                        || policy.surface_id != expected.surface_id
+                        || policy.approval_revision != expected.approval_revision
+                        || !crate::action::digest_text(&digest)
+                        || digest != policy.content_digest()
+                    {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Some(crate::action::PolicyDocument {
+                        digest,
+                        document,
+                        policy,
+                    })
+                }
+                _ => return Err(Error::InvalidResponse),
+            };
+            (Incoming::Policy(document), stamp)
+        }
         Frame::Speak {
             version,
             stamp,
@@ -909,6 +976,7 @@ mod tests {
         Expected {
             surface_id: Uuid::from_u128(2),
             incarnation: Uuid::from_u128(5),
+            approval_revision: 4,
         }
     }
 
@@ -1558,6 +1626,157 @@ mod tests {
                 parse_frame(&status(invalid.clone()), expected(), 1_000_000_000).is_err(),
                 "{invalid}"
             );
+        }
+    }
+
+    /// The owner's own policy for this installation, delivered over the
+    /// connection it already holds. It is refused unless it names this exact
+    /// surface and the approval revision this connection was opened at, and
+    /// unless the digest the runtime sent is the digest of the document this
+    /// client itself would serialize.
+    #[test]
+    fn policy_frames_bind_the_surface_the_approval_revision_and_the_exact_digest() {
+        use crate::action::{
+            ActionPolicy, CommandPolicy, DevicePolicy, OpenPolicy, PolicyApp, PolicyEntry,
+            PolicyRoot, RouteApp, RoutePolicy,
+        };
+        let owner = DevicePolicy {
+            version: 1,
+            surface_id: Uuid::from_u128(2),
+            approval_revision: 4,
+            actions: Some(ActionPolicy {
+                revision: 3,
+                maximum_class: Privacy::SharedRoom,
+                open: Some(OpenPolicy {
+                    hosts: vec!["github.com".into(), "news.ycombinator.com".into()],
+                    apps: vec![PolicyApp {
+                        id: "dev.zed.Zed".into(),
+                        label: "Zed".into(),
+                    }],
+                    roots: vec![PolicyRoot {
+                        id: "repo".into(),
+                        label: "Projects".into(),
+                        path: "/Users/owner/Projects".into(),
+                    }],
+                }),
+                route: Some(RoutePolicy {
+                    app: RouteApp::GoogleMaps,
+                }),
+                play: None,
+            }),
+            commands: Some(CommandPolicy {
+                revision: 2,
+                maximum_class: Privacy::Private,
+                offer_output_to_cognition: false,
+                entries: vec![PolicyEntry {
+                    id: "project-tests".into(),
+                    label: "Project tests".into(),
+                    argv: vec!["./revival".into(), "check".into(), "cosmos".into()],
+                    cwd: "/Users/owner/Projects/ai-pin-revival".into(),
+                    mutates: true,
+                    budget_ms: 900_000,
+                }],
+            }),
+        };
+        let frame = |policy: serde_json::Value, digest: serde_json::Value| {
+            serde_json::json!({
+                "version": 1, "kind": "policy",
+                "stamp": {"epoch": Uuid::from_u128(9), "sequence": 5, "instanceId": Uuid::from_u128(13)},
+                "digest": digest, "policy": policy,
+            })
+            .to_string()
+        };
+        let document = serde_json::to_value(&owner).unwrap();
+        let held = frame(document.clone(), owner.content_digest().into());
+        let (incoming, reply) = parse_frame(&held, expected(), 1).unwrap();
+        let Incoming::Policy(Some(held)) = incoming else {
+            panic!("policy expected")
+        };
+        assert_eq!(held.policy, owner);
+        assert_eq!(held.document, owner.document());
+        assert_eq!(held.digest, owner.content_digest());
+        assert_eq!(
+            crate::action::DevicePolicy::parse(held.document.as_bytes()).unwrap(),
+            owner
+        );
+        assert_eq!(
+            reply,
+            serde_json::json!({"version":1,"kind":"received","stamp":{"epoch":Uuid::from_u128(9),"sequence":5,"instanceId":Uuid::from_u128(13)}}).to_string()
+        );
+
+        // An explicit null withdraws the copy, which leaves this installation
+        // doing nothing at all. It is a state, not a failure.
+        let withdrawn = frame(serde_json::Value::Null, serde_json::Value::Null);
+        assert!(matches!(
+            parse_frame(&withdrawn, expected(), 1),
+            Ok((Incoming::Policy(None), _))
+        ));
+
+        // Someone else's policy, another approval, a digest that is not the
+        // digest of this document, half a frame, or a document out of shape.
+        let other_surface = serde_json::json!({"surfaceId": Uuid::from_u128(3).to_string()});
+        let mut foreign = document.clone();
+        foreign["surfaceId"] = other_surface["surfaceId"].clone();
+        let mut reapproved = document.clone();
+        reapproved["approvalRevision"] = serde_json::json!(5);
+        let mut widened = document.clone();
+        widened["actions"]["open"]["hosts"] = serde_json::json!(["GitHub.com", "example.com"]);
+        let mut shell = document.clone();
+        shell["commands"]["entries"][0]["argv"] = serde_json::json!([]);
+        let mut unsorted = document.clone();
+        unsorted["actions"]["open"]["hosts"] =
+            serde_json::json!(["news.ycombinator.com", "github.com"]);
+        for (label, invalid) in [
+            ("foreign", frame(foreign.clone(), digest_of(&foreign))),
+            (
+                "reapproved",
+                frame(reapproved.clone(), digest_of(&reapproved)),
+            ),
+            ("widened", frame(widened.clone(), digest_of(&widened))),
+            ("shell", frame(shell.clone(), digest_of(&shell))),
+            ("unsorted", frame(unsorted.clone(), digest_of(&unsorted))),
+            (
+                "wrong digest",
+                frame(document.clone(), sha256_hex(b"other").into()),
+            ),
+            (
+                "no digest",
+                frame(document.clone(), serde_json::Value::Null),
+            ),
+            (
+                "digest alone",
+                frame(serde_json::Value::Null, owner.content_digest().into()),
+            ),
+            ("unknown field", {
+                let mut extra = document.clone();
+                extra["openers"] = serde_json::json!([]);
+                frame(extra.clone(), digest_of(&extra))
+            }),
+        ] {
+            assert!(
+                parse_frame(&invalid, expected(), 1).is_err(),
+                "accepted {label}"
+            );
+        }
+        // A frame that omits either field is a shape the runtime never sends.
+        for omitted in ["digest", "policy"] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&frame(document.clone(), owner.content_digest().into()))
+                    .unwrap();
+            value.as_object_mut().unwrap().remove(omitted);
+            assert!(
+                parse_frame(&value.to_string(), expected(), 1).is_err(),
+                "accepted a frame without {omitted}"
+            );
+        }
+    }
+
+    /// The digest of a document exactly as this client would serialize it,
+    /// for the frames a test deliberately malforms.
+    fn digest_of(document: &serde_json::Value) -> serde_json::Value {
+        match serde_json::from_value::<crate::action::DevicePolicy>(document.clone()) {
+            Ok(policy) => policy.content_digest().into(),
+            Err(_) => sha256_hex(document.to_string().as_bytes()).into(),
         }
     }
 

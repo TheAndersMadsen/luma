@@ -212,21 +212,49 @@ fn ffi_snapshot_reports_task_and_confirmation() {
 fn ffi_report_and_grant_arguments_are_checked_before_queueing() {
     let (handle, mut commands) = queued_handle();
     let surface = Box::into_raw(handle);
-    let call = |body: &str| unsafe { cosmos_surface_report(surface, body.as_ptr(), body.len()) };
+    let action = Uuid::from_u128(7).to_string();
+    let call = |body: &str| unsafe {
+        cosmos_surface_report(
+            surface,
+            action.as_ptr(),
+            action.len(),
+            body.as_ptr(),
+            body.len(),
+        )
+    };
+    let opened = r#"{"outcome":"completed","evidence":{"kind":"open","opened":true}}"#;
     assert_eq!(call("not json"), INVALID_ARGUMENT);
     assert_eq!(
         call(r#"{"outcome":"completed","evidence":{"kind":"open","opened":true},"extra":1}"#),
         INVALID_ARGUMENT
     );
     assert_eq!(
-        unsafe { cosmos_surface_report(surface, std::ptr::null(), 0) },
+        unsafe {
+            cosmos_surface_report(surface, action.as_ptr(), action.len(), std::ptr::null(), 0)
+        },
         INVALID_ARGUMENT
     );
-    assert_eq!(
-        call(r#"{"outcome":"completed","evidence":{"kind":"open","opened":true}}"#),
-        OK
-    );
-    assert!(matches!(commands.try_recv(), Ok(Command::Report(_))));
+    // A report must name the action it is about, and name it exactly.
+    for named in ["", "not-a-uuid", "00000000-0000-0000-0000-000000000000"] {
+        assert_eq!(
+            unsafe {
+                cosmos_surface_report(
+                    surface,
+                    named.as_ptr(),
+                    named.len(),
+                    opened.as_ptr(),
+                    opened.len(),
+                )
+            },
+            INVALID_ARGUMENT,
+            "accepted a report for {named:?}"
+        );
+    }
+    assert_eq!(call(opened), OK);
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::Report { action_id, .. }) if action_id == Uuid::from_u128(7)
+    ));
 
     let attestation = b"device_owner_auth";
     assert_eq!(
@@ -439,6 +467,7 @@ fn queued_handle() -> (Box<CosmosSurface>, mpsc::Receiver<Command>) {
             shutdown,
             events: Arc::new(Mutex::new(Events::default())),
             speech_audio: Arc::new(Mutex::new(None)),
+            policy_document: Arc::new(Mutex::new(None)),
             closed: Arc::new(AtomicBool::new(false)),
             callbacks_finished: Mutex::new(None),
             worker: None,

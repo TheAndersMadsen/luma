@@ -373,6 +373,29 @@ offers **Put its permissions back** afterwards — each one granted again agains
 the new approval, in an order that restores a class ceiling before anything
 capped by it, with a per-permission result rather than a single claim.
 
+The owner's committed policy reaches the installation it belongs to on the
+room that installation is already connected to, as a `policy` frame: the same
+object Center writes, naming that surface and the approval revision the
+connection was opened at, with a SHA-256 digest of its compact document that
+both implementations recompute from their own struct so a serialization drift
+refuses the policy instead of quietly widening it. A section the installation's
+approved manifest does not declare is never in it, so a television is never
+told it could run a command. It is delivered once per change of that digest,
+which makes redelivery idempotent, and both fields null withdraws it. Nothing
+about the delivery is authority: the client verifies every command against the
+copy exactly as it did against a file, refuses a host, application, root,
+provider or entry the copy does not name whatever the runtime said, and
+carries nothing out at all while it holds no copy. Reapproving an installation
+bumps its revision, which closes its connection and drops both permissions, so
+the copy goes with it and the device does nothing until the new policy
+arrives; no client persists it. The whole document is bounded at 8192 bytes so
+it fits the 12 KiB envelope with its frame, and because the command list is
+the half that grows, a policy that would not fit is refused with
+`invalid_request` where the owner writes it in Center rather than arriving
+truncated — half an allowlist is worse than none. Linux still keeps its own
+local `openers` file: how that desktop opens a `.pdf` is an execution detail
+of the machine, not a permission Cosmos holds.
+
 Cognition proposes `device_action` with an operation and a *reference*, never an
 argument. The reference names a candidate the runtime itself put in front of it
 this turn: an item of an acknowledged choice list (bound to that list's content
@@ -533,15 +556,18 @@ rejects unsupported credit before display and answers with the transport
 receipt; the platform then renders verbatim and submits the sequenced
 acknowledgment after its own commit. Its C boundary gained
 `cosmos_surface_acknowledge_task`, `cosmos_surface_report`,
-`cosmos_surface_progress` and `cosmos_surface_grant`, and its snapshot gained
-`task`, `confirmation` and `revoked`. A fresh enrollment from that client now
+`cosmos_surface_progress`, `cosmos_surface_grant` and
+`cosmos_surface_device_policy`, and its snapshot gained `task`,
+`confirmation`, `revoked` and `policy`. `cosmos_surface_report` now takes the
+action its report is about and refuses one for anything but the current task,
+so a task the runtime replaced between the platform's own read and the worker
+draining its queue closes nothing. A fresh enrollment from that client now
 asks the owner to approve `native-device-action-v4`, and it still holds a
 connection under either earlier published profile, so an installation that has
 not been updated keeps connecting, rendering and speaking. The phone and the television now carry commands
-out. Each keeps its own copy of the owner's policy — the same object Center
-holds — as `device-actions.json` in the application's own files directory, and a
-host, application or media provider that is not in that copy is refused whatever
-the runtime said. The phone opens an allowed `https` link and starts navigation
+out, and each verifies every command against its own copy of the owner's
+policy — the same object Center holds — which the runtime now delivers rather
+than a person writing it on each device. The phone opens an allowed `https` link and starts navigation
 to a place the runtime bound; opening Maps is not navigating, so a launch it
 cannot observe further is `unknown` with the launch recorded, never a
 completion. The television plays through an owner-approved provider and claims
@@ -551,8 +577,8 @@ without that grant every play is honestly `unknown`. Its confirmation sheet
 answers only to a deliberate tap, Back dismisses it and answers nothing, and the
 task card carries the state word, one sentence, the elapsed time and Cancel
 task, while Close only hides it and the command carries on. A television never
-explains a refusal at all. The macOS and Linux clients still have to re-verify a
-command against their own copy of the owner's policy, carry it out without
+explains a refusal at all. The macOS and Linux clients still have to verify a
+command against the delivered policy, carry it out without
 building anything from strings, obtain the actor attestation and report only
 what they observed. Center's Activity page reads the new ledger kinds — a requested and
 resolved ceremony with the dwell time it took, a device's own report, a revoked

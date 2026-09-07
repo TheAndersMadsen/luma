@@ -122,6 +122,83 @@ fn browser_room_render_envelope_enforces_exact_wire_byte_limit_before_send() {
     assert!(render_payload(&runtime, "U:fixture", &action, &stamp).is_none());
 }
 
+/// The owner's own policy for one installation, carried by the room it is
+/// already connected to. A document that would not fit the envelope is never
+/// truncated: the installation is told it holds none, which leaves it doing
+/// nothing at all.
+#[test]
+fn native_room_policy_frame_carries_the_owners_copy_or_withdraws_it() {
+    use crate::ambiance::action::{
+        ActionSection, CommandEntry, CommandSection, DevicePolicy, MAX_POLICY_BYTES, OpenPolicy,
+    };
+    let stamp = InputStamp {
+        epoch: Uuid::from_u128(9),
+        sequence: 6,
+        instance_id: Uuid::from_u128(14),
+    };
+    let surface = Uuid::from_u128(2);
+    let entry = |id: &str, argv: usize| CommandEntry {
+        id: id.into(),
+        label: "Project tests".into(),
+        argv: std::iter::once("/usr/bin/true".to_owned())
+            .chain((1..argv).map(|_| "y".repeat(256)))
+            .collect(),
+        cwd: "/Users/owner/Projects".into(),
+        mutates: true,
+        budget_ms: 900_000,
+    };
+    let policy = DevicePolicy {
+        version: 1,
+        surface_id: surface,
+        approval_revision: 4,
+        actions: Some(ActionSection {
+            revision: 3,
+            maximum_class: crate::ambiance::PrivacyClass::SharedRoom,
+            open: Some(OpenPolicy {
+                hosts: vec!["github.com".into()],
+                apps: Vec::new(),
+                roots: Vec::new(),
+            }),
+            route: None,
+            play: None,
+        }),
+        commands: Some(CommandSection {
+            revision: 2,
+            maximum_class: crate::ambiance::PrivacyClass::SharedRoom,
+            offer_output_to_cognition: false,
+            entries: vec![entry("project-tests", 3)],
+        }),
+    };
+    let held: serde_json::Value =
+        serde_json::from_str(&policy_payload(Some(&policy), &stamp)).unwrap();
+    assert_eq!(held["kind"], "policy");
+    assert_eq!(held["stamp"], serde_json::to_value(&stamp).unwrap());
+    assert_eq!(held["digest"], policy.content_digest());
+    assert_eq!(held["policy"], serde_json::to_value(&policy).unwrap());
+    // The shared client accepts exactly this document and hashes it the same.
+    let document = held["policy"].to_string();
+    let parsed = cosmos_surface_client::DevicePolicy::parse(document.as_bytes()).unwrap();
+    assert_eq!(parsed.content_digest(), policy.content_digest());
+    assert_eq!(parsed.document(), policy.document());
+
+    // Withdrawal is an explicit null on both fields; it is a state, not a
+    // failure, and it leaves the installation holding nothing.
+    let withdrawn: serde_json::Value = serde_json::from_str(&policy_payload(None, &stamp)).unwrap();
+    assert_eq!(withdrawn["kind"], "policy");
+    assert!(withdrawn["policy"].is_null() && withdrawn["digest"].is_null());
+
+    // A document over the bound is refused where the owner writes it, so this
+    // is the last line: never a truncated allowlist.
+    let mut oversized = policy;
+    oversized.commands.as_mut().unwrap().entries = (0..8)
+        .map(|index| entry(&format!("entry-{index}"), 12))
+        .collect();
+    assert!(oversized.document().len() > MAX_POLICY_BYTES);
+    let refused: serde_json::Value =
+        serde_json::from_str(&policy_payload(Some(&oversized), &stamp)).unwrap();
+    assert!(refused["policy"].is_null() && refused["digest"].is_null());
+}
+
 #[test]
 fn native_room_status_frame_names_only_the_kind_of_surface_and_committed_state() {
     use crate::ambiance::status::{TurnState, TurnStatus};

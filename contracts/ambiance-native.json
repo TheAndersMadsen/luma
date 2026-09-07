@@ -96,7 +96,7 @@
     },
     "response": "Same Connection object as contracts/ambiance-room.json: version, url, token, participant, runtimeParticipant, runtimeEpoch and epoch.",
     "authority": "Resolve principal/surface through the durable enrollment locator. Check current proof, approval revision and epoch before room setup, then recheck in the shared coordinator before and after SFU setup. Room joins and exact retries do not open a replacement connection or renew any deadline.",
-    "coordination": "One shared room manager and runtime participant for Browser and Native. The existing cosmos.coordinate.v1 RPC carries sequenced text and native heartbeat/cancel/state/acknowledge controls. Native participants receive render and clear frames for one card, speak frames for one spoken reply, invite frames while a private card waits for them and status frames for the turns they originate; they receive no media grants.",
+    "coordination": "One shared room manager and runtime participant for Browser and Native. The existing cosmos.coordinate.v1 RPC carries sequenced text and native heartbeat/cancel/state/acknowledge controls. Native participants receive render and clear frames for one card, speak frames for one spoken reply, invite frames while a private card waits for them, policy frames carrying the owner's own device-action policy for that installation, and status frames for the turns they originate; they receive no media grants.",
     "input": {
       "message": "{version:1,kind:\"input\",stamp:{epoch,sequence,instanceId},text:\"1-4000 UTF-8 bytes\",target?:\"browser|macos|linux|android|android_tv\",context?:{kind:\"screen\",app:\"1-64 UTF-8 bytes\",text:\"1-8000 UTF-8 bytes\"}}; both optional fields may be omitted, and unknown fields or kinds are rejected.",
       "target": "The request's own explicit destination. It carries exactly the weight of cognition's target hint (a bounded rank component for eligible non-origin surfaces of that kind), outranks the model's target when both exist, is logged as the decision's hint, and never makes a hidden, blocked or unapproved surface eligible.",
@@ -729,7 +729,8 @@
       "entryId": 48,
       "rootId": 32,
       "budgetMs": 900000,
-      "output": 6144
+      "output": 6144,
+      "policyDocument": 8192
     },
     "owner": {
       "approve-device-actions-v1": {
@@ -751,7 +752,7 @@
             "providers": "1-4 sorted provider ids"
           }
         },
-        "caps": "An operation the installation's approved manifest does not declare is invalid_request. maximumClass is capped by that installation's approve-private-display-v1 ceiling at the same approval revision, and by shared_room without it; it is never raised past it. The permission is dropped on revocation or reapproval with the approval revision."
+        "caps": "An operation the installation's approved manifest does not declare is invalid_request. maximumClass is capped by that installation's approve-private-display-v1 ceiling at the same approval revision, and by shared_room without it; it is never raised past it. The permission is dropped on revocation or reapproval with the approval revision. The committed policy must also fit the delivery bound: the runtime serializes the whole document this permission and approve-device-command-v1 would produce together and refuses the write with invalid_request when it exceeds policyDocument bytes, because a policy the installation could never be told about is not a permission."
       },
       "approve-device-command-v1": {
         "routes": {
@@ -766,7 +767,7 @@
           "offerOutputToCognition": "boolean",
           "entries": "1-8 {id,label,argv,cwd,mutates,budgetMs}"
         },
-        "caps": "argv is a fixed array of 1-12 elements of at most 256 bytes each, with no control characters and no '..' component in argv[0]; there is no shell string and no parameter. cwd is absolute. budgetMs is at most 900000. Every entry confirms; there is no never-confirm field. A label the runtime classifies above private is refused at policy-write time, because a silently sensitive label would make an owner-approved entry permanently unrunnable and indistinguishable from a capability miss."
+        "caps": "argv is a fixed array of 1-12 elements of at most 256 bytes each, with no control characters and no '..' component in argv[0]; there is no shell string and no parameter. cwd is absolute. budgetMs is at most 900000. Every entry confirms; there is no never-confirm field. A label the runtime classifies above private is refused at policy-write time, because a silently sensitive label would make an owner-approved entry permanently unrunnable and indistinguishable from a capability miss. The command list is the half that grows, so the same delivery bound applies: a list that would push the combined policy document past policyDocument bytes is invalid_request where the owner writes it, never a truncated allowlist on the device."
       }
     },
     "ledger": {
@@ -783,7 +784,7 @@
       "turn_preempted": "turnId, generation, the surface whose request preempted it"
     },
     "notShipped": [
-      "Client execution on every platform: macOS, Linux, the phone and the TV must each carry the commands out, re-verify them against their own copy of the owner's policy, obtain the actor attestation and report what they observed.",
+      "Client execution on every platform: macOS, Linux, the phone and the TV must each carry the commands out, verify them against the delivered policy, obtain the actor attestation and report what they observed.",
       "Center's Activity page does not yet parse the new ledger kinds, the budget row or the ceremony habituation counters.",
       "The live progress tail stays on the executing device; the runtime transports no command output except the bounded terminal report.",
       "Physical acceptance on the Pixel, the Shield, the Mac, the Omarchy PC and the Pin."
@@ -809,10 +810,11 @@
       "revoke": "{version:1,kind:\"revoke\",stamp,actionId,reason:\"cancelled|preempted|superseded|expired|revalidation_failed\"}. A clear erases a display; an effect can only be told to stop, and a revoke supersedes remaining work without un-opening an application.",
       "confirm": "{version:1,kind:\"confirm\",stamp,request:null|{version:1,grantId,actionId,turnId,generation,surfaceId,incarnation,channel:\"confirm.tap\",descriptionDigest:HEX64,description:{kind:\"device_action\",verb,subject,deviceKind,effect,class},risk,attestation,privacy,expiresAt}}. The description is composed by policy from the bound command and the owner's own label, never model prose, and each client renders it from its own strings file so no JSON reaches a person. An explicit null withdraws the ceremony.",
       "progress": "Client to runtime, unsequenced: {kind:\"progress\",progress:{version:1,actionId,generation,sequence:1-60,elapsedMs}}. It consumes no ordered ingress slot, claims no outcome, is idempotent by its own sequence, and renews both the command's deadline and the turn's worker lease. The live tail stays on the executing device: the runtime has nowhere honest to put it.",
-      "invite": "The invite frame gains kind:\"card\"|\"task\", so a phone waits for a command exactly the way it already waits for a private card. No platform starts a command in the background."
+      "invite": "The invite frame gains kind:\"card\"|\"task\", so a phone waits for a command exactly the way it already waits for a private card. No platform starts a command in the background.",
+      "policy": "{version:1,kind:\"policy\",stamp,digest:null|HEX64,policy:null|{version:1,surfaceId,approvalRevision,actions?:{revision,maximumClass,open?:{hosts,apps,roots},route?:{app},play?:{providers}},commands?:{revision,maximumClass,offerOutputToCognition,entries}}}, answered with the usual {version:1,kind:\"received\",stamp} receipt. It carries the owner's own committed policy for that installation — the same object Center writes — to the installation it belongs to, over the connection it already holds. Native members only; a browser member has no policy of its own. The document names the surface and the approval revision the connection was opened at, and a client refuses any other. digest is SHA-256 of the compact document exactly as shown, which both implementations recompute from their own struct, so a serialization drift refuses the policy instead of widening or narrowing what a device may do. A section the installation's approved manifest does not declare is never present. Both fields null together withdraws the copy, which is an ordinary state: the installation then holds no policy and does nothing. Sent once per change of the digest, so re-delivery is idempotent, and dropped with the connection an approval revision change closes."
     },
     "controls": {
-      "report": "Sequenced on the existing cursor, exactly one per action, with stamp.instanceId equal to actionId: {kind:\"report\",actionId,turnId,generation,channel,contentDigest,outcome:\"completed|refused|failed|cancelled|unknown\",evidence:EVIDENCE,output?:STRING}. The runtime computes the evidence digest itself, so there is one statement of it. An action therefore costs at most two of the thirty-two retained ingress slots.",
+      "report": "Sequenced on the existing cursor, exactly one per action, with stamp.instanceId equal to actionId: {kind:\"report\",actionId,turnId,generation,channel,contentDigest,outcome:\"completed|refused|failed|cancelled|unknown\",evidence:EVIDENCE,output?:STRING}. The runtime computes the evidence digest itself, so there is one statement of it. The client boundary takes the action id with the report and refuses one for anything but the current task, so a task the runtime replaced between the platform's own read and the queue closes nothing. An action therefore costs at most two of the thirty-two retained ingress slots.",
       "grant": "Sequenced, with stamp.instanceId equal to grantId: {kind:\"grant\",grantId,actionId,granted:bool,attestation?:\"foreground_tap|device_owner_auth\",descriptionDigest}. An answer weaker than the ceremony required is stale, and dismissing the panel answers nothing: the ceremony expires, which denies."
     },
     "evidence": {
@@ -849,6 +851,14 @@
       "progress_grace_ms": 10000,
       "worker_lease_ms": "75000, renewed by a dispatched action and by every accepted progress, so a long command's own turn is still there to receive its outcome",
       "registry_heartbeat_ms": "45000, hygiene only; never the in-flight detector"
+    },
+    "delivery": {
+      "scope": "The owner's policy is delivered to the installation it belongs to, so a client's local copy is a cache of what the owner approved rather than a file a person has to write. It is defence in depth, never a new authority: arriving grants nothing, the client still verifies every command against the copy, and a client holding no copy carries nothing out.",
+      "binding": "One policy per installation, bound to the approval revision its signed connection was opened at. Reapproval or revocation bumps that revision, which closes the connection and drops both permissions, so there is nothing left to deliver and the client's copy goes with the connection. A client never persists it.",
+      "recipient": "Native members with a current signed connection only. Delivery follows the connection, not the foreground, because a device has to hold the copy before it can refuse against it. It reaches no browser member, no revoked or reapproved record and no installation whose connection is not current.",
+      "idempotence": "The room sends a policy frame only when the digest it last delivered to that member changes, and re-delivering the same document changes nothing on the client.",
+      "overflow": "The write is refused at policyDocument bytes, so a committed policy always fits. If a document over that bound ever reached delivery it is withdrawn rather than truncated: the installation is told it holds no policy and does nothing.",
+      "clients": "macOS reads it through cosmos_surface_device_policy, Android and Android TV through NativeSurface.devicePolicy, Linux through the same shared client. Linux keeps its own local openers file, which is how that desktop opens a document and is not owner policy Cosmos holds."
     }
   }
 }

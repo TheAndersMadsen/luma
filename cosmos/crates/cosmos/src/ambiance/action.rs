@@ -1045,6 +1045,77 @@ pub struct CommandApproval {
 }
 
 // ---------------------------------------------------------------------------
+// The copy one installation holds
+// ---------------------------------------------------------------------------
+
+/// The longest policy document the runtime will commit for one installation.
+/// The whole `policy` frame — this document, its digest and the frame's own
+/// stamp — has to fit the 12 KiB realtime envelope, so a policy larger than
+/// this is refused where the owner writes it instead of being delivered
+/// truncated. Half an allowlist is worse than none.
+pub const MAX_POLICY_BYTES: usize = 8 * 1024;
+
+/// What this installation may be asked to open, route to or play, at the
+/// owner's own revision of that permission.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionSection {
+    pub revision: u64,
+    pub maximum_class: PrivacyClass,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open: Option<OpenPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<RoutePolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub play: Option<PlayPolicy>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandSection {
+    pub revision: u64,
+    pub maximum_class: PrivacyClass,
+    pub offer_output_to_cognition: bool,
+    pub entries: Vec<CommandEntry>,
+}
+
+/// The owner's committed statement about one installation, as that
+/// installation receives it. It is bound to the approval revision its
+/// connection was opened at and carries only the operations that
+/// installation's own approved manifest declares. Delivering it grants
+/// nothing: the device still verifies every command against this copy, and a
+/// device holding no copy carries nothing out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePolicy {
+    pub version: u8,
+    pub surface_id: Uuid,
+    pub approval_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<ActionSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<CommandSection>,
+}
+
+impl DevicePolicy {
+    /// The one serialization the whole fleet hashes: compact JSON in
+    /// declaration order, absent sections omitted. The shared client
+    /// recomputes it from its own struct, so a drift refuses the policy
+    /// instead of quietly widening or narrowing what a device may do.
+    pub fn document(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn content_digest(&self) -> String {
+        hash(self.document().as_bytes())
+    }
+
+    pub fn fits(&self) -> bool {
+        self.document().len() <= MAX_POLICY_BYTES
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Runtime state
 // ---------------------------------------------------------------------------
 
@@ -1119,6 +1190,95 @@ impl super::RuntimeState {
         channels
     }
 
+    /// The owner's committed policy for one installation, as that
+    /// installation receives it. Both halves are already bound to the
+    /// approval revision, so reapproving or revoking the installation leaves
+    /// nothing to deliver; a section whose channel the installation's own
+    /// approved manifest does not declare is dropped here as well, so
+    /// delivery can never reach an operation the owner never approved.
+    pub(super) fn device_policy(
+        &self,
+        records: &std::collections::BTreeMap<uuid::Uuid, crate::surface_registry::Record>,
+        surface: uuid::Uuid,
+    ) -> Result<Option<DevicePolicy>, super::RuntimeError> {
+        let record = Self::action_record(records, surface)?;
+        if !crate::surface_registry::known_native_manifest(record) {
+            return Err(super::RuntimeError::InvalidOrigin);
+        }
+        let declares =
+            |channel: Channel| crate::surface_registry::native_declares(record, channel.as_str());
+        let actions = self
+            .device_action_policy(records, surface)?
+            .and_then(|approval| {
+                let policy = approval.policy?;
+                let section = ActionSection {
+                    revision: approval.revision,
+                    maximum_class: policy.maximum_class,
+                    open: policy.open.filter(|_| declares(Channel::ActionOpen)),
+                    route: policy.route.filter(|_| declares(Channel::ActionRoute)),
+                    play: policy.play.filter(|_| declares(Channel::ActionPlay)),
+                };
+                (section.open.is_some() || section.route.is_some() || section.play.is_some())
+                    .then_some(section)
+            });
+        let commands = self
+            .device_command_policy(records, surface)?
+            .and_then(|approval| {
+                let policy = approval.policy.filter(|_| declares(Channel::ActionRun))?;
+                (!policy.entries.is_empty()).then_some(CommandSection {
+                    revision: approval.revision,
+                    maximum_class: policy.maximum_class,
+                    offer_output_to_cognition: policy.offer_output_to_cognition,
+                    entries: policy.entries,
+                })
+            });
+        if actions.is_none() && commands.is_none() {
+            return Ok(None);
+        }
+        let policy = DevicePolicy {
+            version: 1,
+            surface_id: surface,
+            approval_revision: record.revision,
+            actions,
+            commands,
+        };
+        // Unreachable while both writers apply the same bound, and never
+        // truncated: an installation is told it holds no policy instead.
+        Ok(policy.fits().then_some(policy))
+    }
+
+    /// The document one more committed permission would produce. A policy the
+    /// owner writes has to be deliverable whole, so this is checked where the
+    /// owner can still do something about it rather than at dispatch.
+    fn policy_fits(
+        &self,
+        records: &std::collections::BTreeMap<uuid::Uuid, crate::surface_registry::Record>,
+        surface: uuid::Uuid,
+        actions: Option<&Policy>,
+        commands: Option<&CommandPolicy>,
+    ) -> bool {
+        let record = &records[&surface];
+        DevicePolicy {
+            version: 1,
+            surface_id: surface,
+            approval_revision: record.revision,
+            actions: actions.map(|policy| ActionSection {
+                revision: u64::MAX,
+                maximum_class: policy.maximum_class,
+                open: policy.open.clone(),
+                route: policy.route,
+                play: policy.play.clone(),
+            }),
+            commands: commands.map(|policy| CommandSection {
+                revision: u64::MAX,
+                maximum_class: policy.maximum_class,
+                offer_output_to_cognition: policy.offer_output_to_cognition,
+                entries: policy.entries.clone(),
+            }),
+        }
+        .fits()
+    }
+
     pub(super) fn set_device_action_policy(
         &mut self,
         records: &std::collections::BTreeMap<uuid::Uuid, crate::surface_registry::Record>,
@@ -1149,6 +1309,14 @@ impl super::RuntimeState {
             }
             if policy.maximum_class > self.action_ceiling(records, surface) {
                 return Err(super::RuntimeError::PolicyBlocked);
+            }
+            // A permission the installation could never be told about is not
+            // a permission. Say so here, where the owner is still editing it.
+            let commands = self
+                .device_command_policy(records, surface)?
+                .and_then(|approval| approval.policy);
+            if !self.policy_fits(records, surface, Some(policy), commands.as_ref()) {
+                return Err(super::RuntimeError::InvalidRequest);
             }
         }
         let approval = Approval {
@@ -1201,6 +1369,14 @@ impl super::RuntimeState {
                 super::runtime::input_privacy(&entry.label) > super::PrivacyClass::Private
             }) {
                 return Err(super::RuntimeError::PolicyBlocked);
+            }
+            // The command list is the half that grows. A list the runtime
+            // could not deliver whole is refused where the owner writes it.
+            let actions = self
+                .device_action_policy(records, surface)?
+                .and_then(|approval| approval.policy);
+            if !self.policy_fits(records, surface, actions.as_ref(), Some(policy)) {
+                return Err(super::RuntimeError::InvalidRequest);
             }
         }
         let approval = CommandApproval {
@@ -2332,6 +2508,258 @@ mod tests {
                 .state
                 .action_channels(&fixture.records, mac)
                 .is_empty()
+        );
+    }
+
+    /// The owner's committed policy is a statement about one installation at
+    /// one approval revision. It reaches that installation over the
+    /// connection it already holds, carries only what its own manifest
+    /// declares, and is gone the moment the approval revision moves.
+    #[test]
+    fn ambiance_device_policy_is_delivered_for_the_approval_revision_and_dropped_by_reapproval() {
+        let (mut fixture, ids) = Fixture::new(&["macos", "android_tv"]);
+        let (mac, tv) = (ids[0], ids[1]);
+        // No permission, nothing to deliver: the device then does nothing.
+        assert!(
+            fixture
+                .state
+                .device_policy(&fixture.records, mac)
+                .unwrap()
+                .is_none()
+        );
+        fixture.set_actions(mac, Some(open_policy())).unwrap();
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let policy = fixture
+            .state
+            .device_policy(&fixture.records, mac)
+            .unwrap()
+            .expect("policy");
+        assert_eq!(policy.version, 1);
+        assert_eq!(policy.surface_id, mac);
+        assert_eq!(policy.approval_revision, fixture.records[&mac].revision);
+        assert_eq!(policy.actions.as_ref().unwrap().revision, 1);
+        assert_eq!(policy.commands.as_ref().unwrap().revision, 1);
+        assert_eq!(policy.commands.as_ref().unwrap().entries, vec![entry()]);
+        assert!(policy.fits());
+
+        // The shared client parses the runtime's own document, recomputes the
+        // same digest from its own struct, and keeps the argv digests the
+        // dispatched command is bound by.
+        let held = cosmos_surface_client::DevicePolicy::parse(policy.document().as_bytes())
+            .expect("the client accepts the runtime's document");
+        assert_eq!(held.document(), policy.document());
+        assert_eq!(held.content_digest(), policy.content_digest());
+        let held_entry = held.entry("project-tests").expect("entry");
+        assert_eq!(held_entry.argv_digest(), entry().argv_digest());
+        assert_eq!(held_entry.entry_digest(), entry().entry_digest());
+        assert_eq!(held.root("repo").unwrap().path, "/Users/owner/Projects");
+
+        // A television declares play and no command channel at all, so its
+        // own copy can never name one.
+        fixture
+            .set_actions(
+                tv,
+                Some(Policy {
+                    maximum_class: PrivacyClass::SharedRoom,
+                    open: None,
+                    route: None,
+                    play: Some(PlayPolicy {
+                        providers: vec!["youtube".into()],
+                    }),
+                }),
+            )
+            .unwrap();
+        let television = fixture
+            .state
+            .device_policy(&fixture.records, tv)
+            .unwrap()
+            .expect("policy");
+        assert!(television.commands.is_none());
+        let actions = television.actions.as_ref().unwrap();
+        assert!(actions.open.is_none() && actions.route.is_none());
+        assert_eq!(actions.play.as_ref().unwrap().providers, ["youtube"]);
+        assert!(matches!(
+            fixture.set_commands(tv, Some(command_policy())),
+            Err(RuntimeError::PolicyBlocked)
+        ));
+
+        // Delivery follows the connection, not the foreground: a device has
+        // to hold the copy before it can refuse against it, and a command
+        // still waits for a reported foreground on its own invitation.
+        fixture
+            .state
+            .native_connections
+            .get_mut(&mac)
+            .unwrap()
+            .connection
+            .as_mut()
+            .unwrap()
+            .visible = false;
+        assert!(
+            fixture
+                .state
+                .device_policy(&fixture.records, mac)
+                .unwrap()
+                .is_some()
+        );
+
+        // Reapproving the installation drops both permissions with the
+        // revision, so there is nothing left to deliver.
+        let record = fixture.records.get_mut(&mac).unwrap();
+        record.revision += 1;
+        fixture.state.reconcile(&fixture.records, NOW);
+        assert!(
+            fixture
+                .state
+                .device_policy(&fixture.records, mac)
+                .unwrap()
+                .is_none()
+        );
+        // A revoked installation has no policy either, and is not an origin.
+        fixture.records.get_mut(&tv).unwrap().revoked = true;
+        assert!(matches!(
+            fixture.state.device_policy(&fixture.records, tv),
+            Err(RuntimeError::InvalidOrigin)
+        ));
+    }
+
+    /// Delivery reaches the installation the connection proves and no other,
+    /// and a browser member has no policy of its own to receive.
+    #[test]
+    fn ambiance_device_policy_reaches_only_the_connected_installation_it_belongs_to() {
+        let (mut fixture, ids) = Fixture::new(&["macos", "android"]);
+        let (mac, phone) = (ids[0], ids[1]);
+        fixture.set_actions(mac, Some(open_policy())).unwrap();
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let ask = |fixture: &mut Fixture, connection: RoomProof| {
+            fixture.apply(RuntimeOperation::DevicePolicyFor { connection }, NOW + 1)
+        };
+        let proof = fixture.proofs[&mac].clone();
+        let RuntimeResult::DevicePolicyFor(Some(policy)) =
+            ask(&mut fixture, RoomProof::Native(proof)).unwrap()
+        else {
+            panic!("policy")
+        };
+        assert_eq!(policy.surface_id, mac);
+        // The phone holds no permission of its own, so it receives none.
+        let phone_proof = fixture.proofs[&phone].clone();
+        assert!(matches!(
+            ask(&mut fixture, RoomProof::Native(phone_proof)).unwrap(),
+            RuntimeResult::DevicePolicyFor(None)
+        ));
+        // A browser member is never a device that acts.
+        let record = &fixture.records[&fixture.origin];
+        let browser = RoomProof::Browser(BrowserProof {
+            surface_id: record.surface_id,
+            incarnation: record.incarnation,
+            token_hash: record.token_hash.clone(),
+        });
+        assert!(matches!(
+            ask(&mut fixture, browser),
+            Err(RuntimeError::InvalidOrigin)
+        ));
+        // A connection that is no longer current receives nothing at all.
+        let stale = fixture.proofs[&mac].clone();
+        fixture.records.get_mut(&mac).unwrap().revision += 1;
+        fixture.state.reconcile(&fixture.records, NOW);
+        assert!(ask(&mut fixture, RoomProof::Native(stale)).is_err());
+    }
+
+    /// The command list is the half that grows. A policy the runtime could
+    /// not deliver whole is refused where the owner writes it, rather than
+    /// arriving truncated: half an allowlist is worse than none.
+    #[test]
+    fn ambiance_device_policy_over_the_envelope_is_refused_where_the_owner_writes_it() {
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        let long = |id: &str, argv: usize| CommandEntry {
+            id: id.into(),
+            label: "x".repeat(MAX_LABEL_BYTES),
+            argv: std::iter::once("/usr/bin/true".to_owned())
+                .chain((1..argv).map(|_| "y".repeat(MAX_ARGV_BYTES)))
+                .collect(),
+            cwd: format!("/{}", "z".repeat(200)),
+            mutates: false,
+            budget_ms: MAX_BUDGET_MS,
+        };
+        let oversized = CommandPolicy {
+            maximum_class: PrivacyClass::SharedRoom,
+            offer_output_to_cognition: false,
+            entries: (0..MAX_COMMAND_ENTRIES)
+                .map(|index| long(&format!("entry-{index}"), MAX_ARGV))
+                .collect(),
+        };
+        assert!(oversized.valid());
+        assert!(matches!(
+            fixture.set_commands(mac, Some(oversized)),
+            Err(RuntimeError::InvalidRequest)
+        ));
+        // Nothing was committed, so the installation still holds nothing.
+        assert!(
+            fixture
+                .state
+                .device_policy(&fixture.records, mac)
+                .unwrap()
+                .is_none()
+        );
+        // A list that fits is committed and delivered whole.
+        let fits = CommandPolicy {
+            maximum_class: PrivacyClass::SharedRoom,
+            offer_output_to_cognition: false,
+            entries: vec![long("entry-0", 4), long("entry-1", 4)],
+        };
+        assert!(fixture.set_commands(mac, Some(fits)).is_ok());
+        let policy = fixture
+            .state
+            .device_policy(&fixture.records, mac)
+            .unwrap()
+            .expect("policy");
+        assert!(policy.document().len() <= MAX_POLICY_BYTES);
+        assert_eq!(policy.commands.as_ref().unwrap().entries.len(), 2);
+        // The bound is on the whole document, not on either half, so a list
+        // of hosts, applications and roots that fits on its own is refused
+        // beside those commands and accepted once they are gone.
+        let wide = Policy {
+            maximum_class: PrivacyClass::SharedRoom,
+            open: Some(OpenPolicy {
+                hosts: (0..MAX_HOSTS)
+                    .map(|index| format!("{}{index:02}.example.com", "h".repeat(238)))
+                    .collect(),
+                apps: (0..MAX_APPS)
+                    .map(|index| AppEntry {
+                        id: format!("com.example.{}{index}", "a".repeat(100)),
+                        label: "x".repeat(MAX_LABEL_BYTES),
+                    })
+                    .collect(),
+                roots: (0..MAX_ROOTS)
+                    .map(|index| RootEntry {
+                        id: format!("root-{index}"),
+                        label: "x".repeat(MAX_LABEL_BYTES),
+                        path: format!("/{}{index}", "p".repeat(250)),
+                    })
+                    .collect(),
+            }),
+            route: None,
+            play: None,
+        };
+        assert!(matches!(
+            fixture.set_actions(mac, Some(wide.clone())),
+            Err(RuntimeError::InvalidRequest)
+        ));
+        fixture.set_commands(mac, None).unwrap();
+        assert!(fixture.set_actions(mac, Some(wide)).is_ok());
+        assert!(
+            fixture
+                .state
+                .device_policy(&fixture.records, mac)
+                .unwrap()
+                .expect("policy")
+                .fits()
+        );
+        // Both bounds are the same number on both sides of the wire.
+        assert_eq!(
+            MAX_POLICY_BYTES,
+            cosmos_surface_client::action::MAX_POLICY_BYTES
         );
     }
 
