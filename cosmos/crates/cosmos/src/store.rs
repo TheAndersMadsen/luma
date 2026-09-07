@@ -680,6 +680,17 @@ pub trait Store: Send + Sync + 'static {
         principal: &str,
     ) -> Result<Vec<crate::surface_registry::Surface>, crate::surface_registry::RegistryError>;
 
+    /// The tail of this owner's ledger, oldest first, at most `limit` events.
+    /// It is the same content-free chain the runtime commits, so the owner can
+    /// be shown where a reply went without the request or the reply appearing
+    /// anywhere. A store that cannot read it says so rather than answering
+    /// with a shorter history.
+    async fn ledger_tail(
+        &self,
+        principal: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, crate::surface_registry::RegistryError>;
+
     /// Internal routing locator only. Runtime admission must recheck the
     /// current approved binding and installation proof under its transaction.
     async fn native_location(
@@ -1580,6 +1591,29 @@ impl Store for MemoryStore {
             .and_then(|registry| registry.records.get(&surface_id))
             .map(|record| record.view(now_ms())))
     }
+    async fn ledger_tail(
+        &self,
+        principal: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, crate::surface_registry::RegistryError> {
+        use crate::surface_registry::RegistryError;
+        if self.state_path.is_some() {
+            return Err(RegistryError::Unavailable);
+        }
+        let guard = self
+            .surfaces
+            .lock()
+            .map_err(|_| RegistryError::Unavailable)?;
+        let Some(registry) = guard.get(principal) else {
+            return Ok(Vec::new());
+        };
+        let start = registry.events.len().saturating_sub(limit);
+        registry.events[start..]
+            .iter()
+            .map(|event| serde_json::to_value(event).map_err(|_| RegistryError::Unavailable))
+            .collect()
+    }
+
     async fn surfaces(
         &self,
         principal: &str,

@@ -7,7 +7,7 @@ use crate::{
 };
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
+    extract::{DefaultBodyLimit, Path, RawQuery, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -76,6 +76,7 @@ pub(crate) fn with_pairing(
 
 fn routes(api: ApiState) -> Router {
     Router::new()
+        .route("/surface-api/v1/ledger", get(ledger))
         .route("/surface-api/v1/surfaces", get(list).post(approve))
         .route("/surface-api/v1/surfaces/:surface_id", delete(revoke))
         .route("/surface-api/v1/surfaces/:surface_id/leave", post(leave))
@@ -260,6 +261,37 @@ async fn list(
     let principal = owner(&headers, &api)?;
     Ok(Json(
         json!({"surfaces": api.store.surfaces(&principal).await?.into_iter().filter(|surface| matches!(surface.binding, surface_registry::Binding::Browser)).collect::<Vec<_>>()}),
+    ))
+}
+
+/// How many ledger events one owner read may ask for.
+const LEDGER_MAX: usize = 300;
+
+/// The tail of the owner's own ledger, oldest first. The chain carries no
+/// request text and no reply content, so neither does this; it says where a
+/// reply went, not what it said. The only query this route accepts is a whole
+/// `limit` between one event and `LEDGER_MAX`: anything else is a bad request
+/// rather than a silently different history.
+async fn ledger(
+    State(api): State<ApiState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = owner(&headers, &api)?;
+    let invalid = || ApiError(StatusCode::BAD_REQUEST, "invalid_limit");
+    let limit = match query.as_deref() {
+        None | Some("") => LEDGER_MAX,
+        Some(query) => query
+            .strip_prefix("limit=")
+            .filter(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(invalid)?,
+    };
+    if limit == 0 || limit > LEDGER_MAX {
+        return Err(invalid());
+    }
+    Ok(Json(
+        json!({"events": api.store.ledger_tail(&principal, limit).await?}),
     ))
 }
 
@@ -1958,7 +1990,124 @@ mod tests {
         );
     }
 
-    /// The owner's screen-context permission is a native-only statement about
+    /// The owner's ledger read is theirs alone, bounded, and content-free: it
+    /// is the only way Center can say where a reply went, and it must never
+    /// become a way to read what was asked.
+    #[tokio::test]
+    async fn ambiance_ledger_http_is_owner_only_bounded_and_content_free() {
+        use crate::enrollment::EnrollmentStore;
+        let store = Arc::new(crate::store::MemoryStore::default());
+        let pairing = Arc::new(crate::enrollment::MemoryEnrollmentStore::default());
+        pairing.put_device_account("aabb", "owner").await.unwrap();
+        let app = with_pairing(store, Some(verifier()), Some(pairing));
+        let owner = bearer("owner");
+        for authorization in [None, Some("Bearer invalid")] {
+            assert_eq!(
+                call(
+                    &app,
+                    "GET",
+                    "/surface-api/v1/ledger",
+                    authorization,
+                    None,
+                    json!(null)
+                )
+                .await
+                .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        for limit in ["0", "301", "-1", "many"] {
+            assert_eq!(
+                call(
+                    &app,
+                    "GET",
+                    &format!("/surface-api/v1/ledger?limit={limit}"),
+                    Some(&owner),
+                    None,
+                    json!(null)
+                )
+                .await
+                .0,
+                StatusCode::BAD_REQUEST,
+                "{limit}"
+            );
+        }
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/surface-api/v1/ledger?until=now",
+                Some(&owner),
+                None,
+                json!(null)
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        // An owner with no history reads an empty chain, never an error.
+        let (status, body) = call(
+            &app,
+            "GET",
+            "/surface-api/v1/ledger",
+            Some(&owner),
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!({"events": []}));
+        // Approving a device writes to the chain; the owner reads exactly their
+        // own events, oldest first, and another owner reads none of them.
+        let enrollment = Uuid::new_v4();
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/surface-api/v1/native",
+                Some(&owner),
+                None,
+                native_approval(enrollment)
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (status, body) = call(
+            &app,
+            "GET",
+            "/surface-api/v1/ledger?limit=50",
+            Some(&owner),
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let events = body["events"].as_array().unwrap();
+        assert!(!events.is_empty());
+        let mut sequence = 0;
+        for event in events {
+            let next = event["sequence"].as_u64().unwrap();
+            assert!(next > sequence, "oldest first");
+            sequence = next;
+            assert_eq!(event["principal"], "U:owner");
+        }
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/surface-api/v1/ledger",
+                Some(&bearer("other")),
+                None,
+                json!(null)
+            )
+            .await
+            .1,
+            json!({"events": []})
+        );
+    }
+
+    /// The owner's screen-context permission is one owner statement about
     /// one installation, bound to its approval revision: strict body,
     /// exactly one policy class, compare-and-swap revisions, owner isolation,
     /// and loss on revocation or reapproval.

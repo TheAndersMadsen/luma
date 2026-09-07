@@ -436,6 +436,13 @@ rendered on the server in UTC and reads without JavaScript; once it hydrates the
 viewer's own clock relabels each row ("Just now", "12 minutes ago", "Yesterday
 22:41") and groups the rows into local days.
 
+The page reads the chain through `GET /surface-api/v1/ledger`, the one
+owner-authenticated route that returns it: at most 300 events, oldest first,
+only the calling owner's own, and the whole query it accepts is a whole
+`limit` in that range. It hands back the committed events exactly as they were
+hashed, which is why the page can say where a reply went and cannot say what
+was asked.
+
 Cognition may propose `target` (`browser`, `macos`, `linux`, `android` or
 `android_tv`) only from explicit request text such as "show this on the TV".
 Policy treats it as the paper's hint: it adds a bounded rank component to

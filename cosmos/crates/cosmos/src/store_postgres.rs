@@ -752,6 +752,30 @@ impl Store for PostgresStore {
         })
         .transpose()
     }
+    async fn ledger_tail(
+        &self,
+        principal: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>, crate::surface_registry::RegistryError> {
+        use crate::surface_registry::RegistryError;
+        let rows = sqlx::query(
+            "SELECT event::text AS event FROM cosmos_surface_event WHERE principal = $1 ORDER BY sequence DESC LIMIT $2",
+        )
+        .bind(principal)
+        .bind(i64::try_from(limit).map_err(|_| RegistryError::Unavailable)?)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| RegistryError::Unavailable)?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows.iter().rev() {
+            events.push(
+                serde_json::from_str(row.get::<&str, _>("event"))
+                    .map_err(|_| RegistryError::Unavailable)?,
+            );
+        }
+        Ok(events)
+    }
+
     async fn surfaces(
         &self,
         principal: &str,
