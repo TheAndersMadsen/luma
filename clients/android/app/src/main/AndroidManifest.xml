@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Network for the owner's Cosmos only, plus a foreground service that keeps the
-         approved session joined while the screen is off. No microphone, overlay or
+         approved session joined while the screen is off. No microphone and no
          accessibility permission. The notification-listener component below holds no
          permission until the owner grants it in the television's own settings, and it is
          the only way playback can be observed rather than assumed. -->
@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- A television is not an app the owner switches to: the assistant is one window
+         above whatever is playing, so a reply lands without leaving the match. The owner
+         allows it once and may take it away at any time; until then nothing is drawn
+         over another app and Cosmos says so on its own screen. The phone never asks. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <!-- One APK serves the Pixel and the Shield; the runtime platform is reported as
          android_tv on leanback devices so routing hints can name the TV. -->
     <uses-feature android:name="android.software.leanback" android:required="false"/>

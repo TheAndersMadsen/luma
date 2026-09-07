@@ -25,7 +25,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -49,6 +52,8 @@ data class SurfaceState(
     val hasUnknownOutcome: Boolean = false,
     val admission: Admission? = null,
     val visible: Boolean = false,
+    /** The window this television can draw over other apps, and whether the owner allowed one. */
+    val overlay: TvOverlay = TvOverlay.DETACHED,
     val display: DisplayCard? = null,
     /** The current spoken reply, if any; [speaking] is true only while its audio plays. */
     val speech: SpeechReply? = null,
@@ -118,7 +123,25 @@ class SurfaceController(context: Context) {
     ))
     val state: StateFlow<SurfaceState> = _state
     private var handle = 0L
+    /** The request this television is waiting on, wherever it was spoken, and the reply sent away. */
+    private val _ask = MutableStateFlow<Ask?>(null)
+    private val _dismissed = MutableStateFlow<UUID?>(null)
+    /** True while this app's own screen is in front, which is when the stage draws its true inset. */
+    private val _appForeground = MutableStateFlow(false)
+    val appForeground: StateFlow<Boolean> = _appForeground
+
+    /**
+     * The three-state television stage, owned here because the same stage is
+     * drawn twice: on Cosmos's own screen and, over whatever is playing, in the
+     * window the overlay holds. A question spoken at the remote must reach both.
+     */
+    val tvStage: StateFlow<TvStage> = combine(_state, _ask, _dismissed) { state, ask, dismissed ->
+        state.tvStage(ask, dismissed)
+    }.stateIn(scope, SharingStarted.Eagerly, TvStage.Idle)
+
     @Volatile private var wantedVisible = false
+    /** The overlay's own report: a window up over the player on a display that is on. */
+    @Volatile private var overlayShowing = false
     private var acknowledged: UUID? = null
     private val main = Handler(Looper.getMainLooper())
     private var player: MediaPlayer? = null
@@ -152,6 +175,19 @@ class SurfaceController(context: Context) {
                 expireCeremony()
                 delay(200)
             }
+        }
+        // The request is over once the stage has come to rest: an answer arrived, a
+        // set of options did, the send settled with nothing admitted, or Cosmos
+        // finished the turn somewhere else. The last one matters over a player,
+        // where nothing takes a key to send a stale question away. This reads the
+        // same three sources the stage is made of, so it never judges a request
+        // against a stage that was computed before that request existed.
+        scope.launch {
+            combine(_state, _ask, _dismissed) { state, ask, dismissed ->
+                ask != null && (state.tvStage(ask, dismissed).let { stage ->
+                    stage is TvStage.Idle || stage is TvStage.Answer || stage is TvStage.Choices
+                } || state.askAbandoned(ask))
+            }.collect { over -> if (over) _ask.value = null }
         }
         // An existing installation journal means this phone was set up before:
         // open it on launch so a retained connection rejoins without a tap.
@@ -557,14 +593,17 @@ class SurfaceController(context: Context) {
         return ActionOutcome.playback(plan.provider, plan.itemDigest, plan.title, started, listener, observed)
     }
 
-    /** Wait for this app's own foreground to go away, which is the launch taking the screen. */
+    /**
+     * Wait for this app's own screen to go away, which is the launch taking it.
+     * The overlay's window is not that: it stays up over whatever took over.
+     */
     private suspend fun awaitBackground(timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            if (!wantedVisible) return true
+            if (!_appForeground.value) return true
             delay(100)
         }
-        return !wantedVisible
+        return !_appForeground.value
     }
 
     private suspend fun settle(task: DeviceTask, report: Report) {
@@ -692,10 +731,49 @@ class SurfaceController(context: Context) {
 
     /** The app's own foreground report. Availability only; never occupancy or identity. */
     fun setVisible(visible: Boolean) {
+        _appForeground.value = visible
+        report()
+    }
+
+    /**
+     * The overlay's own report. A television can show a card while another app
+     * plays, so the window being up on a lit display is as good a foreground as
+     * this app's own screen: Cosmos holds a reply for a surface that reports
+     * neither, and hands it over the moment one of them says yes.
+     */
+    fun setOverlay(overlay: TvOverlay, displayOn: Boolean) {
+        _state.update { if (it.overlay == overlay) it else it.copy(overlay = overlay) }
+        overlayShowing = tvCanShow(overlay, displayOn)
+        report()
+    }
+
+    /** Availability is either surface saying it can show something; the wire carries one flag. */
+    private fun report() {
+        val visible = _appForeground.value || overlayShowing
         if (wantedVisible == visible) return
         wantedVisible = visible
         if (handle == 0L) return
         scope.launch { command("set_visible") { NativeSurface.setVisible(handle, visible) } }
+    }
+
+    /**
+     * A question spoken at this television. It is kept until Cosmos answers it,
+     * because a snapshot carries no request text and the band over the player
+     * has nothing else to show.
+     */
+    fun ask(text: String) {
+        val words = text.trim()
+        if (words.isEmpty()) return
+        val state = _state.value
+        _ask.value = Ask(words, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
+        send(words, "")
+    }
+
+    /** Back on the television: the reply on screen is sent away and the stage goes quiet. */
+    fun dismissReply() {
+        val state = _state.value
+        _dismissed.value = state.display?.actionId ?: state.speech?.actionId
+        _ask.value = null
     }
 
     /** Call only after the complete card, credits included, is committed to the screen. */

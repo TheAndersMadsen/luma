@@ -409,9 +409,9 @@ class ScreensTest {
     }
 
     /**
-     * The Shield is not reachable from this workstation, so the television's rule
-     * is proved here: the answer, the question band, and at most one word or one
-     * sentence beside them. Never a hint, never an explanation, never two joined.
+     * The television's rule: the answer, the question band, and at most one word
+     * or one sentence beside them. Never a hint, never an explanation, never two
+     * joined together.
      */
     @Test
     fun theTelevisionSaysOneWordAtMostAndNeverAHint() {
@@ -465,6 +465,119 @@ class ScreensTest {
             "Cosmos is still on the last request. Wait a moment and try again.",
             connected.copy(alert = true, operation = "send_text", message = explain("busy")).tvNotice(0, voiceInput = false),
         )
+    }
+
+    /**
+     * What the window over another app draws. A television is something the room
+     * is already watching, so the stage crosses over as the band on the picture
+     * and the subtitle on it, and nothing else: Cosmos's own screen keeps the
+     * inset framing, because no app may scale another app's video.
+     */
+    @Test
+    fun theWindowOverAnotherAppDrawsOnlyWhatCanCrossOver() {
+        val items = listOf(Choice("1", "Arrival", "A linguist meets visitors."))
+        val choices = card.copy(content = DisplayContent.Choices("Tonight's films", items))
+        assertEquals(TvOverlayFrame.NONE, TvStage.Idle.overlayFrame(appForeground = false))
+        assertEquals(TvOverlayFrame.WORKING, TvStage.Working.overlayFrame(appForeground = false))
+        assertEquals(
+            TvOverlayFrame.QUESTION,
+            TvStage.Transcript("how many goals has he scored this season?").overlayFrame(appForeground = false),
+        )
+        assertEquals(TvOverlayFrame.ANSWER, TvStage.Answer(card.actionId, "Five.", "Five.", card).overlayFrame(appForeground = false))
+        assertEquals(
+            TvOverlayFrame.CHOICES,
+            TvStage.Choices(choices.actionId, "Tonight's films", items, choices).overlayFrame(appForeground = false),
+        )
+        // Cosmos's own screen already draws the whole stage, inset and all, so the
+        // window above it stays empty and no reply is ever shown twice.
+        for (stage in listOf(TvStage.Idle, TvStage.Working, TvStage.Transcript("q"), TvStage.Answer(card.actionId, "Five.", "Five.", card))) {
+            assertEquals(TvOverlayFrame.NONE, stage.overlayFrame(appForeground = true))
+        }
+    }
+
+    /**
+     * A question stands over the picture only while an answer may still come. When
+     * Cosmos brings the turn to rest without answering here, the band goes: nothing
+     * over a player takes a key to send a stale question away.
+     */
+    @Test
+    fun aQuestionOverThePictureStopsWhenTheTurnComesToRest() {
+        val admitted = Admission(turn, 1, false)
+        val ask = Ask("how many goals has he scored this season", turnBefore = null)
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor, admission = admitted)
+        // Nothing has been said about the turn yet, so the question waits.
+        assertFalse(connected.askAbandoned(ask))
+        assertFalse(connected.copy(status = TurnStatus(turn, 1, "working", null, "shared_room")).askAbandoned(ask))
+        assertFalse(connected.copy(status = TurnStatus(turn, 1, "waiting", "android_tv", "shared_room")).askAbandoned(ask))
+        // Finished, wherever it went: shown elsewhere, nowhere at all, or unknown.
+        for (state in listOf("shown", "spoken", "done", "nowhere", "unknown", "refused")) {
+            assertTrue(state, connected.copy(status = TurnStatus(turn, 1, state, "macos", "shared_room")).askAbandoned(ask))
+        }
+        // A report about some other turn says nothing about this question.
+        val other = UUID.fromString("66666666-6666-4666-8666-666666666666")
+        assertFalse(connected.copy(status = TurnStatus(other, 1, "done", null, "shared_room")).askAbandoned(ask))
+        // And neither does a turn that was already there when the question was asked.
+        assertFalse(connected.copy(status = TurnStatus(turn, 1, "done", null, "shared_room")).askAbandoned(ask.copy(turnBefore = turn)))
+    }
+
+    /**
+     * The band lies over the picture's lowest eighth, which is the one thing the
+     * owner's frames lose over another app: their inset picture cannot be had.
+     * The answer needs no band at all, and only a set of options — a question put
+     * to the room — ever takes the remote away from the player.
+     */
+    @Test
+    fun theBandCoversThePictureAndOnlyOptionsTakeTheRemote() {
+        assertTrue(TvOverlayFrame.QUESTION.band)
+        assertTrue(TvOverlayFrame.WORKING.band)
+        assertFalse(TvOverlayFrame.ANSWER.band)
+        assertFalse(TvOverlayFrame.NONE.band)
+        assertFalse(TvOverlayFrame.CHOICES.band)
+        assertTrue(TvOverlayFrame.CHOICES.takesKeys)
+        for (frame in TvOverlayFrame.entries) {
+            if (frame != TvOverlayFrame.CHOICES) assertFalse(frame.takesKeys)
+        }
+    }
+
+    /**
+     * Whether this television can show a reply at all. Cosmos holds one for a
+     * screen that reports nothing in front of it, so the window being up on a lit
+     * display is the whole of what releases it: a dark screen shows the room
+     * nothing, and a window the owner never allowed shows it nothing either.
+     */
+    @Test
+    fun theTelevisionCanShowOnlyWhileItsWindowIsUpOnALitScreen() {
+        assertTrue(tvCanShow(TvOverlay.ATTACHED, displayOn = true))
+        assertFalse(tvCanShow(TvOverlay.ATTACHED, displayOn = false))
+        assertFalse(tvCanShow(TvOverlay.NOT_ALLOWED, displayOn = true))
+        assertFalse(tvCanShow(TvOverlay.NOT_ALLOWED, displayOn = false))
+        assertFalse(tvCanShow(TvOverlay.DETACHED, displayOn = true))
+    }
+
+    /**
+     * The grant the owner gives once. Without it nothing Cosmos answers reaches
+     * the room while something is playing, so the one line this television is
+     * allowed says exactly where to give it — and it is still one line: a running
+     * command and the connection both come first, and nothing is ever joined.
+     */
+    @Test
+    fun aTelevisionThatCannotDrawOverAnotherAppSaysWhereToAllowIt() {
+        val connected = SurfaceState(phase = Phase.CONNECTED, descriptor = descriptor)
+        val refused = connected.copy(overlay = TvOverlay.NOT_ALLOWED)
+        assertEquals(TV_OVERLAY_NOT_ALLOWED, refused.tvNotice(0, voiceInput = true))
+        assertEquals(TV_OVERLAY_NOT_ALLOWED, refused.tvNotice(0, voiceInput = false))
+        assertTrue(TV_OVERLAY_NOT_ALLOWED.contains("Display over other apps"))
+        assertTrue(TV_OVERLAY_NOT_ALLOWED.contains("Special app access"))
+        // It is a switch the owner owns, not an account of what was refused or why.
+        for (word in listOf("permission", "denied", "refused", "error", "cannot show the reply")) {
+            assertFalse(TV_OVERLAY_NOT_ALLOWED.lowercase().contains(word))
+        }
+        // With the window up the line is gone, and the missing microphone is next.
+        val attached = connected.copy(overlay = TvOverlay.ATTACHED)
+        assertNull(attached.tvNotice(0, voiceInput = true))
+        assertEquals(TV_NO_VOICE_INPUT, attached.tvNotice(0, voiceInput = false))
+        assertEquals("Working", refused.copy(task = command, taskStartedAtMs = 1_000).tvNotice(15_000, voiceInput = true))
+        assertEquals("Disconnected", SurfaceState(phase = Phase.PREPARED, descriptor = descriptor, overlay = TvOverlay.NOT_ALLOWED).tvNotice(0, voiceInput = true))
     }
 
     /**

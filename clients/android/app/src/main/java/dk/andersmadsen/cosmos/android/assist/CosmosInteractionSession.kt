@@ -27,6 +27,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import dk.andersmadsen.cosmos.android.AssistActivity
 import dk.andersmadsen.cosmos.android.AssistContext
 import dk.andersmadsen.cosmos.android.CosmosApplication
 import dk.andersmadsen.cosmos.android.MainActivity
@@ -87,6 +88,13 @@ class CosmosInteractionSession(context: Context) : VoiceInteractionSession(conte
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        // A television has no panel. The assistant there is one window over whatever
+        // is playing, and asking is speaking, so the session hands straight over to
+        // the television's own voice input and takes its own window away.
+        if (controller.platform == "android_tv" && open(Intent(context, AssistActivity::class.java))) {
+            hide()
+            return
+        }
         opening.intValue += 1
         val keyguard = context.getSystemService(KeyguardManager::class.java)
         assist.value = when {
@@ -102,6 +110,10 @@ class CosmosInteractionSession(context: Context) : VoiceInteractionSession(conte
 
     /** The first window's structure names the app and carries the text; later windows are ignored. */
     override fun onHandleAssist(state: AssistState) {
+        // A television has no panel to attach a screen to, and no chip to remove it
+        // with. The words the remote hears are the whole of what it sends, so the
+        // structure the system offers here is not read at all.
+        if (controller.platform == "android_tv") return
         if (assist.value != AssistContext.Pending) return
         val structure = state.assistStructure
         val packageName = state.assistData?.getString(Intent.EXTRA_ASSIST_PACKAGE) ?: structure?.activityComponent?.packageName
@@ -132,10 +144,11 @@ class CosmosInteractionSession(context: Context) : VoiceInteractionSession(conte
 
     override fun onBackPressed() { hide() }
 
-    private fun open(intent: Intent) {
-        try { startAssistantActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    private fun open(intent: Intent): Boolean {
+        try { startAssistantActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return true }
         catch (error: ActivityNotFoundException) { Log.w(TAG, "assistant activity unavailable", error) }
         catch (error: SecurityException) { Log.w(TAG, "assistant activity refused", error) }
+        return false
     }
 
     private fun appLabel(packageName: String): String {

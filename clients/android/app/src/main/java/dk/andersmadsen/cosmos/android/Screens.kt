@@ -303,6 +303,65 @@ private fun DisplayCard.answer(): TvStage = when (val body = content) {
 /** The reply a stage carries, for dismissal and for keeping the typed request until it is answered. */
 fun TvStage.replyId(): UUID? = when (this) { is TvStage.Answer -> id; is TvStage.Choices -> id; else -> null }
 
+/**
+ * What the window over other applications is on this television. Cosmos holds a
+ * reply for a screen that reports nothing in front of it, so this is most of
+ * what decides whether a reply lands here or waits for someone to come.
+ */
+enum class TvOverlay {
+    /** The window is up: what Cosmos has to say reaches the screen over whatever is playing. */
+    ATTACHED,
+    /** The owner has not allowed a window over other apps, so nothing can be drawn over a player. */
+    NOT_ALLOWED,
+    /** Allowed, but no window is up, because this television is not joined to the room. */
+    DETACHED,
+}
+
+/**
+ * Whether this television can show a reply right now: the window is up over
+ * whatever is playing and the display is on. A dark screen shows nothing, and
+ * neither does a window the owner never allowed.
+ */
+fun tvCanShow(overlay: TvOverlay, displayOn: Boolean): Boolean = overlay == TvOverlay.ATTACHED && displayOn
+
+/**
+ * The one line about the grant this television needs once, naming the exact
+ * place to give it. It is not an explanation of a refusal: it names a switch
+ * the owner owns, and it is only ever said on Cosmos's own screen.
+ */
+const val TV_OVERLAY_NOT_ALLOWED =
+    "Cosmos cannot show anything over another app. Allow it in Settings > Device Preferences > Apps > Special app access > Display over other apps."
+
+/**
+ * What the window over another app draws. The stage's own framing does not
+ * cross over: no app can shrink another app's video, so the picture stays whole
+ * and only the band and the caption are laid on top of it. [NONE] draws nothing
+ * at all and leaves the picture untouched.
+ */
+enum class TvOverlayFrame {
+    NONE, QUESTION, WORKING, ANSWER, CHOICES;
+
+    /** The nebula band across the bottom, which lies over the lowest eighth of the picture. */
+    val band: Boolean get() = this == QUESTION || this == WORKING
+
+    /** The one frame the remote must reach. Every other frame lets each key through to the player. */
+    val takesKeys: Boolean get() = this == CHOICES
+}
+
+/**
+ * The stage as it can be drawn over another app. [appForeground] is Cosmos's own
+ * screen being in front: the stage is already there with its true inset, so the
+ * window over it draws nothing and the same reply is never shown twice.
+ */
+fun TvStage.overlayFrame(appForeground: Boolean): TvOverlayFrame = when {
+    appForeground -> TvOverlayFrame.NONE
+    this is TvStage.Working -> TvOverlayFrame.WORKING
+    this is TvStage.Transcript -> TvOverlayFrame.QUESTION
+    this is TvStage.Answer -> TvOverlayFrame.ANSWER
+    this is TvStage.Choices -> TvOverlayFrame.CHOICES
+    else -> TvOverlayFrame.NONE
+}
+
 private fun SpeechReply.answer(): TvStage.Answer = TvStage.Answer(actionId, text, text)
 
 /**
@@ -325,6 +384,18 @@ fun SurfaceState.tvStage(request: Ask?, dismissed: UUID? = null): TvStage {
     }
     val answer = card?.answer() ?: speech?.answer()
     return if (answer != null && answer.replyId() != dismissed) answer else TvStage.Idle
+}
+
+/**
+ * True once the question this television asked has nowhere left to go: Cosmos
+ * brought the turn to rest and the answer did not come here. A band over
+ * someone's picture must not stand there waiting for something that is not
+ * coming, and this television is the turn's origin, so it is told.
+ */
+fun SurfaceState.askAbandoned(ask: Ask): Boolean {
+    val admitted = admission?.takeIf { it.turnId != ask.turnBefore } ?: return false
+    val status = status ?: return false
+    return status.turnId == admitted.turnId && !status.running()
 }
 
 /** This device in the owner's own words; the only device name either card uses. */
@@ -364,9 +435,12 @@ fun SurfaceState.taskCard(nowMs: Long, platform: String): TaskCard? {
  * The one line a television is ever allowed under its content, and usually none
  * at all. A command is its state word only — a shared room learns nothing about
  * what the command was — the connection is its own word, and otherwise it is
- * whatever single sentence the panel owes. A connected television with no voice
- * input says so, because that is the whole of what the owner can do here.
- * Never a hint, never an explanation, never two of them joined together.
+ * whatever single sentence the panel owes. A connected television that cannot
+ * draw over another app says so first, because until that is allowed nothing
+ * Cosmos answers reaches the room while something is playing; then a television
+ * with no voice input says so, because that is the whole of what the owner can
+ * do here. Never a hint, never an explanation, never two of them joined
+ * together.
  */
 fun SurfaceState.tvNotice(nowMs: Long, voiceInput: Boolean): String? {
     val task = taskCard(nowMs, DevicePolicy.TV)
@@ -374,7 +448,9 @@ fun SurfaceState.tvNotice(nowMs: Long, voiceInput: Boolean): String? {
     return when (sessionStatus()) {
         SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
         SessionStatus.DISCONNECTED -> SessionStatus.DISCONNECTED.label
-        SessionStatus.CONNECTED -> notice() ?: TV_NO_VOICE_INPUT.takeUnless { voiceInput }
+        SessionStatus.CONNECTED -> notice()
+            ?: TV_OVERLAY_NOT_ALLOWED.takeIf { overlay == TvOverlay.NOT_ALLOWED }
+            ?: TV_NO_VOICE_INPUT.takeUnless { voiceInput }
     }
 }
 

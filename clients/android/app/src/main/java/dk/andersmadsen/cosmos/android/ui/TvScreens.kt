@@ -50,13 +50,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.scale
@@ -93,7 +97,6 @@ import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.tv.material3.darkColorScheme
-import dk.andersmadsen.cosmos.android.Ask
 import dk.andersmadsen.cosmos.android.Choice
 import dk.andersmadsen.cosmos.android.DisplayCard
 import dk.andersmadsen.cosmos.android.Phase
@@ -103,6 +106,7 @@ import dk.andersmadsen.cosmos.android.SessionStatus
 import dk.andersmadsen.cosmos.android.SurfaceState
 import dk.andersmadsen.cosmos.android.TV_TYPED_IN_CENTER
 import dk.andersmadsen.cosmos.android.TvControl
+import dk.andersmadsen.cosmos.android.TvOverlayFrame
 import dk.andersmadsen.cosmos.android.TvStage
 import dk.andersmadsen.cosmos.android.notice
 import dk.andersmadsen.cosmos.android.pageRanges
@@ -115,7 +119,6 @@ import dk.andersmadsen.cosmos.android.tvNotice
 import dk.andersmadsen.cosmos.android.tvStage
 import dk.andersmadsen.cosmos.android.action.DevicePolicy
 import kotlinx.coroutines.delay
-import java.util.UUID
 import kotlin.random.Random
 
 /** TV Material shaped by the TV kit's tokens; never mixed with the phone's mobile Material tree. */
@@ -135,11 +138,17 @@ private fun CosmosTvMaterial(content: @Composable () -> Unit) {
 
 private val BODY = TextStyle(color = CosmosPalette.text, fontSize = 24.sp, lineHeight = 34.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.SansSerif)
 
-/** The owner's frames: the live transcript in light cyan, the reply caption in light mint under a soft shadow. */
-private val TRANSCRIPT = Color(0xFF8FE3F0)
+/** The owner's frames: the question in one pale line, the reply caption in light mint under a soft shadow. */
+private val TRANSCRIPT = Color(0xFFCDE9FF)
 private val CAPTION = Color(0xFF9FE8C8)
 private val CAPTION_SHADOW = Shadow(Color.Black.copy(alpha = .8f), Offset(0f, 3f), blurRadius = 12f)
+
+/** The band's own light, read off the owner's frames: a blue cloud, not the kit's cyan. */
+private val NEBULA = Color(0xFF3AA8E6)
 private val GRAPHITE = Brush.verticalGradient(listOf(Color(0xFF161B1F), Color(0xFF0B0F12)))
+
+/** Options drawn over a player: dark enough to read against, thin enough to keep the picture. */
+private val SCRIM = Brush.verticalGradient(listOf(Color(0xD9080E12), Color(0xF2080E12)))
 
 /** Stage geometry as fractions of the screen height so 1080p and a phone agree: a 12% band, a 40 px corner radius at 1080p. */
 private const val BAND = .12f
@@ -170,25 +179,24 @@ private class TvActionSpec(val label: String, val enabled: Boolean = true, val o
  * stage itself. Everything answers the D-pad; nothing private is ever shown here.
  */
 @Composable
-fun TvScreen(state: SurfaceState, approvalRequested: Boolean, actions: SurfaceActions) {
+fun TvScreen(state: SurfaceState, stage: TvStage, approvalRequested: Boolean, actions: SurfaceActions) {
     when (state.screen()) {
         Screen.SETUP -> TvSetupScreen(state, actions)
         Screen.APPROVE -> TvApproveScreen(state, approvalRequested, actions)
-        Screen.SESSION -> TvSession(state, actions)
+        Screen.SESSION -> TvSession(state, stage, actions)
     }
 }
 
-/** Owns what only this TV knows: the spoken request, the paged view and a reply sent away with Back. */
+/**
+ * Cosmos's own screen on the television: the same stage the window over other
+ * apps draws, with the paged view and the reply sent away with Back, which only
+ * exist where the remote has somewhere to land. The stage itself is owned by the
+ * controller, because a question spoken at the remote must reach both drawings.
+ */
 @Composable
-private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
-    var request by remember { mutableStateOf<Ask?>(null) }
-    var dismissed by remember { mutableStateOf<UUID?>(null) }
+private fun TvSession(state: SurfaceState, stage: TvStage, actions: SurfaceActions) {
     var reading by rememberSaveable { mutableStateOf(false) }
-    val stage = state.tvStage(request, dismissed)
-    LaunchedEffect(stage) {
-        if (stage is TvStage.Idle || stage is TvStage.Answer || stage is TvStage.Choices) request = null
-        if (stage !is TvStage.Answer) reading = false
-    }
+    LaunchedEffect(stage) { if (stage !is TvStage.Answer) reading = false }
     val askLabel = stringResource(R.string.tv_ask)
     val retryLabel = stringResource(R.string.retry)
     val connectLabel = stringResource(R.string.connect)
@@ -199,11 +207,7 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
     val context = LocalContext.current
     val voiceInput = remember(context) { TvVoiceInput.available(context) }
     val speak = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val heard = TvVoiceInput.heard(result.resultCode, result.data)
-        if (heard != null) {
-            request = Ask(heard, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
-            actions.send(heard, "")
-        }
+        TvVoiceInput.heard(result.resultCode, result.data)?.let(actions.ask)
     }
     // The elapsed line of a running command comes from a clock, not a state.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -229,10 +233,7 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
     val notice = state.tvNotice(now, voiceInput)
     // Back closes the paged view, then sends the current reply or transcript away.
     BackHandler(enabled = reading) { reading = false }
-    BackHandler(enabled = !reading && stage !is TvStage.Idle) {
-        dismissed = state.display?.actionId ?: state.speech?.actionId
-        request = null
-    }
+    BackHandler(enabled = !reading && stage !is TvStage.Idle, onBack = actions.dismissReply)
     // Back closes the card. It is not Cancel task, which is the corner action.
     BackHandler(enabled = task != null && !reading, onBack = actions.closeTask)
     if (reading && stage is TvStage.Answer) {
@@ -244,13 +245,97 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
         onMore = { reading = true }, onCommitted = actions.committed,
         content = { focus, out ->
             // Choosing sends the title with no target: Cosmos decides where that reply goes.
-            if (stage is TvStage.Choices) TvChoices(stage, focus, out, enabled = state.canSend, onCommitted = actions.committed) { title ->
-                request = Ask(title, turnBefore = state.admission?.turnId, sendsBefore = state.sends)
-                actions.send(title, "")
-            } else TvReadyContent()
+            if (stage is TvStage.Choices) TvChoices(stage, focus, out, enabled = state.canSend, onCommitted = actions.committed, onChoose = actions.ask)
+            else TvReadyContent()
         },
     )
 }
+
+/**
+ * The same stage over someone else's picture, in a window that draws over other
+ * applications. One thing from the owner's frames cannot cross over: no app may
+ * scale another app's video, so the picture is never inset here. The band
+ * arrives over the untouched picture instead, lying across its lowest eighth,
+ * and the true inset stays for Cosmos's own screen. The answer needs nothing:
+ * a mint subtitle over a full-screen picture is already exactly the frame.
+ *
+ * Nothing else is ever drawn — no notice, no mark, no control, no way to read
+ * on — because over a room's television the reply is the whole of it.
+ */
+@Composable
+fun CosmosTvOverlay(
+    stage: TvStage, frame: TvOverlayFrame, reducedMotion: Boolean,
+    onCommitted: (DisplayCard) -> Unit, onChoose: (String) -> Unit, onDismiss: () -> Unit,
+) {
+    if (frame == TvOverlayFrame.NONE) return
+    val contentFocus = remember { FocusRequester() }
+    BoxWithConstraints(
+        Modifier.fillMaxSize()
+            // While the options hold the remote, Back sends them away and gives it
+            // straight back to the player. No other frame sees a key at all.
+            .onKeyEvent { event ->
+                if (frame.takesKeys && event.type == KeyEventType.KeyUp && event.key == Key.Back) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            },
+    ) {
+        val fullWidth = maxWidth
+        val fullHeight = maxHeight
+        val safeX = fullWidth * .05f
+        val safeY = fullHeight * .05f
+        val bandFont = (fullHeight.value * .036f).sp
+        if (frame.band) {
+            TvBand(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(fullHeight * BAND)) {
+                Box(Modifier.padding(horizontal = safeX), contentAlignment = Alignment.Center) {
+                    when {
+                        stage is TvStage.Transcript -> BasicText(
+                            stage.request, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(color = TRANSCRIPT, fontSize = bandFont, lineHeight = bandFont * 1.25f, fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center),
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                        stage is TvStage.Working -> CosmosWaveform(AssistantState.THINKING, Modifier.size(fullHeight * .085f, fullHeight * .074f), !reducedMotion, Color.White)
+                    }
+                }
+            }
+        }
+        // The subtitle, and nothing under it: reading on needs a key this window
+        // does not take, and the whole answer stays on Cosmos's own screen.
+        if (stage is TvStage.Answer) {
+            TvSubtitle(stage.caption, (fullHeight.value * .04f).sp,
+                Modifier.align(Alignment.BottomCenter).padding(horizontal = safeX, vertical = safeY))
+            val card = stage.card
+            if (card != null) LaunchedEffect(card.actionId) { onCommitted(card) }
+        }
+        // The one frame that genuinely needs the remote, so the window takes focus for
+        // it. The options sit over the picture rather than in place of it: what the
+        // room was watching stays visible behind them, and there is nothing below
+        // them to move down to.
+        if (stage is TvStage.Choices) {
+            TvChoices(stage, contentFocus, exitFocus = null, enabled = true,
+                onCommitted = onCommitted, onChoose = onChoose, ground = SCRIM)
+            LaunchedEffect(stage.id) { runCatching { contentFocus.requestFocus() } }
+        }
+    }
+}
+
+/** The reply as it sits over a picture: mint, bold, centred, two lines at most. */
+@Composable
+private fun TvSubtitle(caption: String, fontSize: TextUnit, modifier: Modifier) {
+    BasicText(
+        caption, modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        maxLines = 2, overflow = TextOverflow.Ellipsis, style = captionStyle(fontSize),
+    )
+}
+
+/** The one type a reply is ever set in on this television: mint, bold, centred, under a soft shadow. */
+private fun captionStyle(fontSize: TextUnit) = TextStyle(
+    color = CAPTION, fontSize = fontSize, lineHeight = fontSize * 1.25f, fontWeight = FontWeight.Bold,
+    fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center, shadow = CAPTION_SHADOW,
+)
 
 /**
  * The television's own voice input, which is the whole of what a microphone can
@@ -264,7 +349,7 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
  * the ordinary public text this installation is already approved to send —
  * never as a Cosmos capture, because no audio was captured here.
  */
-private object TvVoiceInput {
+object TvVoiceInput {
     fun intent(prompt: String): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
@@ -353,12 +438,12 @@ fun CosmosTvStage(
                 // The shape applies before the scale, so the drawn radius is divided out here.
                 shape = RoundedCornerShape(progress * radiusPx / scale)
             }) { content(contentFocus, actionFocus) }
-            TvBand(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bandHeight).graphicsLayer { alpha = progress }, fullWidth) {
+            TvBand(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bandHeight).graphicsLayer { alpha = progress }) {
                 Box(Modifier.padding(horizontal = safeX), contentAlignment = Alignment.Center) {
                     when {
                         stage is TvStage.Transcript -> BasicText(
                             stage.request, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            style = TextStyle(color = TRANSCRIPT, fontSize = bandFont, lineHeight = bandFont * 1.25f, fontWeight = FontWeight.Medium,
+                            style = TextStyle(color = TRANSCRIPT, fontSize = bandFont, lineHeight = bandFont * 1.25f, fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center),
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
@@ -401,11 +486,11 @@ fun CosmosTvStage(
  */
 @Composable
 private fun TvChoices(
-    stage: TvStage.Choices, firstFocus: FocusRequester, exitFocus: FocusRequester, enabled: Boolean,
-    onCommitted: (DisplayCard) -> Unit, onChoose: (String) -> Unit,
+    stage: TvStage.Choices, firstFocus: FocusRequester, exitFocus: FocusRequester?, enabled: Boolean,
+    onCommitted: (DisplayCard) -> Unit, onChoose: (String) -> Unit, ground: Brush = GRAPHITE,
 ) {
     var focused by remember(stage.id) { mutableIntStateOf(0) }
-    BoxWithConstraints(Modifier.fillMaxSize().background(GRAPHITE)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(ground)) {
         val fullHeight = maxHeight
         val safeX = maxWidth * .05f
         val safeY = fullHeight * .05f
@@ -421,7 +506,7 @@ private fun TvChoices(
                 stage.items.forEachIndexed { index, item ->
                     TvChoiceCard(item, index == focused, cardWidth, cardHeight, bodySize, enabled,
                         Modifier.then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
-                            .focusProperties { down = exitFocus }
+                            .focusProperties { if (exitFocus != null) down = exitFocus }
                             .onFocusChanged { if (it.isFocused) focused = index }) { onChoose(item.title) }
                 }
             }
@@ -476,24 +561,46 @@ fun TvReadyContent(modifier: Modifier = Modifier) {
     }
 }
 
-/** The black band under the inset: the kit's nebula scaled and clipped to it, a few dozen static sparkles, and one centred thing. */
+/**
+ * The black band: a blue cloud brightest in the middle, fading to black long
+ * before either end, with a few dozen static specks of light in it and one
+ * centred thing. The kit's nebula supplies the wisps inside that cloud — laid
+ * across the whole band, tinted from the kit's cyan to the owner's blue, and
+ * faded out at both ends so the band never shows an edge of its own.
+ */
 @Composable
-private fun TvBand(modifier: Modifier, width: Dp, centre: @Composable BoxScope.() -> Unit) {
+private fun TvBand(modifier: Modifier, centre: @Composable BoxScope.() -> Unit) {
     val sparkles = remember {
         val seed = Random(20260906)
         List(40) { floatArrayOf(seed.nextFloat(), seed.nextFloat(), .15f + .45f * seed.nextFloat(), .5f + seed.nextFloat()) }
     }
     Box(modifier.background(Color.Black).clipToBounds(), contentAlignment = Alignment.Center) {
+        Image(
+            // Cropped, not squashed: the nebula keeps its own proportion, so the band
+            // shows the wisps across the middle of it rather than a flat colour.
+            painterResource(R.drawable.cosmos_nebula_bottom), contentDescription = null, contentScale = ContentScale.Crop,
+            alpha = .92f, colorFilter = ColorFilter.tint(NEBULA, BlendMode.Modulate),
+            modifier = Modifier.matchParentSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    // A long fade from either end, so the cloud has no edge of its own.
+                    drawRect(
+                        Brush.horizontalGradient(
+                            0f to Color.Transparent, .12f to Color.Transparent, .36f to Color.Black,
+                            .64f to Color.Black, .88f to Color.Transparent, 1f to Color.Transparent,
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                },
+        )
         Canvas(Modifier.matchParentSize()) {
-            // A wide elliptical glow keeps the light in the middle of the band; the texture sits on it.
-            scale(scaleX = 3.2f, scaleY = 1f) {
+            // The core of the cloud, and the specks over the whole width.
+            val middle = Offset(size.width * .5f, size.height * .55f)
+            scale(scaleX = 3.0f, scaleY = 1f, pivot = middle) {
                 val radius = size.height * .95f
-                drawCircle(Brush.radialGradient(listOf(CosmosPalette.glow.copy(alpha = .5f), CosmosPalette.glow.copy(alpha = .14f), Color.Transparent), center, radius), radius, center)
+                drawCircle(Brush.radialGradient(listOf(NEBULA.copy(alpha = .55f), NEBULA.copy(alpha = .16f), Color.Transparent), middle, radius), radius, middle)
             }
-        }
-        Image(painterResource(R.drawable.cosmos_nebula_bottom), contentDescription = null, contentScale = ContentScale.FillBounds,
-            modifier = Modifier.requiredSize(width * .56f, width * .56f / 3f), alpha = .9f)
-        Canvas(Modifier.matchParentSize()) {
             for ((x, y, alpha, radius) in sparkles) drawCircle(Color.White.copy(alpha = alpha), radius * 1.dp.toPx(), Offset(x * size.width, y * size.height))
         }
         centre()
@@ -507,9 +614,7 @@ private fun TvCaption(answer: TvStage.Answer, fontSize: TextUnit, onMore: () -> 
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         BasicText(
             answer.caption, maxLines = 2, overflow = TextOverflow.Ellipsis, onTextLayout = { overflowed = it.hasVisualOverflow },
-            style = TextStyle(color = CAPTION, fontSize = fontSize, lineHeight = fontSize * 1.25f, fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center, shadow = CAPTION_SHADOW),
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            style = captionStyle(fontSize), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
         if (overflowed || answer.full != answer.caption) TvQuietAction(stringResource(R.string.tv_more), onMore, fontSize * .7f)
     }

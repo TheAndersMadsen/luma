@@ -2451,21 +2451,55 @@ On a leanback device the same activity renders the TV stage: the graphite
 ready screen (or a supplied content slot) fills the screen with one faint
 focusable crescent in the corner. Asking from it, or a request in flight,
 shrinks the content into a rounded inset above a black nebula band that
-carries the white waveform while the request is sent and the typed question
+carries the white waveform while the request is sent and the spoken question
 while Cosmos works; the reply returns the content to full screen as a bottom
 subtitle, two lines at most, with More opening a paged full-size view. Cosmos
-retires the reply; Back closes the paged view, then the ask field, then the
-reply. A `choices` card, the film suggestions of the first scenario, fills the
+retires the reply; Back closes the paged view, then the reply. A `choices` card,
+the film suggestions of the first scenario, fills the
 content slot instead: a row of two to eight large cards, each with its number,
 the crescent mark and its title, the focused one lifted inside a glow ring with
-its detail underneath; OK sends that title as the next request with no target,
-and Ask in the band takes the follow-up ("play trailer for number two", typed
-for now). Cards above shared_room never appear on the TV. Set-up and approval
+its detail underneath; OK sends that title as the next request with no target.
+Cards above shared_room never appear on the TV. Set-up and approval
 keep their status line, QR code and one D-pad button on the same graphite stage.
 Debug builds also honour
 `adb shell am start -n dk.andersmadsen.cosmos.android/.MainActivity --es cosmos.layout tv`
 so the TV layout can be checked on a phone in landscape; release builds ignore
-the extra. The Shield itself has not been exercised yet.
+the extra.
+
+**A television is not an app the owner switches to.** The same stage is drawn a
+second time in a window above every other application
+(`TYPE_APPLICATION_OVERLAY`, held by the session foreground service for as long
+as the room is joined), so a reply lands over YouTube, a film or a game without
+leaving what is playing. Two things the stage does on its own screen cannot
+cross over. No app may scale another app's video, so the picture is never inset
+there: the band arrives over the untouched picture and lies across its lowest
+eighth, and the true inset stays for Cosmos's own screen, which the window
+leaves blank while it is in front so nothing is shown twice. And nothing over a
+player takes a key — the window is not focusable and not touchable, so every
+remote key still reaches the player — so the answer carries no way to read on;
+the whole reply stays on Cosmos's own screen. The one exception is a row of
+options, which is a question put to the room: that frame, and only that frame,
+takes focus, draws over a scrim that keeps the picture visible behind it, and
+gives the remote back on Back.
+
+The window is also this television's answer to whether it can show anything at
+all. Cosmos holds a reply for a surface that reports nothing in front of it, so
+the Shield reports itself able to show whenever the window is up and the display
+is on, and not when the screen is off or the owner has not allowed a window over
+other apps. That grant is given once, in
+**Settings > Device Preferences > Apps > Special app access > Display over other
+apps**; until it is, Cosmos says exactly that in the one line its own screen is
+allowed, and every reply waits rather than being lost.
+
+Asking there is speaking. The remote's microphone opens the assistant, which on
+a television draws no panel at all: it hands straight to the television's own
+voice input, which listens behind the system's own indicator, and the words
+become the question in the band. A question stands over the picture only while
+an answer may still come; when Cosmos brings the turn to rest elsewhere, the
+band goes. Debug builds accept the words the recognizer would have returned, so
+the three frames can be driven over a running player without speaking:
+`adb shell am start -a android.intent.action.ASSIST -n dk.andersmadsen.cosmos.android/.AssistActivity --es cosmos.ask 'how many goals has he scored this season'`.
+Release builds ignore the extra.
 
 The check compiles and tests the Rust core, C bridge and Swift shell. The build
 replaces `Cosmos.app` at one stable path under the external build directory and

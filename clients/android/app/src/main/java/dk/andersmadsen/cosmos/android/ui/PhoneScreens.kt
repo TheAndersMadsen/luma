@@ -122,6 +122,10 @@ class SurfaceActions(
     val closeTask: () -> Unit = {},
     /** The one deliberate answer to a ceremony, or Back, which answers nothing. */
     val answerCeremony: (CeremonyEvent) -> Unit = {},
+    /** A question spoken at the television, kept until Cosmos answers it. */
+    val ask: (String) -> Unit = {},
+    /** Back on the television: the reply on screen is sent away. */
+    val dismissReply: () -> Unit = {},
 )
 
 /** The phone: one calm screen per state. The nebula lives under the welcome and empty states only. */

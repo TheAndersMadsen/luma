@@ -32,8 +32,15 @@ import kotlinx.coroutines.launch
 class SessionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var watching: Job? = null
+    private var watchingForeground: Job? = null
     private val manager get() = getSystemService(NotificationManager::class.java)
     private val controller get() = (application as CosmosApplication).controller
+    /**
+     * On a television the room is joined over whatever is playing, so this
+     * service also holds the window that draws there. It exists exactly as long
+     * as the connection does, which is exactly as long as anything could arrive.
+     */
+    private var overlay: TvOverlayWindow? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,14 +60,24 @@ class SessionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (overlay == null && controller.platform == "android_tv") {
+            overlay = TvOverlayWindow(this).also(TvOverlayWindow::open)
+        }
         if (watching == null) watching = scope.launch {
             controller.state.map { it.sessionStatus() to it.awaitsForeground() }.distinctUntilChanged()
                 .collect { (status, waiting) -> manager.notify(NOTIFICATION_ID, notification(status, waiting)) }
+        }
+        // Returning from the television's settings is the moment the owner's grant
+        // can have changed, and this app's own screen coming back is when it hears.
+        if (watchingForeground == null) watchingForeground = scope.launch {
+            controller.appForeground.collect { overlay?.refresh() }
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        overlay?.close()
+        overlay = null
         scope.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         super.onDestroy()

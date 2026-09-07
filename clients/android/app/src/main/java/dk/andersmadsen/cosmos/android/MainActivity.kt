@@ -50,14 +50,19 @@ class MainActivity : ComponentActivity() {
             committed = controller::displayCommitted,
             cancelTask = { controller.cancelTask() }, closeTask = controller::closeTask,
             answerCeremony = controller::answerCeremony,
+            ask = controller::ask, dismissReply = controller::dismissReply,
         )
         val tv = tvLayout()
         setContent {
             val state by controller.state.collectAsStateWithLifecycle()
             LaunchedEffect(state.connectionWanted) { if (state.connectionWanted) requestNotifications() }
             LaunchedEffect(state.screen()) { if (state.screen() != Screen.APPROVE) approvalRequested.value = false }
-            if (tv) CosmosTvTheme { TvScreen(state, approvalRequested.value, actions) }
-            else CosmosTheme { PhoneScreen(state, approvalRequested.value, actions) }
+            if (tv) CosmosTvTheme {
+                // The same stage the window over other apps draws, so a question spoken
+                // at the remote reads the same whichever screen the owner is looking at.
+                val stage by controller.tvStage.collectAsStateWithLifecycle()
+                TvScreen(state, stage, approvalRequested.value, actions)
+            } else CosmosTheme { PhoneScreen(state, approvalRequested.value, actions) }
         }
     }
 
