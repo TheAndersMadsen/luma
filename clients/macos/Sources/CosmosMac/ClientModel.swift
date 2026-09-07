@@ -16,6 +16,7 @@ public final class ClientModel: ObservableObject {
             // A reply that arrived on this Mac says more than the question does.
             if snapshot.display != nil || snapshot.speech != nil { nowLine = nil }
             syncPlayback()
+            syncActions()
             scheduleReconnect()
         }
     }
@@ -44,6 +45,17 @@ public final class ClientModel: ObservableObject {
     @Published public private(set) var accessibilityBlocked = false
     private var connectedNote: Task<Void, Never>?
 
+    /// Where the current task stands on this Mac, in the shared vocabulary.
+    @Published public private(set) var activity: TaskActivity = .none
+    /// The command's own bounded output, shown as the device's bytes and never
+    /// as Cosmos's claim about anything.
+    @Published public private(set) var taskOutput: String?
+    /// The owner's own name for the task the output belongs to.
+    @Published public private(set) var taskLabel: String?
+    /// Ticks once a second while a task or a ceremony is current, so the elapsed
+    /// time and the countdown move without the rest of the panel redrawing.
+    @Published public private(set) var clock: Int64 = ClientModel.nowMs()
+
     private let client: any ClientBridge
     private let contextProvider: any ContextProvider
     private var operation: Task<Void, Never>?
@@ -64,16 +76,48 @@ public final class ClientModel: ObservableObject {
     private var reconnect: Task<Void, Never>?
     private let reconnectDelays: [Duration]
 
+    // MARK: Device actions
+    private let executor = ActionExecutor()
+    private let authenticator: any DeviceOwnerAuthenticating
+    private let policyURL: URL
+    /// This installation's own copy of the owner's policy. Nil means the owner
+    /// has set nothing up for this Mac, which is an ordinary, calm state.
+    private var policy: DevicePolicy?
+    /// The command being carried out here, and the clock its elapsed time and
+    /// its progress messages both read. Starting or finishing one is what turns
+    /// the panel's own clock on and off; no frame from Cosmos marks it.
+    private var running: (task: DeviceTask, entry: CommandEntry, startedAtMs: Int64)? {
+        didSet { syncTicker() }
+    }
+    private var carrying: Task<Void, Never>?
+    private var progressing: Task<Void, Never>?
+    private var ticker: Task<Void, Never>?
+    private var boundTask: UUID?
+    private var shownConfirmation: UUID?
+    private var answeredConfirmation: UUID?
+    private var handledRevoke: UUID?
+    private var stoppedBy: RevokedTask.Reason?
+    /// The actor evidence this Mac actually obtained, per action. A command is
+    /// never spawned without evidence at least as strong as it demands.
+    private var attestations: [UUID: Attestation] = [:]
+
     public init(client: any ClientBridge, initialServerOrigin: String,
                 contextProvider: (any ContextProvider)? = nil,
+                authenticator: (any DeviceOwnerAuthenticating)? = nil,
+                policyURL: URL = DevicePolicy.defaultURL,
                 reconnectDelays: [Duration] = [.seconds(1.5), .seconds(3), .seconds(6), .seconds(12), .seconds(30)]) {
         self.client = client
         self.contextProvider = contextProvider ?? SystemContextProvider()
+        self.authenticator = authenticator ?? DeviceOwnerAuthenticator()
+        self.policyURL = policyURL
         self.reconnectDelays = reconnectDelays
         serverInput = initialServerOrigin
+        policy = DevicePolicy.load(from: policyURL)
         snapshot = client.snapshot
         client.onChange = { [weak self] value in self?.snapshot = value }
     }
+
+    static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     public var canPrepare: Bool {
         !busy && !snapshot.hasPending && !snapshot.pendingOpen && !snapshot.needsReconnect
@@ -124,8 +168,10 @@ public final class ClientModel: ObservableObject {
         return PanelState.status(phase: snapshot.phase, rejoining: rejoining)
     }
     public var waveformPhase: CosmosPhase {
-        // A request that has left but has no status yet is still work in progress.
-        let working = snapshot.status?.state == .working || (nowLine != nil && snapshot.status == nil)
+        // A request that has left but has no status yet is still work in progress,
+        // and so is a command actually running on this Mac.
+        let working = snapshot.status?.state == .working || snapshot.status?.state == .acting
+            || running != nil || (nowLine != nil && snapshot.status == nil)
         return PanelState.waveform(speaking: speaking, busy: busy, rejoining: rejoining,
                                    failed: snapshot.failure != nil, working: working)
     }
@@ -144,9 +190,10 @@ public final class ClientModel: ObservableObject {
     }
     /// A choice list on this Mac that the owner has not answered yet.
     public var awaitingChoice: Bool { choiceCount != nil }
-    /// What the menu-bar glyph shows without the panel being open.
+    /// What the menu-bar glyph shows without the panel being open. A ceremony or
+    /// a task ready for this Mac is exactly what "waiting for you" means.
     public var presence: MenuPresence {
-        let waitingHere = awaitingChoice
+        let waitingHere = awaitingChoice || snapshot.confirmation != nil || activity == .ready
             || (snapshot.status?.state == .waiting && snapshot.status?.surfacePlatform == "macos")
         return PanelState.presence(phase: waveformPhase, waitingHere: waitingHere)
     }
@@ -283,6 +330,7 @@ public final class ClientModel: ObservableObject {
         // Acknowledge the click before the wire does: the typed line is the Now line
         // from this instant, and the send control says it is in flight.
         nowLine = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        clearFinishedTask()
         run { [self] in
             _ = try await client.send(request)
             guard !Task.isCancelled else { return }
@@ -307,6 +355,7 @@ public final class ClientModel: ObservableObject {
         pendingDraft = title
         admissionBeforeSend = snapshot.admission?.turnID
         nowLine = title
+        clearFinishedTask()
         run { [self] in
             _ = try await client.send(request)
             guard !Task.isCancelled else { return }
@@ -490,6 +539,9 @@ public final class ClientModel: ObservableObject {
     /// Report the panel's own visibility. Cosmos routes a shared card here only while
     /// this is true; it never treats the report as occupancy or identity.
     public func setVisible(_ visible: Bool) {
+        // Opening the panel is the moment to re-read the owner's own list, so
+        // tasks added in Center appear here without restarting this Mac.
+        if visible { reloadPolicy() }
         if panelVisible != visible { panelVisible = visible }
         guard wantedVisible != visible else { return }
         wantedVisible = visible
@@ -513,6 +565,324 @@ public final class ClientModel: ObservableObject {
                 acknowledged = card.actionID
             } catch {
                 snapshot = client.snapshot
+            }
+        }
+    }
+
+    // MARK: Device actions
+
+    /// Whether the owner has set anything up for this Mac at all. The panel says
+    /// so plainly rather than leaving an empty capability to be discovered.
+    public var hasTaskPolicy: Bool { !(policy?.isEmpty ?? true) }
+    /// The task card as the panel draws it, or nil when there is nothing to say.
+    public var taskCard: TaskCardModel? { TaskCard.card(activity, now: clock) }
+    /// The ceremony this Mac is the venue for, if one is on screen.
+    public var ceremony: CeremonyCardModel? {
+        guard let request = snapshot.confirmation else { return nil }
+        return TaskCard.ceremony(request, now: clock, blocked: ceremonyBlocked(request))
+    }
+    /// A running command this Mac can stop. Closing the panel does not.
+    public var canCancelTask: Bool { running != nil }
+
+    /// Re-reads the owner's own copy. Cheap, and it means adding a task in
+    /// Center takes effect without restarting this Mac's client.
+    public func reloadPolicy() {
+        policy = DevicePolicy.load(from: policyURL)
+    }
+
+    /// Why this Mac could not ask for the evidence the ceremony needs, if it
+    /// cannot. An unsigned development build reads as a sentence, not a crash.
+    private func ceremonyBlocked(_ request: ConfirmationRequest) -> String? {
+        guard capabilities.actions else { return Words.actionsUnavailable }
+        guard request.attestation == .deviceOwnerAuth else { return nil }
+        return authenticator.unavailable
+    }
+
+    private func syncActions() {
+        syncConfirmation()
+        syncRevocation()
+        syncInvitation()
+        syncTask()
+        syncTicker()
+    }
+
+    private func syncConfirmation() {
+        guard let request = snapshot.confirmation else {
+            if let shown = shownConfirmation, answeredConfirmation != shown, activity == .confirming {
+                // The ceremony went away unanswered: the grant expired, which
+                // denies by fail-safe default.
+                activity = .notDone(happened: Words.ceremonyExpired, next: Words.taskNothingMore)
+            }
+            shownConfirmation = nil
+            return
+        }
+        guard shownConfirmation != request.grantID else { return }
+        shownConfirmation = request.grantID
+        answeredConfirmation = nil
+        reloadPolicy()
+        taskOutput = nil
+        activity = .confirming
+    }
+
+    private func syncRevocation() {
+        guard let revoked = snapshot.revoked, handledRevoke != revoked.actionID else { return }
+        handledRevoke = revoked.actionID
+        guard let running, running.task.actionID == revoked.actionID else {
+            // Nothing had started, so nothing has to stop; the owner still reads
+            // why the task went away.
+            if boundTask == revoked.actionID || shownConfirmation != nil {
+                activity = TaskCard.revoked(revoked.reason, label: snapshot.task?.operation.label ?? Words.appName)
+            }
+            return
+        }
+        stoppedBy = revoked.reason
+        executor.stop()
+    }
+
+    /// A task Cosmos is holding for this Mac until its unlocked foreground
+    /// reports visible. It carries no content, only the fact that one waits.
+    private func syncInvitation() {
+        guard snapshot.task == nil, snapshot.confirmation == nil else { return }
+        if snapshot.waiting?.kind == .task {
+            if activity == .none { activity = .ready }
+        } else if activity == .ready, running == nil {
+            activity = .none
+        }
+    }
+
+    private func syncTask() {
+        guard let task = snapshot.task else { return }
+        guard boundTask != task.actionID else { return }
+        boundTask = task.actionID
+        reloadPolicy()
+        carrying?.cancel()
+        carrying = Task { [weak self] in await self?.carryOut(task) }
+    }
+
+    /// One task, from binding to report. Nothing is acknowledged that this Mac
+    /// will not attempt, and nothing is reported that it did not observe.
+    private func carryOut(_ task: DeviceTask) async {
+        taskOutput = nil
+        taskLabel = task.operation.label
+        // Without the four newer library calls this Mac cannot acknowledge,
+        // report or answer anything. It refuses here, loudly and locally,
+        // instead of running a command it could never account for.
+        guard capabilities.actions else {
+            activity = .notDone(happened: Words.actionsUnavailable, next: Words.actionsUnavailableDetail)
+            return
+        }
+        // A repeat of the same command produces no second effect: the report the
+        // first one produced is sent again and nothing runs.
+        if let earlier = executor.report(forKey: task.idempotencyKey, now: Self.nowMs()) {
+            await send(earlier, for: task)
+            activity = Self.activity(for: earlier, task: task)
+            return
+        }
+        guard let policy else { await refuse(.notPermitted, for: task); return }
+        let planned: PlannedAction
+        switch policy.plan(task.operation) {
+        case .failure(let reason):
+            await refuse(reason, for: task)
+            return
+        case .success(let value):
+            planned = value
+        }
+        // The actor rule, checked before anything is spawned: a command that
+        // changes files needs device-owner authentication obtained at this Mac.
+        if planned.isRun,
+           !ActorAttestation.permitsRun(mutates: task.operation.mutates,
+                                        held: attestations[task.actionID]) {
+            await refuse(.noAttestation, for: task)
+            return
+        }
+        await deliver { [client] in try await client.acknowledgeTask(task) }
+        switch planned {
+        case .run(let entry):
+            await execute(entry, for: task)
+        default:
+            let report = executor.open(planned)
+            await send(report, for: task)
+            activity = Self.activity(for: report, task: task)
+        }
+    }
+
+    private func execute(_ entry: CommandEntry, for task: DeviceTask) async {
+        let startedAt = Self.nowMs()
+        switch executor.start(entry) {
+        case .failure(let reason):
+            await refuse(reason, for: task)
+            return
+        case .success:
+            break
+        }
+        stoppedBy = nil
+        running = (task, entry, startedAt)
+        activity = .working(label: entry.label, startedAtMs: startedAt, cancellable: true)
+        startProgress(for: task, startedAt: startedAt)
+        let report = await executor.finish(entry)
+        progressing?.cancel()
+        progressing = nil
+        running = nil
+        await send(report, for: task)
+        if case .command(_, let exitCode, let durationMs, _, _) = report.evidence {
+            if let reason = stoppedBy {
+                activity = TaskCard.revoked(reason, label: entry.label)
+            } else {
+                activity = TaskCard.finished(label: entry.label, exitCode: exitCode, durationMs: durationMs)
+            }
+        } else {
+            activity = Self.activity(for: report, task: task)
+        }
+        stoppedBy = nil
+        taskOutput = report.output
+    }
+
+    /// Liveness while a command runs: one message every ten seconds, at most
+    /// sixty, off the ordered path. It renews the deadline and claims nothing.
+    private func startProgress(for task: DeviceTask, startedAt: Int64) {
+        progressing?.cancel()
+        progressing = Task { [weak self] in
+            var sequence: UInt32 = 0
+            while !Task.isCancelled, sequence < 60 {
+                try? await Task.sleep(for: .seconds(10))
+                guard let self, !Task.isCancelled, running?.task.actionID == task.actionID else { return }
+                sequence += 1
+                let elapsed = Self.nowMs() - startedAt
+                await deliver { [client = self.client] in
+                    try await client.progress(sequence: sequence, elapsedMs: elapsed, for: task)
+                }
+            }
+        }
+    }
+
+    /// A new request starts a new turn, so a settled task's card makes way for
+    /// it. A running one, or a ceremony, is left exactly where it is.
+    private func clearFinishedTask() {
+        guard running == nil, snapshot.confirmation == nil, activity != .confirming else { return }
+        activity = .none
+        taskOutput = nil
+        taskLabel = nil
+    }
+
+    /// The owner stopping the task at this Mac. It needs no new authority: this
+    /// installation stops its own work and says it stopped it.
+    public func cancelTask() {
+        guard running != nil else { return }
+        stoppedBy = .cancelled
+        executor.stop()
+    }
+
+    /// Answers the ceremony. Only a deliberate press reaches here; dismissing
+    /// the panel answers nothing at all and lets the grant expire.
+    public func answerCeremony(granted: Bool) {
+        guard let request = snapshot.confirmation, answeredConfirmation != request.grantID else { return }
+        guard capabilities.actions else {
+            activity = .notDone(happened: Words.actionsUnavailable, next: Words.actionsUnavailableDetail)
+            return
+        }
+        guard granted else {
+            answeredConfirmation = request.grantID
+            activity = .notDone(happened: Words.ceremonyDeclined, next: Words.taskNothingMore)
+            let client = client
+            Task { [weak self] in
+                await self?.deliver {
+                    try await client.grant(false, attestation: nil, for: request)
+                }
+            }
+            return
+        }
+        Task { [weak self] in await self?.confirm(request) }
+    }
+
+    private func confirm(_ request: ConfirmationRequest) async {
+        if let blocked = ceremonyBlocked(request) {
+            // Nothing is answered: an unanswerable ceremony expires, which denies.
+            activity = .notDone(happened: blocked, next: Words.attestationNext)
+            return
+        }
+        var obtained = Attestation.foregroundTap
+        if request.attestation == .deviceOwnerAuth {
+            let reason = Words.ceremonyQuestion(verb: request.description.verb,
+                                                subject: request.description.subject,
+                                                effect: request.description.effect)
+            guard await authenticator.authenticate(reason: reason) else {
+                activity = .notDone(happened: Words.attestationRefused, next: Words.attestationNext)
+                return
+            }
+            obtained = .deviceOwnerAuth
+        }
+        guard ActorAttestation.satisfies(obtained, required: request.attestation) else {
+            activity = .notDone(happened: Words.attestationUnavailable, next: Words.attestationNext)
+            return
+        }
+        answeredConfirmation = request.grantID
+        attestations[request.actionID] = obtained
+        activity = .ready
+        await deliver { [client] in
+            try await client.grant(true, attestation: obtained, for: request)
+        }
+    }
+
+    private func refuse(_ reason: ActionRefusal, for task: DeviceTask) async {
+        let report = ActionReport.refusal(reason)
+        await send(report, for: task)
+        activity = TaskCard.refusal(reason)
+    }
+
+    /// Exactly one report per task, remembered so a repeat of the same command
+    /// re-sends it rather than doing anything again.
+    private func send(_ report: ActionReport, for task: DeviceTask) async {
+        executor.remember(report, forKey: task.idempotencyKey, now: Self.nowMs())
+        await deliver { [client] in try await client.report(report, for: task) }
+    }
+
+    static func activity(for report: ActionReport, task: DeviceTask) -> TaskActivity {
+        switch report.outcome {
+        case .completed:
+            return .completed(sentence: Words.openedTask(task.operation.label), detail: nil)
+        case .refused:
+            if case .declined(let reason) = report.evidence { return TaskCard.refusal(reason) }
+            return TaskCard.refusal(.notPermitted)
+        case .failed:
+            return .notDone(happened: Words.refusalHappened(.noHandler), next: Words.refusalNext(.noHandler))
+        case .cancelled:
+            return .notDone(happened: Words.taskStopped(task.operation.label), next: Words.taskStoppedByYou)
+        case .unknown:
+            return .cannotConfirm
+        }
+    }
+
+    /// One second at a time, only while something is actually moving. A quiet
+    /// panel never redraws.
+    private func syncTicker() {
+        let wanted = running != nil || snapshot.confirmation != nil
+        guard wanted else { ticker?.cancel(); ticker = nil; return }
+        guard ticker == nil else { return }
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                clock = Self.nowMs()
+                if running == nil, snapshot.confirmation == nil { ticker = nil; return }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    /// Sends one control, waiting out any operation the panel started. A
+    /// refusal, a report or a grant is never dropped because something else was
+    /// in flight.
+    private func deliver(_ body: @escaping @MainActor () async throws -> Void) async {
+        for _ in 0..<100 {
+            while busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
+            guard !Task.isCancelled else { return }
+            do {
+                try await body()
+                return
+            } catch ClientFailure.busy {
+                try? await Task.sleep(for: .milliseconds(100))
+            } catch {
+                snapshot = client.snapshot
+                return
             }
         }
     }

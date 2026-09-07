@@ -1,5 +1,9 @@
 package dk.andersmadsen.cosmos.android
 
+import dk.andersmadsen.cosmos.android.action.DevicePolicy
+import dk.andersmadsen.cosmos.android.action.TaskCard
+import dk.andersmadsen.cosmos.android.action.TaskCards
+import dk.andersmadsen.cosmos.android.action.TaskStage
 import dk.andersmadsen.cosmos.android.ui.AssistantState
 import java.util.UUID
 
@@ -48,8 +52,15 @@ fun TurnStatus.line(): String {
     return when (state) {
         "working" -> "Working"
         "waiting" -> if (device != null) "Waiting for $device" else "Waiting for a device"
+        // A command is on screen at the device that would carry it out, or
+        // that device is carrying it out. Neither claims it happened.
+        "confirming" -> if (device != null) "Waiting for you on $device" else "Waiting for you"
+        "acting" -> "Working"
         "shown" -> "Shown on ${device ?: "a device"}"
         "spoken" -> "Spoken on ${device ?: "a device"}"
+        "done" -> "Completed"
+        // The origin is told a device did not do it, and never why.
+        "refused" -> "Not done"
         "nowhere" -> "Nowhere to show it"
         else -> "Cannot confirm"
     }
@@ -83,13 +94,13 @@ enum class Tone { LIVE, ACTIVE, DONE, QUIET }
 data class Presence(val line: String, val detail: String?, val tone: Tone, val settled: Boolean)
 
 private fun TurnStatus.tone(): Tone = when (state) {
-    "working", "waiting" -> Tone.ACTIVE
-    "shown", "spoken" -> Tone.DONE
+    "working", "waiting", "confirming", "acting" -> Tone.ACTIVE
+    "shown", "spoken", "done" -> Tone.DONE
     else -> Tone.QUIET
 }
 
 /** True while the turn is still moving, so the line stays lit and the ask bar stays busy. */
-fun TurnStatus.running(): Boolean = state == "working" || state == "waiting"
+fun TurnStatus.running(): Boolean = state in setOf("working", "waiting", "confirming", "acting")
 
 /**
  * Presence for the status line. While [ask] is in flight the line is about that
@@ -239,6 +250,35 @@ fun SurfaceState.tvStage(request: Ask?, dismissed: UUID? = null): TvStage {
     }
     val answer = card?.answer() ?: speech?.answer()
     return if (answer != null && answer.replyId() != dismissed) answer else TvStage.Idle
+}
+
+/** This device in the owner's own words; the only device name either card uses. */
+fun deviceWord(platform: String): String = if (platform == DevicePolicy.TV) "this TV" else "this phone"
+
+/**
+ * Where the command this device was asked to carry out stands. A ceremony on
+ * screen comes first, then the command while it runs, then the one thing this
+ * device is allowed to say about it: what it observed.
+ */
+fun SurfaceState.taskStage(nowMs: Long): TaskStage? {
+    val ceremony = ceremony
+    if (ceremony != null && ceremony.showing) return TaskStage.Confirming(ceremony.confirmation.description)
+    val task = task ?: return null
+    val report = taskReport ?: return TaskStage.Working(task.operation, nowMs - taskStartedAtMs)
+    return TaskStage.Reported(task.operation, report)
+}
+
+/**
+ * The task card. A television never explains a refusal, so it has no card for
+ * one at all: the screen simply returns to its quiet state, and a refusal, a
+ * failure and a privacy suppression stay indistinguishable in a shared room.
+ */
+fun SurfaceState.taskCard(nowMs: Long, platform: String): TaskCard? {
+    if (taskClosed) return null
+    // A television renders nothing above the shared class, command or card.
+    if (platform == DevicePolicy.TV && task?.private == true) return null
+    val stage = taskStage(nowMs) ?: return null
+    return TaskCards.card(stage, deviceWord(platform), explain = platform != DevicePolicy.TV)
 }
 
 /** Snapshots whose message is worth a quiet notice; the pill and waveform already convey the steady states. */

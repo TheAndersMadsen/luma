@@ -119,6 +119,7 @@ private let writeJournal: CosmosSurfaceWrite = { pointer, bytes, length in
 enum NativeCommand: String, Sendable {
     case connect, sendText = "send_text", retryPending = "retry_pending", cancel
     case setVisible = "set_visible", acknowledge, acknowledgeSpeech = "acknowledge_speech", disconnect
+    case acknowledgeTask = "acknowledge_task", report, progress, grant
 
     /// The operation name the library reports for this command's completion. A
     /// request with a destination or attached text is its own operation.
@@ -142,10 +143,27 @@ enum OptionalSymbols {
         UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
     ) -> Int32
 
+    typealias Handle = @convention(c) (OpaquePointer?) -> Int32
+    typealias Report = @convention(c) (OpaquePointer?, UnsafePointer<UInt8>?, Int) -> Int32
+    typealias Progress = @convention(c) (OpaquePointer?, UInt32, Int64) -> Int32
+    typealias Grant = @convention(c) (OpaquePointer?, Int32, UnsafePointer<UInt8>?, Int) -> Int32
+
     static let sendTextTo: SendTextTo? = resolve("cosmos_surface_send_text_to")
     static let sendTextWithContext: SendTextWithContext? = resolve("cosmos_surface_send_text_with_context")
+    // The four device-action calls are looked up the same way and only ever
+    // called through these pointers, so a library without them leaves the
+    // feature reported as unavailable instead of failing to bind at first use.
+    static let acknowledgeTask: Handle? = resolve("cosmos_surface_acknowledge_task")
+    static let report: Report? = resolve("cosmos_surface_report")
+    static let progress: Progress? = resolve("cosmos_surface_progress")
+    static let grant: Grant? = resolve("cosmos_surface_grant")
 
-    static let capabilities = ClientCapabilities(targets: sendTextTo != nil, context: sendTextWithContext != nil)
+    static let capabilities = ClientCapabilities(
+        targets: sendTextTo != nil, context: sendTextWithContext != nil,
+        // All four, or none: this Mac must be able to acknowledge, report,
+        // stay live and answer a ceremony before it carries anything out.
+        actions: acknowledgeTask != nil && report != nil && progress != nil && grant != nil
+    )
 
     private static func resolve<Function>(_ name: String) -> Function? {
         // RTLD_DEFAULT: the shared library is linked into this executable, so its
@@ -206,10 +224,39 @@ actor NativeWorker {
         return descriptor
     }
 
-    func enqueue(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil) throws {
+    func enqueue(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil,
+                 report: Data? = nil, progress: (sequence: UInt32, elapsedMs: Int64)? = nil,
+                 grant: (granted: Bool, attestation: Attestation?)? = nil) throws {
         guard let handle else { throw ClientFailure.connectionUnavailable }
         let status: Int32
         switch command {
+        case .acknowledgeTask:
+            guard let call = OptionalSymbols.acknowledgeTask else { throw ClientFailure.featureUnavailable }
+            status = call(handle)
+        case .report:
+            guard let call = OptionalSymbols.report else { throw ClientFailure.featureUnavailable }
+            guard let report, !report.isEmpty, report.count <= 16 * 1024 else { throw ClientFailure.invalidText }
+            status = report.withUnsafeBytes { bytes in
+                call(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+        case .progress:
+            guard let call = OptionalSymbols.progress else { throw ClientFailure.featureUnavailable }
+            guard let progress, (1...60).contains(progress.sequence), progress.elapsedMs >= 0 else {
+                throw ClientFailure.invalidText
+            }
+            status = call(handle, progress.sequence, progress.elapsedMs)
+        case .grant:
+            guard let call = OptionalSymbols.grant else { throw ClientFailure.featureUnavailable }
+            guard let grant else { throw ClientFailure.invalidResponse }
+            // Granting without the evidence the ceremony asked for is not an
+            // answer; declining carries none by definition.
+            guard !grant.granted || grant.attestation != nil else { throw ClientFailure.invalidResponse }
+            let attestation = Data((grant.attestation?.rawValue ?? "").utf8)
+            let length = attestation.count
+            status = (length == 0 ? Data([0]) : attestation).withUnsafeBytes { bytes in
+                call(handle, grant.granted ? 1 : 0,
+                     bytes.bindMemory(to: UInt8.self).baseAddress, length)
+            }
         case .connect: status = cosmos_surface_connect(handle)
         case .setVisible:
             guard let visible else { throw ClientFailure.invalidResponse }

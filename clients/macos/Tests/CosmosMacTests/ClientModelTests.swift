@@ -45,7 +45,7 @@ private final class ResultGate<Value> {
 final class MockClientBridge: ClientBridge {
     var snapshot: ClientSnapshot
     var onChange: ((ClientSnapshot) -> Void)?
-    var capabilities = ClientCapabilities(targets: true, context: true)
+    var capabilities = ClientCapabilities(targets: true, context: true, actions: true)
     let descriptor: PublicDescriptor
     var prepareServers: [ServerEndpoint] = []
     var connectCalls = 0
@@ -57,6 +57,10 @@ final class MockClientBridge: ClientBridge {
     var acknowledgedCards: [DisplayCard] = []
     var audioRequests: [SpeechReply] = []
     var acknowledgedSpeech: [SpeechReply] = []
+    var acknowledgedTasks: [DeviceTask] = []
+    var reports: [(ActionReport, DeviceTask)] = []
+    var progressMessages: [(UInt32, Int64)] = []
+    var grants: [(Bool, Attestation?, ConfirmationRequest)] = []
     var speechAudioHandler: ((SpeechReply) async throws -> Data)?
     var disconnectCalls = 0
     var prepareHandler: ((ServerEndpoint) async throws -> PublicDescriptor)?
@@ -118,6 +122,23 @@ final class MockClientBridge: ClientBridge {
     func acknowledgeSpeech(_ reply: SpeechReply) async throws {
         guard snapshot.speech == reply else { throw ClientFailure.connectionUnavailable }
         acknowledgedSpeech.append(reply)
+    }
+    func acknowledgeTask(_ task: DeviceTask) async throws {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        guard snapshot.task?.actionID == task.actionID else { throw ClientFailure.connectionUnavailable }
+        acknowledgedTasks.append(task)
+    }
+    func report(_ report: ActionReport, for task: DeviceTask) async throws {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        reports.append((report, task))
+    }
+    func progress(sequence: UInt32, elapsedMs: Int64, for task: DeviceTask) async throws {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        progressMessages.append((sequence, elapsedMs))
+    }
+    func grant(_ granted: Bool, attestation: Attestation?, for confirmation: ConfirmationRequest) async throws {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        grants.append((granted, attestation, confirmation))
     }
     func disconnect() async {
         disconnectCalls += 1

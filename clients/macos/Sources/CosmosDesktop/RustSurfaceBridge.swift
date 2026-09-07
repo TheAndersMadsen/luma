@@ -154,6 +154,44 @@ final class RustSurfaceBridge: ClientBridge {
         _ = try await perform(.acknowledgeSpeech)
     }
 
+    func acknowledgeTask(_ task: DeviceTask) async throws {
+        try requireCurrent(task)
+        _ = try await perform(.acknowledgeTask)
+    }
+
+    func report(_ report: ActionReport, for task: DeviceTask) async throws {
+        try requireCurrent(task)
+        _ = try await perform(.report, report: report.encoded())
+    }
+
+    func progress(sequence: UInt32, elapsedMs: Int64, for task: DeviceTask) async throws {
+        try requireCurrent(task)
+        _ = try await perform(.progress, progress: (sequence, elapsedMs))
+    }
+
+    func grant(_ granted: Bool, attestation: Attestation?, for confirmation: ConfirmationRequest) async throws {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        guard snapshot.phase == .connected, !snapshot.needsReconnect else {
+            throw ClientFailure.connectionUnavailable
+        }
+        guard !snapshot.hasPending, !snapshot.pendingOpen else { throw ClientFailure.uncertainRequest }
+        guard snapshot.confirmation?.grantID == confirmation.grantID else {
+            throw ClientFailure.connectionUnavailable
+        }
+        _ = try await perform(.grant, grant: (granted, attestation))
+    }
+
+    /// Every task control names the task Cosmos currently has here. A control
+    /// for anything else is not sent at all.
+    private func requireCurrent(_ task: DeviceTask) throws {
+        guard capabilities.actions else { throw ClientFailure.featureUnavailable }
+        guard snapshot.phase == .connected, !snapshot.needsReconnect else {
+            throw ClientFailure.connectionUnavailable
+        }
+        guard !snapshot.hasPending, !snapshot.pendingOpen else { throw ClientFailure.uncertainRequest }
+        guard snapshot.task?.actionID == task.actionID else { throw ClientFailure.connectionUnavailable }
+    }
+
     func disconnect() async {
         guard !closing, !disconnecting else { return }
         disconnecting = true
@@ -186,6 +224,8 @@ final class RustSurfaceBridge: ClientBridge {
     }
 
     private func perform(_ command: NativeCommand, request: TextRequest? = nil, visible: Bool? = nil,
+                         report: Data? = nil, progress: (sequence: UInt32, elapsedMs: Int64)? = nil,
+                         grant: (granted: Bool, attestation: Attestation?)? = nil,
                          allowDisconnect: Bool = false) async throws -> NativeEvent {
         guard !busy, !closing, !disconnecting || allowDisconnect else { throw ClientFailure.busy }
         busy = true
@@ -195,7 +235,8 @@ final class RustSurfaceBridge: ClientBridge {
         snapshot.failure = nil
         defer { finishOperation() }
         do {
-            try await worker.enqueue(command, request: request, visible: visible)
+            try await worker.enqueue(command, request: request, visible: visible,
+                                     report: report, progress: progress, grant: grant)
             return try await awaitOutcome()
         } catch {
             record(error)
@@ -269,7 +310,10 @@ final class RustSurfaceBridge: ClientBridge {
             display: event.connected ? event.display : nil,
             speech: event.connected ? try event.speech?.verified() : nil,
             waiting: event.connected ? try event.invitation?.verified() : nil,
-            status: event.connected ? event.status : nil
+            status: event.connected ? event.status : nil,
+            task: event.connected ? event.task : nil,
+            confirmation: event.connected ? event.confirmation : nil,
+            revoked: event.connected ? event.revoked : nil
         )
         if event.operation == expectedOperation { completion = event }
     }

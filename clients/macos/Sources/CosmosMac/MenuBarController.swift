@@ -175,10 +175,7 @@ public final class MenuBarController: NSObject {
         window.level = .floating
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.onEscape = { [weak self] in self?.hidePanel() }
-        window.onCancelTask = { [weak self] in
-            guard let self else { return }
-            if model.canCancel { model.cancel() } else { hidePanel() }
-        }
+        window.onCancelTask = { [weak self] in self?.cancelTask() }
         window.onKeyEquivalent = { [weak self] event in self?.handleKeyEquivalent(event) ?? false }
         let hosting = NSHostingView(rootView: AssistantPanel(model: model, commands: commands,
                                                              onClose: { [weak self] in self?.hidePanel() }))
@@ -280,13 +277,20 @@ public final class MenuBarController: NSObject {
                                                shift: flags.contains(.shift),
                                                option: flags.contains(.option),
                                                control: flags.contains(.control),
-                                               choiceCount: model.choiceCount) else { return false }
+                                               choiceCount: model.choiceCount,
+                                               ceremony: model.ceremony != nil) else { return false }
         switch command {
         case .send:
             guard model.canSend else { return false }
             model.send()
+        case .confirmTask:
+            guard model.ceremony?.canConfirm == true else { return false }
+            model.answerCeremony(granted: true)
+        case .declineTask:
+            guard model.ceremony != nil else { return false }
+            model.answerCeremony(granted: false)
         case .cancelTask:
-            if model.canCancel { model.cancel() } else { hidePanel() }
+            cancelTask()
         case .destinations:
             commands.destinationsShown.toggle()
         case .close:
@@ -299,6 +303,19 @@ public final class MenuBarController: NSObject {
             return model.choose(index)
         }
         return true
+    }
+
+    /// Command-period stops the command running on this Mac when there is one.
+    /// Otherwise it is the turn's own cancel, and with neither it closes the
+    /// panel — which is not cancelling anything.
+    private func cancelTask() {
+        if model.canCancelTask {
+            model.cancelTask()
+        } else if model.canCancel {
+            model.cancel()
+        } else {
+            hidePanel()
+        }
     }
 
     /// The panel counts as a visible display only while it is on screen and not

@@ -59,6 +59,14 @@
     <string name="view_on_maps">View on Google Maps</string>
     <string name="maps_credit">Google Maps</string>
 
+    <!-- Confirming a command at the device that would carry it out -->
+    <string name="confirm_question">%1$s %2$s on %3$s?</string>
+    <string name="confirm_class_private">This stays on this device.</string>
+    <string name="confirm_class_shared">Anyone in the room can see this happen.</string>
+    <string name="confirm_allow">Confirm</string>
+    <string name="confirm_decline">Decline</string>
+    <string name="confirm_countdown">%1$d s to answer</string>
+
     <!-- The connection notification -->
     <string name="session_channel">Connection</string>
     <string name="session_channel_body">Shows while this phone stays connected to Cosmos.</string>

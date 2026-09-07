@@ -216,9 +216,91 @@ command!(
     Command::AcknowledgeSpeech
 );
 command!(
+    Java_dk_andersmadsen_cosmos_android_NativeSurface_acknowledgeTask,
+    Command::AcknowledgeTask
+);
+command!(
     Java_dk_andersmadsen_cosmos_android_NativeSurface_disconnect,
     Command::Disconnect
 );
+
+/// Say what this device observed, once, after it observed it. `report` is the
+/// bounded UTF-8 JSON of the report shape; reporting a completion for an
+/// effect the platform did not observe is a false outcome claim, which the
+/// shared client's own validation refuses.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_report(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    report: JByteArray,
+) -> jint {
+    let bytes = match required_bytes(&env, &report, 16 * 1024) {
+        Ok(bytes) => bytes,
+        Err(code) => return code,
+    };
+    match cosmos_surface_client::Report::parse(&bytes) {
+        Ok(report) => enqueue(handle, Command::Report(report)),
+        Err(_) => INVALID_ARGUMENT,
+    }
+}
+
+/// Say the current command is still running. Unsequenced and idempotent: it
+/// renews the deadline and never claims an outcome.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_progress(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    sequence: jint,
+    elapsed_ms: jlong,
+) -> jint {
+    if sequence < 0 {
+        return INVALID_ARGUMENT;
+    }
+    enqueue(
+        handle,
+        Command::Progress {
+            sequence: sequence as u64,
+            elapsed_ms,
+        },
+    )
+}
+
+/// Answer the current ceremony with the actor evidence this device actually
+/// obtained. Granting without that evidence is not an answer, so it is refused
+/// here before anything is sent.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_grant(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    granted: jboolean,
+    attestation: JByteArray,
+) -> jint {
+    let attestation = match optional_bytes(&env, &attestation, 64) {
+        Ok(None) => None,
+        Err(code) => return code,
+        Ok(Some(bytes)) => match std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(cosmos_surface_client::Attestation::parse)
+        {
+            Some(value) => Some(value),
+            None => return INVALID_ARGUMENT,
+        },
+    };
+    let granted = granted != 0;
+    if granted && attestation.is_none() {
+        return INVALID_ARGUMENT;
+    }
+    enqueue(
+        handle,
+        Command::Grant {
+            granted,
+            attestation,
+        },
+    )
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dk_andersmadsen_cosmos_android_NativeSurface_setVisible(

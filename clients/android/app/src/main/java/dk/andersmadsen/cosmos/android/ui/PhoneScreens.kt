@@ -76,8 +76,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.BackHandler
 import dk.andersmadsen.cosmos.android.Ask
 import dk.andersmadsen.cosmos.android.Descriptor
+import dk.andersmadsen.cosmos.android.action.Ceremony
+import dk.andersmadsen.cosmos.android.action.CeremonyEvent
+import dk.andersmadsen.cosmos.android.action.DevicePolicy
+import dk.andersmadsen.cosmos.android.action.TaskCard
+import dk.andersmadsen.cosmos.android.deviceWord
+import dk.andersmadsen.cosmos.android.taskCard
 import dk.andersmadsen.cosmos.android.Destination
 import dk.andersmadsen.cosmos.android.DisplayCard
 import dk.andersmadsen.cosmos.android.Fingerprint
@@ -113,6 +120,12 @@ class SurfaceActions(
     val share: (String) -> Unit,
     val chooseAssistant: () -> Unit,
     val committed: (DisplayCard) -> Unit,
+    /** The explicit Cancel task on a running command; closing a panel is never this. */
+    val cancelTask: () -> Unit = {},
+    /** Hide the task card. The command, if it is still running, carries on. */
+    val closeTask: () -> Unit = {},
+    /** The one deliberate answer to a ceremony, or Back, which answers nothing. */
+    val answerCeremony: (CeremonyEvent) -> Unit = {},
 )
 
 /** The phone: one calm screen per state. The nebula lives under the welcome and empty states only. */
@@ -294,6 +307,11 @@ private fun SessionScreen(state: SurfaceState, actions: SurfaceActions) {
                 }
             }
         }
+        // A ceremony is its own card, and it replaces the task card while it
+        // is up: one question on screen, two equal answers, one countdown.
+        val ceremony = state.ceremony
+        if (ceremony != null && ceremony.showing) CeremonySheet(ceremony, actions)
+        else TaskPanel(state, actions)
         Notice(state, actions)
         if (state.phase == Phase.CONNECTED) AskBar(
             draft = draft, onDraft = { draft = it }, canSend = state.canSend,
@@ -374,6 +392,106 @@ private fun SpeakingLine(state: SurfaceState) {
         Text(
             if (state.speaking) stringResource(R.string.speaking) else stringResource(R.string.spoken_reply),
             color = CosmosPalette.secondary, fontSize = 13.sp, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
+}
+
+/**
+ * A running command: the state word, one sentence about what is happening, the
+ * elapsed time from a shared clock, and Cancel task. Close hides this card and
+ * the command carries on, which is why the two are different controls.
+ */
+@Composable
+private fun TaskPanel(state: SurfaceState, actions: SurfaceActions) {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.task?.actionId, state.taskReport) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    val card = state.taskCard(now, DevicePolicy.PHONE) ?: return
+    TaskCardView(card, actions)
+}
+
+@Composable
+private fun TaskCardView(card: TaskCard, actions: SurfaceActions) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 12.dp).animateContentSize(calmly(200))
+            .background(CosmosPalette.card, RoundedCornerShape(16.dp))
+            .border(1.dp, CosmosPalette.cardBorder, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                card.state, color = CosmosPalette.primary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            Spacer(Modifier.weight(1f))
+            // Reserved either way, so the line does not jump when it appears.
+            Text(card.elapsed ?: "", color = CosmosPalette.secondary, fontSize = 14.sp)
+        }
+        card.sentence?.let { Text(it, color = CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp) }
+        card.next?.let { Text(it, color = CosmosPalette.secondary, fontSize = 14.sp, lineHeight = 19.sp) }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (card.canCancel) TextButton(actions.cancelTask) { Text(stringResource(R.string.cancel_request)) }
+            TextButton(actions.closeTask) { Text(stringResource(R.string.close_assistant)) }
+        }
+    }
+}
+
+/**
+ * The ceremony. The owner's own words for the effect, two answers of exactly
+ * the same weight, and a countdown that is visible while it runs. Back closes
+ * the card and answers nothing at all, so the permission expires unanswered,
+ * which denies.
+ */
+@Composable
+private fun CeremonySheet(ceremony: Ceremony, actions: SurfaceActions) {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(ceremony.confirmation.grantId) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(250)
+        }
+    }
+    BackHandler(enabled = true) { actions.answerCeremony(CeremonyEvent.Back) }
+    val description = ceremony.confirmation.description
+    val verb = description.verb.replaceFirstChar { it.uppercase() }
+    Column(
+        Modifier.fillMaxWidth().padding(top = 12.dp)
+            .background(CosmosPalette.surface, RoundedCornerShape(20.dp))
+            .border(1.dp, CosmosPalette.border, RoundedCornerShape(20.dp))
+            .padding(horizontal = 18.dp, vertical = 16.dp)
+            .semantics(mergeDescendants = false) { liveRegion = LiveRegionMode.Assertive },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            stringResource(R.string.confirm_question, verb, description.subject, deviceWord(DevicePolicy.PHONE)),
+            color = CosmosPalette.primary, fontSize = 17.sp, lineHeight = 23.sp, fontWeight = FontWeight.SemiBold,
+        )
+        Text(description.effect, color = CosmosPalette.secondary, fontSize = 15.sp, lineHeight = 21.sp)
+        Text(
+            stringResource(if (description.privacy == "private" || description.privacy == "near_user")
+                R.string.confirm_class_private else R.string.confirm_class_shared),
+            color = CosmosPalette.secondary, fontSize = 13.sp,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Two answers, one weight: declining is never the quieter control.
+            OutlinedButton({ actions.answerCeremony(CeremonyEvent.Decline) }, Modifier.weight(1f).height(52.dp),
+                shape = RoundedCornerShape(16.dp)) {
+                Text(stringResource(R.string.confirm_decline), fontSize = 16.sp)
+            }
+            OutlinedButton({ actions.answerCeremony(CeremonyEvent.Confirm) }, Modifier.weight(1f).height(52.dp),
+                shape = RoundedCornerShape(16.dp)) {
+                Text(stringResource(R.string.confirm_allow), fontSize = 16.sp)
+            }
+        }
+        Text(
+            stringResource(R.string.confirm_countdown, ceremony.secondsLeft(now)),
+            color = CosmosPalette.secondary, fontSize = 13.sp,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
     }
 }

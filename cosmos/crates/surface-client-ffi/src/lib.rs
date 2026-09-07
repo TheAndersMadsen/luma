@@ -645,6 +645,12 @@ async fn run(
     let mut speeches = client.speech_changes();
     let mut invitations = client.invitation_changes();
     let mut statuses = client.status_changes();
+    // A command has three seconds to be acknowledged and its own report
+    // budget after that, so an `act` or a `confirm` wakes the platform at
+    // once instead of waiting for the next heartbeat. A revoke clears the
+    // task or the confirmation it names, which is the same wake.
+    let mut tasks = client.task_changes();
+    let mut confirmations = client.confirmation_changes();
     // The platform's last requested foreground state. It is re-reported after
     // every new connection because visibility lives on the connection.
     let mut wanted_visible = false;
@@ -655,6 +661,8 @@ async fn run(
         Speech,
         Invitation,
         Status,
+        Task,
+        Confirmation,
     }
     let publish_speech = |client: &Client| {
         *speech_audio.lock().unwrap_or_else(|e| e.into_inner()) = client
@@ -672,6 +680,8 @@ async fn run(
             changed = speeches.changed() => { if changed.is_err() { break; } Wake::Speech }
             changed = invitations.changed() => { if changed.is_err() { break; } Wake::Invitation }
             changed = statuses.changed() => { if changed.is_err() { break; } Wake::Status }
+            changed = tasks.changed() => { if changed.is_err() { break; } Wake::Task }
+            changed = confirmations.changed() => { if changed.is_err() { break; } Wake::Confirmation }
             _ = heartbeat.tick() => Wake::Heartbeat,
             command = commands.recv() => match command { Some(command) => Wake::Command(command), None => break },
         };
@@ -704,6 +714,17 @@ async fn run(
                 push(
                     &events,
                     snapshot(Some(&client), &descriptor, "status", None),
+                );
+                continue;
+            }
+            Wake::Task => {
+                push(&events, snapshot(Some(&client), &descriptor, "task", None));
+                continue;
+            }
+            Wake::Confirmation => {
+                push(
+                    &events,
+                    snapshot(Some(&client), &descriptor, "confirmation", None),
                 );
                 continue;
             }

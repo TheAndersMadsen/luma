@@ -140,7 +140,7 @@ final class RequestContextTests: XCTestCase {
         }
         // The headline always comes from the shared vocabulary the other clients use.
         let vocabulary = [Words.working, Words.waitingForYou, Words.waitingForDevice,
-                          Words.completed, Words.cannotConfirm, Words.nowhere]
+                          Words.completed, Words.cannotConfirm, Words.nowhere, Words.notDone]
         for state in TurnState.allCases {
             for platform in [nil, "macos", "android", "android_tv", "linux", "browser", "pin", "watch"] {
                 XCTAssertTrue(vocabulary.contains(try line(state, platform).title),

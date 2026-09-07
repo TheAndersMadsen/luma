@@ -59,6 +59,7 @@ public struct AssistantPanel: View {
         .tint(CosmosTokens.accent)
         .animation(reduceMotion ? nil : .easeOut(duration: CosmosTokens.motionDuration), value: model.nowLine)
         .animation(reduceMotion ? nil : .easeOut(duration: CosmosTokens.motionDuration), value: model.connectionNote)
+        .animation(reduceMotion ? nil : .easeOut(duration: CosmosTokens.motionDuration), value: model.taskCard)
         .onChange(of: model.descriptor) { _, descriptor in if descriptor != nil { editingServer = false } }
         .onChange(of: model.panelVisible) { _, visible in if visible { askFocused = model.stage == .connected } }
         .onChange(of: stage) { _, value in if value == .connected, model.panelVisible { askFocused = true } }
@@ -83,6 +84,7 @@ public struct AssistantPanel: View {
     private var isEmptyState: Bool {
         model.display == nil && model.speech == nil && model.statusLine == nil
             && model.nowLine == nil && !model.sending
+            && model.ceremony == nil && model.taskCard == nil
     }
 
     // MARK: Header
@@ -282,13 +284,35 @@ public struct AssistantPanel: View {
 
     private var connected: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isEmptyState { emptyState } else { responseCard }
+            // A ceremony is the most urgent thing on this screen, and the task it
+            // belongs to sits under it. Neither is affected by closing the panel.
+            if let ceremony = model.ceremony, let request = model.snapshot.confirmation {
+                ConfirmCardView(
+                    card: ceremony,
+                    totalSeconds: Int(TaskCard.grantMs / 1000),
+                    remainingSeconds: TaskCard.remainingSeconds(request.expiresAtMs, now: model.clock),
+                    confirm: { model.answerCeremony(granted: true) },
+                    decline: { model.answerCeremony(granted: false) }
+                )
+                .transition(.opacity)
+            } else if let card = model.taskCard {
+                TaskCardView(card: card, output: model.taskOutput,
+                             outputTitle: Words.outputFrom(model.taskLabel ?? Words.appName),
+                             cancel: model.cancelTask)
+                    .transition(.opacity)
+            }
+            if isEmptyState { emptyState } else if !(model.display == nil && model.speech == nil
+                && model.statusLine == nil && model.nowLine == nil && !model.sending) {
+                responseCard
+            }
             // A quiet, empty panel offers only the ask field; the room's own controls
             // appear once there is a turn to act on, or a room state to get out of.
             // The panel never leaves the owner looking at a problem with no action.
             if !isEmptyState || needsAttention {
                 HStack(spacing: 14) {
-                    if model.snapshot.admission != nil {
+                    // A command running here has its own Cancel task on the card,
+                    // and one control with that name is enough.
+                    if model.snapshot.admission != nil, !model.canCancelTask {
                         Button(Words.cancelTask, action: model.cancel)
                             .buttonStyle(QuietButton())
                             .keyboardShortcut(".", modifiers: .command)
@@ -340,6 +364,9 @@ public struct AssistantPanel: View {
                 }
             }
             .accessibilityIdentifier("example-prompts")
+            // What this Mac may be asked to do, said once and calmly, rather
+            // than left to be discovered when nothing happens.
+            if !model.hasTaskPolicy { TaskPolicyNote().padding(.top, 4) }
         }
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -429,11 +456,12 @@ public struct AssistantPanel: View {
 
     private var statusSymbol: String {
         switch model.snapshot.status?.state {
-        case .working, nil: "circle.dotted"
-        case .waiting: "clock"
-        case .shown: "checkmark.circle"
+        case .working, .acting, nil: "circle.dotted"
+        case .waiting, .confirming: "clock"
+        case .shown, .done: "checkmark.circle"
         case .spoken: "speaker.wave.2"
         case .nowhere: "rectangle.slash"
+        case .refused: "xmark.circle"
         case .unknown: "questionmark.circle"
         }
     }
@@ -471,7 +499,7 @@ public struct AssistantPanel: View {
                     Text("Over the 4,000-byte limit. Shorten the request before sending.")
                         .foregroundStyle(CosmosTokens.error)
                 } else {
-                    Text(Words.shortcutHint)
+                    Text(model.ceremony == nil ? Words.shortcutHint : Words.shortcutHintConfirming)
                 }
             }
             .font(.system(size: 11)).foregroundStyle(CosmosTokens.secondary)

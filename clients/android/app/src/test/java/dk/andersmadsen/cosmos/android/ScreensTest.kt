@@ -1,5 +1,16 @@
 package dk.andersmadsen.cosmos.android
 
+import dk.andersmadsen.cosmos.android.action.ActionOutcome
+import dk.andersmadsen.cosmos.android.action.Attestation
+import dk.andersmadsen.cosmos.android.action.Ceremony
+import dk.andersmadsen.cosmos.android.action.CeremonyEvent
+import dk.andersmadsen.cosmos.android.action.Confirmation
+import dk.andersmadsen.cosmos.android.action.DeclineReason
+import dk.andersmadsen.cosmos.android.action.Description
+import dk.andersmadsen.cosmos.android.action.DevicePolicy
+import dk.andersmadsen.cosmos.android.action.DeviceTask
+import dk.andersmadsen.cosmos.android.action.Operation
+import dk.andersmadsen.cosmos.android.action.Risk
 import dk.andersmadsen.cosmos.android.ui.AssistantState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -255,6 +266,65 @@ class ScreensTest {
         assertEquals(listOf(0..3), pageRanges(4, 4))
         assertEquals(listOf(0..0, 1..1), pageRanges(2, 0))
         assertEquals(listOf(0..0), pageRanges(0, 3))
+    }
+
+    @Test
+    fun namesTheCommandStatesInTheSameVocabulary() {
+        val line = { state: String -> TurnStatus(turn, 2, state, "android", "shared_room").line() }
+        assertEquals("Waiting for you on your phone", line("confirming"))
+        assertEquals("Working", line("acting"))
+        assertEquals("Completed", line("done"))
+        // The origin is told a device did not do it, and never why.
+        assertEquals("Not done", line("refused"))
+        assertNull(TurnStatus(turn, 2, "refused", "android", "shared_room").detail())
+        assertTrue(TurnStatus(turn, 2, "confirming", null, "shared_room").running())
+        assertTrue(TurnStatus(turn, 2, "acting", null, "shared_room").running())
+        assertFalse(TurnStatus(turn, 2, "done", null, "shared_room").running())
+    }
+
+    private val command = DeviceTask(
+        actionId = UUID.fromString("66666666-6666-4666-8666-666666666666"), turnId = turn, generation = 7,
+        channel = "action.route", contentDigest = "3".repeat(64), idempotencyKey = "a".repeat(64),
+        operation = Operation.Route("places/x", "Restaurant Barr", "Strandgade 93", "55.673611", "12.596944"),
+        expiresAtMs = 1_000, reportByMs = 2_000, privacy = "shared_room",
+    )
+
+    @Test
+    fun theTaskCardFollowsTheCommandThisDeviceBound() {
+        val running = SurfaceState(phase = Phase.CONNECTED, task = command, taskStartedAtMs = 1_000)
+        val card = running.taskCard(15_000, DevicePolicy.PHONE)!!
+        assertEquals("Working", card.state)
+        assertEquals("Starting directions to Restaurant Barr", card.sentence)
+        assertEquals("0:14", card.elapsed)
+        assertTrue(card.canCancel)
+        // Close hides the card; the command itself carries on.
+        assertNull(running.copy(taskClosed = true).taskCard(15_000, DevicePolicy.PHONE))
+        // Only the report may say what happened, and only what it observed.
+        val unknown = running.copy(taskReport = ActionOutcome.route("com.google.android.apps.maps", launched = true, navigating = false))
+        assertEquals("Cannot confirm", unknown.taskCard(15_000, DevicePolicy.PHONE)?.state)
+        assertNull(unknown.taskCard(15_000, DevicePolicy.PHONE)?.elapsed)
+        // A television says nothing at all about a refusal.
+        val refused = running.copy(taskReport = ActionOutcome.refused(DeclineReason.NOT_PERMITTED))
+        assertEquals("Not done", refused.taskCard(15_000, DevicePolicy.PHONE)?.state)
+        assertNull(refused.taskCard(15_000, DevicePolicy.TV))
+        // A television renders nothing above the shared class, command or card.
+        assertNull(running.copy(task = command.copy(privacy = "private")).taskCard(15_000, DevicePolicy.TV))
+        assertEquals("Working", running.copy(task = command.copy(privacy = "private")).taskCard(15_000, DevicePolicy.PHONE)?.state)
+        assertEquals("this TV", deviceWord(DevicePolicy.TV))
+        assertEquals("this phone", deviceWord(DevicePolicy.PHONE))
+        // A ceremony on screen is the first thing the card is about.
+        val confirmation = Confirmation(
+            grantId = UUID.fromString("77777777-7777-4777-8777-777777777777"), actionId = command.actionId,
+            turnId = turn, generation = 7,
+            description = Description("open", "PR 412", "android", "It opens a link.", "shared_room"),
+            descriptionDigest = "9".repeat(64), risk = Risk.MODERATE, attestation = Attestation.FOREGROUND_TAP,
+            privacy = "shared_room", expiresAtMs = 30_000,
+        )
+        val asking = running.copy(ceremony = Ceremony.open(confirmation, 0))
+        assertEquals("Waiting for you", asking.taskCard(15_000, DevicePolicy.PHONE)?.state)
+        // Dismissed with Back, the sheet is gone and the command is still running.
+        val dismissed = asking.copy(ceremony = asking.ceremony!!.on(CeremonyEvent.Back))
+        assertEquals("Working", dismissed.taskCard(15_000, DevicePolicy.PHONE)?.state)
     }
 
     @Test

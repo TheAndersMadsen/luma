@@ -29,6 +29,9 @@ public enum Words {
     public static func shownOn(_ device: String) -> String { "Shown on \(device)" }
     public static func spokenOn(_ device: String) -> String { "Spoken on \(device)" }
     public static func waitingFor(_ device: String) -> String { "Waiting for \(device)" }
+    public static func runningOn(_ device: String) -> String { "Running on \(device)" }
+    public static func doneOn(_ device: String) -> String { "Done on \(device)" }
+    public static let turnRefusedDetail = "A device did not carry that out."
 
     // MARK: Presence and the menu bar
 
@@ -88,6 +91,8 @@ public enum Words {
     public static let exampleNotes = "Show my notes about the kitchen"
     public static let exampleSelection = "Summarise what I've selected"
     public static let shortcutHint = "⌘↩ send · esc close · ⌘K send to"
+    /// While a ceremony is up ⌘↩ answers it, so the ask bar stops claiming it sends.
+    public static let shortcutHintConfirming = "esc close · ⌘K send to"
 
     // MARK: Destination
 
@@ -111,5 +116,90 @@ public enum Words {
 
     public static func chooseHint(_ count: Int) -> String {
         count <= 1 ? "Press ↩ to pick it." : "Press 1–\(min(count, 8)) or ↑↓ then ↩ to pick one."
+    }
+
+    // MARK: Tasks this Mac carries out
+
+    /// The refusal headline. It is never styled as a fault: a task that did not
+    /// happen is a fact about the task.
+    public static let notDone = "Not done"
+    public static let taskWaiting = "A task is ready for this Mac."
+    public static let taskWaitingDetail = "Open Cosmos to see it."
+    public static func runningTask(_ label: String) -> String { "Running \(label)" }
+    public static func finishedTask(_ label: String, seconds: String) -> String {
+        "\(label) finished after \(seconds)."
+    }
+    public static func openedTask(_ label: String) -> String { "\(label) is open on this Mac." }
+    public static func exitCodeDetail(_ code: Int32) -> String {
+        code == 0 ? "It ended without errors." : "It ended with exit code \(code)."
+    }
+    public static let taskCannotConfirmDetail =
+        "I can't confirm whether that finished. It was not run again."
+    public static func taskStopped(_ label: String) -> String { "\(label) was stopped." }
+    public static let taskStoppedByYou = "Nothing more of it will run."
+    public static let taskStoppedForNewRequest = "Stopped when you asked for something else."
+    public static let taskRanOutOfTime = "It reached its own time limit and was stopped."
+    public static let taskWithdrawn = "Cosmos withdrew the task."
+    public static let taskNothingMore = "Ask again when you want it run."
+    /// The output card's own heading: these are the command's bytes, not Cosmos's words.
+    public static func outputFrom(_ label: String) -> String { "Output from \(label)" }
+
+    // MARK: The confirmation ceremony
+
+    public static func ceremonyQuestion(verb: String, subject: String, effect: String) -> String {
+        "\(verb.prefix(1).uppercased())\(verb.dropFirst()) \(subject) on this Mac? It \(effect)."
+    }
+    public static let ceremonyPrivate = "This is private to you."
+    public static let ceremonyPrompt = "Confirm below to let it run."
+    public static let confirmAction = "Confirm"
+    public static func declineAction(_ verb: String) -> String { "Don't \(verb.lowercased())" }
+    public static let declineNoun = "Don't"
+    public static func countdown(_ seconds: Int) -> String { "\(seconds)s left" }
+    public static let ceremonyShortcuts = "⌘↩ confirm · ⌘⌫ don't · esc closes without answering"
+    public static let ceremonyDeclined = "You said no."
+    public static let ceremonyExpired = "The confirmation timed out."
+    public static let attestationRefused = "This Mac did not confirm it was you."
+
+    // MARK: What this Mac may do at all
+
+    public static let noTaskPolicy = "No tasks are set up for this Mac."
+    public static let noTaskPolicyDetail = "Add them in Center → Devices when you want some."
+    public static let actionsUnavailable =
+        "This build of Cosmos cannot run tasks on this Mac yet. Nothing was run."
+    public static let actionsUnavailableDetail = "Update Cosmos and ask again."
+
+    // MARK: Proving it is you
+
+    public static let attestationUnavailable = "This Mac cannot ask to confirm it is you right now."
+    public static let attestationNotSetUp =
+        "This Mac has no Touch ID or password set up for confirming it is you."
+    public static let attestationUnsignedBuild =
+        "This development build of Cosmos is not signed, so macOS will not let it ask for Touch ID or your password."
+    public static let attestationNext = "Nothing was run."
+
+    // MARK: Refusals, in the fixed vocabulary
+
+    public static func refusalHappened(_ reason: ActionRefusal) -> String {
+        switch reason {
+        case .noHandler: "Nothing on this Mac can carry that out."
+        case .locked: "This Mac was locked."
+        case .notPermitted: "This Mac is not allowed to do that."
+        case .unresolvable: "That could not be found on this Mac."
+        case .versionChanged: "That document changed since it was read."
+        case .entryChanged: "That task changed since Cosmos prepared it."
+        case .noAttestation: "This Mac could not confirm it was you."
+        }
+    }
+
+    public static func refusalNext(_ reason: ActionRefusal) -> String {
+        switch reason {
+        case .noHandler: "Set it up in Center → Devices, then ask again."
+        case .locked: "Unlock this Mac and ask again."
+        case .notPermitted: "Add it to this Mac's list in Center → Devices."
+        case .unresolvable: "Check the folder or the address in Center → Devices."
+        case .versionChanged: "Ask again to work from what is there now."
+        case .entryChanged: "Ask again to use the task as it is now."
+        case .noAttestation: "Nothing was run. Ask again when you can use Touch ID or your password."
+        }
     }
 }

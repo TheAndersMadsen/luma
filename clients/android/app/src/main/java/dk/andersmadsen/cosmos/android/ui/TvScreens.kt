@@ -108,7 +108,10 @@ import dk.andersmadsen.cosmos.android.pageRanges
 import dk.andersmadsen.cosmos.android.screen
 import dk.andersmadsen.cosmos.android.serverLabel
 import dk.andersmadsen.cosmos.android.sessionStatus
+import dk.andersmadsen.cosmos.android.taskCard
 import dk.andersmadsen.cosmos.android.tvStage
+import dk.andersmadsen.cosmos.android.action.DevicePolicy
+import kotlinx.coroutines.delay
 import java.util.UUID
 import kotlin.random.Random
 
@@ -188,15 +191,28 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
     val askLabel = stringResource(R.string.tv_ask)
     val retryLabel = stringResource(R.string.retry)
     val connectLabel = stringResource(R.string.connect)
+    val cancelLabel = stringResource(R.string.cancel_request)
+    // The elapsed line of a running command comes from a clock, not a state.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.task?.actionId, state.taskReport) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    // This television never explains a refusal, so it has no card for one.
+    val task = state.taskCard(now, DevicePolicy.TV)
     val action = when {
         state.canRetry -> TvStageAction(retryLabel, actions.retry)
+        task?.canCancel == true -> TvStageAction(cancelLabel, actions.cancelTask)
         status != SessionStatus.CONNECTED && state.canConnect -> TvStageAction(connectLabel, actions.connect)
         else -> TvStageAction(askLabel) { if (asking || state.canSend) asking = !asking }
     }
-    val notice = when (status) {
-        SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
-        SessionStatus.DISCONNECTED -> stringResource(R.string.tv_connect_hint)
-        SessionStatus.CONNECTED -> state.notice()
+    val notice = when {
+        task != null -> listOfNotNull(task.state, task.sentence, task.elapsed).joinToString(" · ")
+        status == SessionStatus.RECONNECTING -> SessionStatus.RECONNECTING.label
+        status == SessionStatus.DISCONNECTED -> stringResource(R.string.tv_connect_hint)
+        else -> state.notice()
     }
     // Back closes the paged view, then the ask field, then sends the current reply or transcript away.
     BackHandler(enabled = reading) { reading = false }
@@ -205,6 +221,8 @@ private fun TvSession(state: SurfaceState, actions: SurfaceActions) {
         dismissed = state.display?.actionId ?: state.speech?.actionId
         request = null
     }
+    // Back closes the card. It is not Cancel task, which is the corner action.
+    BackHandler(enabled = task != null && !asking && !reading, onBack = actions.closeTask)
     if (reading && stage is TvStage.Answer) {
         TvAnswerPages(stage.full)
         return

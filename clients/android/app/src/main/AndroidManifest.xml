@@ -1,7 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Network for the owner's Cosmos only, plus a foreground service that keeps the
-         approved session joined while the screen is off. No microphone, overlay, accessibility
-         or notification-listener permission: this surface is text and one shared card. -->
+         approved session joined while the screen is off. No microphone, overlay or
+         accessibility permission. The notification-listener component below holds no
+         permission until the owner grants it in the television's own settings, and it is
+         the only way playback can be observed rather than assumed. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
@@ -11,9 +13,14 @@
     <uses-feature android:name="android.software.leanback" android:required="false"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
-    <!-- Only to name the app whose screen text the owner attaches; nothing is launched. -->
+    <!-- To name the app whose screen text the owner attaches, and to resolve exactly the
+         four things the owner's own device-action policy can ask this device to do. -->
     <queries>
         <intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent>
+        <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="https"/></intent>
+        <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="geo"/></intent>
+        <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="google.navigation"/></intent>
+        <intent><action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH"/></intent>
     </queries>
     <application android:name=".CosmosApplication" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
@@ -49,6 +56,13 @@
         <service android:name=".SessionService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the owner's approved Cosmos surface connected"/>
+        </service>
+        <!-- The owner enables this in the television's settings so Cosmos may read active
+             media sessions. It reads no notification and posts nothing; it exists so a
+             play command can report observed playback instead of claiming it. -->
+        <service android:name=".action.PlaybackListenerService" android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:label="@string/app_name">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
         </service>
         <receiver android:name=".SessionService$DisconnectReceiver" android:exported="false"/>
     </application>

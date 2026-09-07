@@ -1,5 +1,9 @@
 package dk.andersmadsen.cosmos.android
 
+import dk.andersmadsen.cosmos.android.action.ActionWire
+import dk.andersmadsen.cosmos.android.action.Confirmation
+import dk.andersmadsen.cosmos.android.action.DeviceTask
+import dk.andersmadsen.cosmos.android.action.Revoked
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -47,11 +51,14 @@ data class DisplayCard(
 }
 
 /**
- * A private card is waiting for this installation. It names the kind of
- * surface that asked, the class and the expiry, never any content; the card
- * arrives as a display once this app reports its unlocked foreground.
+ * A private card or a command is waiting for this installation. It names the
+ * kind of surface that asked, the class and the expiry, never any content; it
+ * arrives once this app reports its unlocked foreground. A card waits because
+ * it is private; a command waits because no phone starts one in the background.
  */
-data class Invitation(val id: UUID, val origin: String, val privacy: String, val expiresAtMs: Long)
+data class Invitation(val id: UUID, val kind: String, val origin: String, val privacy: String, val expiresAtMs: Long) {
+    val forTask: Boolean get() = kind == "task"
+}
 
 /**
  * Where the current turn stands: working, waiting for a device, shown or spoken
@@ -72,18 +79,27 @@ data class NativeEvent(
     val descriptor: Descriptor?, val pending: PendingOperation?, val lastUnknown: PendingOperation?,
     val admission: Admission?, val visible: Boolean, val display: DisplayCard?, val speech: SpeechReply?,
     val invitation: Invitation?, val status: TurnStatus?, val eventsSkipped: Long,
+    /** The command this device was asked to carry out, if one stands. */
+    val task: DeviceTask? = null,
+    /** The ceremony this device is the venue for, if one stands. */
+    val confirmation: Confirmation? = null,
+    /** The command Cosmos retired, and why. */
+    val revoked: Revoked? = null,
 ) {
     val ok: Boolean get() = error == null
 
     companion object {
-        const val APPROVAL = "native-shared-speech-v3"
-        private val OPERATIONS = setOf("prepare", "connect", "send_text", "retry_pending", "cancel",
-            "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "invitation", "status", "disconnect", "heartbeat")
+        const val APPROVAL = "native-device-action-v4"
+        private val OPERATIONS = setOf("prepare", "connect", "send_text", "send_text_to", "send_text_with_context",
+            "retry_pending", "cancel", "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task",
+            "report", "progress", "grant", "display", "speech", "invitation", "status", "task", "confirmation",
+            "disconnect", "heartbeat")
         private val DISPLAY_CLASSES = setOf("public", "shared_room", "near_user", "private")
-        private val STATUS_STATES = setOf("working", "waiting", "shown", "spoken", "nowhere", "unknown")
+        private val STATUS_STATES = setOf("working", "waiting", "confirming", "acting", "shown", "spoken",
+            "done", "refused", "nowhere", "unknown")
         private val SURFACE_PLATFORMS = setOf("pin", "browser", "macos", "linux", "android", "android_tv")
         private val PRIVATE_CLASSES = setOf("near_user", "private")
-        private val PENDING_KINDS = setOf("text", "heartbeat", "cancel", "state", "acknowledge")
+        private val PENDING_KINDS = setOf("text", "heartbeat", "cancel", "state", "acknowledge", "report", "grant")
         private val NIL = UUID(0, 0)
         private val HEX64 = Regex("^[0-9a-f]{64}$")
         private const val MAX_SAFE = 9_007_199_254_740_991L
@@ -166,9 +182,13 @@ data class NativeEvent(
             value ?: return null
             val origin = value.getString("origin")
             val privacy = value.getString("privacy")
+            val kind = value.getString("kind")
+            // A card waits because it is private; a command waits at any class
+            // because no phone may start one from the background.
+            val classes = if (kind == "task") DISPLAY_CLASSES else PRIVATE_CLASSES
             require(origin.isNotEmpty() && origin.length <= 32 && origin.all { it in 'a'..'z' || it == '_' }
-                && privacy in PRIVATE_CLASSES && value.getLong("expiresAtMs") > 0) { "invalid invitation" }
-            return Invitation(uuid(value.getString("id")), origin, privacy, value.getLong("expiresAtMs"))
+                && kind in setOf("card", "task") && privacy in classes && value.getLong("expiresAtMs") > 0) { "invalid invitation" }
+            return Invitation(uuid(value.getString("id")), kind, origin, privacy, value.getLong("expiresAtMs"))
         }
 
         private fun status(value: JSONObject?): TurnStatus? {
@@ -219,6 +239,11 @@ data class NativeEvent(
                 invitation = if (connected) invitation(value.optJSONObject("invitation")) else null,
                 status = if (connected) status(value.optJSONObject("status")) else null,
                 eventsSkipped = value.getLong("eventsSkipped"),
+                // A command, its ceremony and its retirement belong to a live
+                // connection exactly as a card does: a dropped room holds none.
+                task = if (connected) ActionWire.task(value.optJSONObject("task")) else null,
+                confirmation = if (connected) ActionWire.confirmation(value.optJSONObject("confirmation")) else null,
+                revoked = if (connected) ActionWire.revoked(value.optJSONObject("revoked")) else null,
             )
         }
     }

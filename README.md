@@ -344,17 +344,33 @@ installation's revision and therefore drops its private-display, screen-context,
 speech-disclosure, lookup and device-action permissions, which have to be
 granted again.
 
-Two owner permissions live under Devices. **Let this device act**
-(`approve-device-actions-v1`) names the hosts, applications and directory roots
-it may open, whether it may route to a place, and which media providers it may
-play; an operation its manifest does not declare cannot be written, and its
-class is capped by that installation's private-display ceiling. **Tasks on this
-device** (`approve-device-command-v1`, macOS only) is a list of at most eight
-commands the owner authored, each with a fixed `argv` array — there is no shell
-string and no model-supplied parameter, at any risk level — a working directory,
-a millisecond budget and whether it changes files. A task label the runtime would
-classify as sensitive is refused when it is saved, because a silently
-unrunnable task is indistinguishable from a missing capability.
+Two owner permissions live under Devices, each with its own editor on the
+device's card. **Let this device act** (`approve-device-actions-v1`, route
+`/surface-api/v1/surfaces/:surfaceId/device-actions`, 2048 bytes) names the
+hosts, applications and directory roots it may open, whether it may route to a
+place, and which media providers it may play; only the operations that
+installation's approved manifest declares are offered, and its class is capped
+by that installation's private-display ceiling — an action permission spends a
+posture, it never raises one. **Tasks on this device**
+(`approve-device-command-v1`, macOS only, route `…/device-commands`, 4096
+bytes, which the editor counts down as the list grows) is a list of at most
+eight commands the owner authored, each with a fixed `argv` array written one
+part per line — there is no shell string and no model-supplied parameter, at
+any risk level — a working directory, a millisecond budget and whether it
+changes files. A task label the runtime would classify as sensitive is refused
+when it is saved, with the message that names the fix, because a silently
+unrunnable task is indistinguishable from a missing capability. Both editors
+say once, above them, that they apply to that device only. The Shield's card
+carries its playback prerequisite where the providers are chosen rather than
+buried: without notification access on the TV, media sessions cannot be read
+and the honest report is always "Cannot confirm", because a launched player is
+not playback.
+
+Reapproval drops what a device already holds, so Devices reads those
+permissions *before* the owner clicks, lists them under the fingerprint, and
+offers **Put its permissions back** afterwards — each one granted again against
+the new approval, in an order that restores a class ceiling before anything
+capped by it, with a per-permission result rather than a single claim.
 
 Cognition proposes `device_action` with an operation and a *reference*, never an
 argument. The reference names a candidate the runtime itself put in front of it
@@ -520,12 +536,28 @@ acknowledgment after its own commit. Its C boundary gained
 `task`, `confirmation` and `revoked`. A fresh enrollment from that client now
 asks the owner to approve `native-device-action-v4`, and it still holds a
 connection under either earlier published profile, so an installation that has
-not been updated keeps connecting, rendering and speaking. No platform executor exists yet: the
-macOS, Linux, phone and TV clients each still have to re-verify a command
-against their own copy of the owner's policy, carry it out without building
-anything from strings, obtain the actor attestation and report only what they
-observed. Center's Activity page does not yet parse the new ledger kinds
-either. The macOS panel
+not been updated keeps connecting, rendering and speaking. The phone and the television now carry commands
+out. Each keeps its own copy of the owner's policy — the same object Center
+holds — as `device-actions.json` in the application's own files directory, and a
+host, application or media provider that is not in that copy is refused whatever
+the runtime said. The phone opens an allowed `https` link and starts navigation
+to a place the runtime bound; opening Maps is not navigating, so a launch it
+cannot observe further is `unknown` with the launch recorded, never a
+completion. The television plays through an owner-approved provider and claims
+playback only from a media session whose own title contains the bound one, which
+needs the owner's notification-listener grant in the television's settings;
+without that grant every play is honestly `unknown`. Its confirmation sheet
+answers only to a deliberate tap, Back dismisses it and answers nothing, and the
+task card carries the state word, one sentence, the elapsed time and Cancel
+task, while Close only hides it and the command carries on. A television never
+explains a refusal at all. The macOS and Linux clients still have to re-verify a
+command against their own copy of the owner's policy, carry it out without
+building anything from strings, obtain the actor attestation and report only
+what they observed. Center's Activity page reads the new ledger kinds — a requested and
+resolved ceremony with the dwell time it took, a device's own report, a revoked
+effect, an exhausted action budget and a preempted turn — and says each in one
+plain sentence in the turn's Why disclosure; a kind it has never seen is still
+skipped rather than rejected. The macOS panel
 renders text and place cards with their credit, reports visibility from its
 window occlusion state and acknowledges each card once. Native surfaces cannot
 acknowledge cards dispatched elsewhere. Android, Android TV and Linux clients

@@ -257,6 +257,18 @@ public enum PanelState {
         case .waiting:
             if here { return StatusLine(title: Words.waitingForYou) }
             return StatusLine(title: Words.waitingForDevice, detail: surface.map(Words.waitingFor))
+        case .confirming:
+            // Someone has to answer at the device that would carry it out. When
+            // that is this Mac the ceremony is already on screen under this line.
+            if here { return StatusLine(title: Words.waitingForYou) }
+            return StatusLine(title: Words.waitingForDevice, detail: surface.map(Words.waitingFor))
+        case .acting:
+            return StatusLine(title: Words.working, detail: here ? nil : surface.map(Words.runningOn))
+        case .done:
+            return StatusLine(title: Words.completed, detail: here ? nil : surface.map(Words.doneOn))
+        case .refused:
+            // The origin never learns why; it learns only that it did not happen.
+            return StatusLine(title: Words.notDone, detail: Words.turnRefusedDetail)
         case .shown:
             return StatusLine(title: Words.completed, detail: here ? nil : surface.map(Words.shownOn))
         case .spoken:
@@ -322,6 +334,9 @@ public enum PanelState {
     /// Everything a Command combination can ask the panel to do.
     public enum Command: Equatable, Sendable {
         case send, cancelTask, destinations, close, focusAsk, useSelection, choose(Int)
+        /// Only while a ceremony is on screen. Both are deliberate combinations
+        /// and neither is reachable by a stray keypress.
+        case confirmTask, declineTask
     }
 
     /// The panel's whole keyboard model as one pure mapping. An accessory
@@ -329,10 +344,19 @@ public enum PanelState {
     /// rather than relying on SwiftUI's own shortcuts, which never fire without one.
     public static func command(key: String, command: Bool, shift: Bool = false,
                                option: Bool = false, control: Bool = false,
-                               choiceCount: Int? = nil) -> Command? {
+                               choiceCount: Int? = nil, ceremony: Bool = false) -> Command? {
         guard command, !option, !control else { return nil }
         let key = key.lowercased()
         if shift { return key == "u" ? .useSelection : nil }
+        // A ceremony takes the two combinations that answer it and nothing else.
+        // Everything the panel otherwise offers keeps working underneath.
+        if ceremony {
+            switch key {
+            case "\r", "\u{3}": return .confirmTask
+            case "\u{8}", "\u{7f}": return .declineTask
+            default: break
+            }
+        }
         switch key {
         case "\r", "\u{3}": return .send
         case ".": return .cancelTask

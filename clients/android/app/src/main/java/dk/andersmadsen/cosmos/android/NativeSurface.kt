@@ -57,6 +57,18 @@ object NativeSurface {
     @JvmStatic external fun acknowledge(handle: Long): Int
     /** Only after the current spoken reply played to its end. */
     @JvmStatic external fun acknowledgeSpeech(handle: Long): Int
+    /**
+     * Bind the current command locally and say it is legal here. It claims
+     * nothing about the effect, and it is never sent for a command this device
+     * will not attempt.
+     */
+    @JvmStatic external fun acknowledgeTask(handle: Long): Int
+    /** Say what this device observed, once, as the bounded JSON of a report. */
+    @JvmStatic external fun report(handle: Long, report: ByteArray): Int
+    /** Say the current command is still running; it claims no outcome. */
+    @JvmStatic external fun progress(handle: Long, sequence: Int, elapsedMs: Long): Int
+    /** Answer the current ceremony with the actor evidence actually obtained. */
+    @JvmStatic external fun grant(handle: Long, granted: Boolean, attestation: ByteArray): Int
     @JvmStatic external fun disconnect(handle: Long): Int
     @JvmStatic external fun poll(handle: Long): ByteArray?
     /** The current spoken reply's complete audio/mpeg bytes, or null when none is current. */

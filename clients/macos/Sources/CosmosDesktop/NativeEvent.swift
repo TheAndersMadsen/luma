@@ -11,7 +11,11 @@ struct NativeEvent: Decodable, Sendable {
         let approval: String
 
         func verified() throws -> PublicDescriptor {
-            guard platform == "macos", approval == "native-shared-speech-v3" else {
+            // The action profile is what this build speaks; the speech profile
+            // still connects, renders and speaks, with no action channel until
+            // the owner reapproves this installation in Center.
+            guard platform == "macos",
+                  ["native-device-action-v4", "native-shared-speech-v3"].contains(approval) else {
                 throw ClientFailure.invalidResponse
             }
             return try PublicDescriptor(enrollmentID: enrollmentId, publicKey: publicKey)
@@ -25,7 +29,7 @@ struct NativeEvent: Decodable, Sendable {
         let canRetry: Bool
 
         func validate() throws {
-            guard ["text", "heartbeat", "cancel", "state", "acknowledge"].contains(kind),
+            guard ["text", "heartbeat", "cancel", "state", "acknowledge", "report", "grant"].contains(kind),
                   instanceId != Self.nilUUID, sequence > 0,
                   sequence <= 9_007_199_254_740_991 else {
                 throw ClientFailure.invalidResponse
@@ -49,17 +53,25 @@ struct NativeEvent: Decodable, Sendable {
     /// the kind of surface that asked and the expiry.
     struct Invitation: Decodable, Sendable {
         let id: UUID
+        let kind: String?
         let origin: String
         let privacy: String
         let expiresAtMs: Int64
 
         func verified() throws -> WaitingReply {
-            guard id != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)), !origin.isEmpty, origin.utf8.count <= 32,
+            // A private card is above shared_room by definition; a waiting task
+            // may be at any class, because it waits for an unlocked foreground
+            // rather than for privacy.
+            let kind = WaitingReply.Kind(rawValue: self.kind ?? "card")
+            let classes = kind == .task
+                ? ["public", "shared_room", "near_user", "private"] : ["near_user", "private"]
+            guard let kind,
+                  id != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)), !origin.isEmpty, origin.utf8.count <= 32,
                   origin.allSatisfy({ ($0.isLowercase && $0.isLetter) || $0 == "_" }),
-                  ["near_user", "private"].contains(privacy), expiresAtMs > 0 else {
+                  classes.contains(privacy), expiresAtMs > 0 else {
                 throw ClientFailure.invalidResponse
             }
-            return WaitingReply(id: id, origin: origin, privacy: privacy, expiresAtMs: expiresAtMs)
+            return WaitingReply(id: id, kind: kind, origin: origin, privacy: privacy, expiresAtMs: expiresAtMs)
         }
     }
 
@@ -98,6 +110,12 @@ struct NativeEvent: Decodable, Sendable {
     let invitation: Invitation?
     /// Cosmos's report on the current turn; absent from older library builds.
     let status: TurnStatus?
+    /// The command dispatched to this installation, verified while decoding.
+    let task: DeviceTask?
+    /// The ceremony this installation is the venue for, verified while decoding.
+    let confirmation: ConfirmationRequest?
+    /// The command Cosmos retired, and why.
+    let revoked: RevokedTask?
     let eventsSkipped: UInt64
 
     static func decode(_ bytes: Data) throws -> NativeEvent {
@@ -105,8 +123,9 @@ struct NativeEvent: Decodable, Sendable {
             let event = try JSONDecoder().decode(Self.self, from: bytes)
             guard event.version == 1, event.kind == "state",
                   ["prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending",
-                   "cancel", "set_visible", "acknowledge", "acknowledge_speech", "display", "speech", "invitation",
-                   "status", "disconnect", "heartbeat"].contains(event.operation),
+                   "cancel", "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task", "report",
+                   "progress", "grant", "display", "speech", "invitation", "status", "task", "confirmation",
+                   "disconnect", "heartbeat"].contains(event.operation),
                   ["ok", "error"].contains(event.outcome),
                   (event.outcome == "ok") == (event.error == nil),
                   event.error.map({ $0.utf8.count <= 64 }) ?? true else {
@@ -135,7 +154,8 @@ struct NativeEvent: Decodable, Sendable {
         case "invalid_response", "invalid_journal", "panic": return .invalidResponse
         case "denied": return .approvalRequired
         case "busy": return .busy
-        case "no_pending_operation", "disconnected", "expired", "stale", "unavailable", "no_admission", "no_display", "no_speech":
+        case "no_pending_operation", "disconnected", "expired", "stale", "unavailable", "no_admission",
+             "no_display", "no_speech", "no_task", "no_confirmation":
             return .connectionUnavailable
         default: return .invalidResponse
         }

@@ -48,6 +48,8 @@ class MainActivity : ComponentActivity() {
             send = { text, target -> controller.send(text, target) }, cancel = { controller.cancel() }, retry = { controller.retryPending() },
             approve = ::approve, copy = ::copy, share = ::share, chooseAssistant = ::selectAssistant,
             committed = controller::displayCommitted,
+            cancelTask = { controller.cancelTask() }, closeTask = controller::closeTask,
+            answerCeremony = controller::answerCeremony,
         )
         val tv = tvLayout()
         setContent {

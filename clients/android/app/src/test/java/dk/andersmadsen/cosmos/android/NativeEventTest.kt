@@ -3,12 +3,13 @@ package dk.andersmadsen.cosmos.android
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NativeEventTest {
     private val base = """{"version":1,"kind":"state","operation":"display","outcome":"ok","error":null,
         "connected":true,"pendingOpen":false,"needsReconnect":false,
-        "descriptor":{"enrollmentId":"11111111-1111-4111-8111-111111111111","publicKey":"k","platform":"android","approval":"native-shared-speech-v3"},
+        "descriptor":{"enrollmentId":"11111111-1111-4111-8111-111111111111","publicKey":"k","platform":"android","approval":"native-device-action-v4"},
         "pending":null,"lastUnknown":null,"admission":null,"visible":true,"eventsSkipped":0,"speech":null,"display":%s}"""
 
     private val speech = """{"actionId":"55555555-5555-4555-8555-555555555555","turnId":"44444444-4444-4444-8444-444444444444",
@@ -51,6 +52,73 @@ class NativeEventTest {
         assertNull(NativeEvent.decode(disconnected.toByteArray()).display)
     }
 
+    private val task = """{"actionId":"66666666-6666-4666-8666-666666666666","turnId":"44444444-4444-4444-8444-444444444444",
+        "generation":7,"channel":"action.route","contentDigest":"${"3".repeat(64)}","idempotencyKey":"${"a".repeat(64)}",
+        "operation":{"kind":"route","placeId":"places/x","name":"Restaurant Barr","address":"Strandgade 93",
+        "lat":"55.673611","lng":"12.596944"},"expiresAtMs":1757260000000,"reportByMs":1757260030000,"privacy":"shared_room"}"""
+
+    private val confirmation = """{"grantId":"77777777-7777-4777-8777-777777777777","actionId":"66666666-6666-4666-8666-666666666666",
+        "turnId":"44444444-4444-4444-8444-444444444444","generation":7,
+        "description":{"kind":"device_action","verb":"open","subject":"PR 412","deviceKind":"android",
+        "effect":"It opens a link in your browser.","class":"shared_room"},
+        "descriptionDigest":"${"9".repeat(64)}","risk":"moderate","attestation":"foreground_tap",
+        "privacy":"shared_room","expiresAtMs":1757259860000}"""
+
+    @Test
+    fun decodesACommandItsCeremonyAndItsRetirement() {
+        val event = NativeEvent.decode(
+            base.format("null")
+                .replace("\"speech\":null", "\"speech\":null,\"task\":$task,\"confirmation\":$confirmation")
+                .replace("\"operation\":\"display\"", "\"operation\":\"task\"")
+                .toByteArray(),
+        )
+        val command = event.task!!
+        assertEquals("action.route", command.channel)
+        assertEquals("a".repeat(64), command.idempotencyKey)
+        val operation = command.operation as dk.andersmadsen.cosmos.android.action.Operation.Route
+        assertEquals("Restaurant Barr", operation.name)
+        assertEquals("55.673611", operation.lat)
+        assertEquals("open", event.confirmation!!.description.verb)
+        assertEquals(dk.andersmadsen.cosmos.android.action.Attestation.FOREGROUND_TAP, event.confirmation!!.attestation)
+        val revoked = NativeEvent.decode(
+            base.format("null")
+                .replace("\"speech\":null", """"speech":null,"revoked":{"actionId":"66666666-6666-4666-8666-666666666666","reason":"preempted"}""")
+                .toByteArray(),
+        )
+        assertEquals(dk.andersmadsen.cosmos.android.action.RevokeReason.PREEMPTED, revoked.revoked!!.reason)
+    }
+
+    @Test
+    fun refusesACommandOnAChannelOrShapeThisBuildDoesNotKnow() {
+        val foreign = task.replace("\"action.route\"", "\"action.frobnicate\"")
+        assertThrows(Exception::class.java) {
+            NativeEvent.decode(base.format("null").replace("\"speech\":null", "\"speech\":null,\"task\":$foreign").toByteArray())
+        }
+        // An operation shape this build cannot carry out decodes as unsupported,
+        // so it can be refused with a reason instead of taking the client down.
+        val unknown = task.replace("\"kind\":\"route\"", "\"kind\":\"teleport\"")
+        val event = NativeEvent.decode(base.format("null").replace("\"speech\":null", "\"speech\":null,\"task\":$unknown").toByteArray())
+        assertEquals(
+            dk.andersmadsen.cosmos.android.action.Operation.Unsupported("teleport"),
+            event.task!!.operation,
+        )
+    }
+
+    @Test
+    fun aWaitingCommandNeedsNoPrivateClassAndAWaitingCardStillDoes() {
+        val invite = { kind: String, privacy: String ->
+            base.format("null").replace(
+                "\"speech\":null",
+                """"speech":null,"invitation":{"id":"88888888-8888-4888-8888-888888888888","kind":"$kind","origin":"pin","privacy":"$privacy","expiresAtMs":1757260000000}""",
+            ).toByteArray()
+        }
+        assertEquals("task", NativeEvent.decode(invite("task", "shared_room")).invitation!!.kind)
+        assertTrue(NativeEvent.decode(invite("task", "shared_room")).invitation!!.forTask)
+        assertEquals("card", NativeEvent.decode(invite("card", "private")).invitation!!.kind)
+        assertThrows(Exception::class.java) { NativeEvent.decode(invite("card", "shared_room")) }
+        assertThrows(Exception::class.java) { NativeEvent.decode(invite("errand", "private")) }
+    }
+
     private val choices = """{"actionId":"33333333-3333-4333-8333-333333333333","turnId":"44444444-4444-4444-8444-444444444444",
         "generation":2,"contentDigest":"${"a".repeat(64)}","expiresAtMs":1000,
         "content":{"kind":"choices","title":"Tonight's films","items":[{"id":"1","title":"Arrival","detail":"A linguist meets visitors."},{"id":"2","title":"Heat","detail":"A crew and a detective."}]},
@@ -75,7 +143,8 @@ class NativeEventTest {
         assertNull(NativeEvent.decode(base.format("null").toByteArray()).status)
         assertNull(NativeEvent.decode(withStatus(null).toByteArray()).status)
         assertNull(NativeEvent.decode(withStatus(status).replace("\"connected\":true", "\"connected\":false").toByteArray()).status)
-        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("shown", "done")).toByteArray()) }
+        assertEquals("done", NativeEvent.decode(withStatus(status.replace("shown", "done")).toByteArray()).status!!.state)
+        assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("shown", "finished")).toByteArray()) }
         assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("macos", "watch")).toByteArray()) }
         assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("shared_room", "sensitive")).toByteArray()) }
         assertThrows(Exception::class.java) { NativeEvent.decode(withStatus(status.replace("\"generation\":2", "\"generation\":0")).toByteArray()) }
@@ -120,7 +189,7 @@ class NativeEventTest {
         assertThrows(IllegalArgumentException::class.java) {
             NativeEvent.decode(base.format(places.replace("\"expiresAtMs\":1000,", "\"expiresAtMs\":1000,\"privacy\":\"sensitive\",")).toByteArray())
         }
-        val invitation = """{"id":"66666666-6666-4666-8666-666666666666","origin":"pin","privacy":"private","expiresAtMs":2000}"""
+        val invitation = """{"id":"66666666-6666-4666-8666-666666666666","kind":"card","origin":"pin","privacy":"private","expiresAtMs":2000}"""
         val waiting = NativeEvent.decode(base.format("null").replace("\"speech\":null", "\"speech\":null,\"invitation\":$invitation")
             .replace("\"operation\":\"display\"", "\"operation\":\"invitation\"").toByteArray())
         assertEquals("pin", waiting.invitation!!.origin)
