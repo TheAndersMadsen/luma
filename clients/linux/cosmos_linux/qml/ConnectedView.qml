@@ -52,8 +52,16 @@ Item {
         // What this computer is doing about a command, or what it did.
         TaskCard { task: s.task }
 
+        DocumentView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: s.document != null
+            document: s.document
+        }
+
         CosmosPanel {
             id: panel
+            visible: s.document == null
             Layout.fillWidth: true
             Layout.fillHeight: true
             card: s.display

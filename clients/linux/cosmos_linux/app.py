@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import actions
+from . import document
 from . import context as screen_context
 from . import strings as S
 from . import viewstate
@@ -47,7 +48,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 POLL_INTERVAL_MS = 200
 SCREENSHOT_DELAY_MS = 900
 VIEWS = ("setup", "approval", "connected", "empty", "working", "choices", "reconnecting", "task", "refused",
-         "ceremony", "ceremony-locked")
+         "ceremony", "ceremony-locked", "document")
 CENTER_DEVICES_PATH = "/settings/account/surfaces"
 # The kit's graphite palette; the light variant keeps the same roles for a light desktop.
 LIGHT_COLORS = {
@@ -247,6 +248,17 @@ def preview_state(kind: str) -> State:
         return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
                      session_seen=True, features=features, sent_text="Find cafés near me", sending=True,
                      context=screen_context.ScreenContext(app="Chrome", text="Copenhagen coffee guide"))
+    if kind == "document":
+        data = ("# A shared workspace\n\n"
+                "Keep the document and the conversation together.\n\n"
+                "This read-only snapshot keeps the version that was selected.\n"
+                "The source file can change without changing this view.\n").encode("utf-8")
+        import hashlib
+        snapshot = document.from_bytes(data, hashlib.sha256(data).hexdigest(), {"kind": "line", "line": 3})
+        return State(phase=Phase.CONNECTED, descriptor=descriptor, visible=True, wants_connection=True,
+                     session_seen=True, features=replace(features, actions=True), document=snapshot,
+                     task=TaskView("2f1c8a90-4d5e-4a6b-8c7d-9e0f1a2b3c4d", "Workspace notes.md",
+                                   viewstate.TASK_DONE), sent_text="Continue with these notes", policy_held=True)
     if kind in ("task", "refused"):
         # A command Cosmos asked this computer to carry out: what is happening,
         # how long it has been happening, and afterwards only what was seen.
@@ -348,6 +360,7 @@ def make_backend_class():
             self._qr_link = ""
             self._qr_data = ""
             self._pending_render: Optional[str] = None
+            self._pending_document: Optional[tuple] = None
             self._snapshot: dict = {}
             self._captured.connect(self._on_captured)
             if controller is not None:
@@ -448,6 +461,11 @@ def make_backend_class():
                 "hasPending": state.has_pending or state.pending_open,
                 "unknownOutcome": state.has_unknown_outcome,
                 "display": self._display(state.display),
+                "document": ({"actionId": state.task.action_id, "label": state.task.label,
+                              "digest": state.document.digest, "text": state.document.text,
+                              "line": state.document.line, "cursor": state.document.cursor,
+                              "pending": state.task.running}
+                             if state.document is not None and state.task is not None else None),
                 "task": ({"title": card.title, "detail": card.detail, "remedy": card.remedy,
                           "elapsed": card.elapsed, "cancellable": card.cancellable, "tone": card.tone}
                          if card is not None else None),
@@ -660,11 +678,24 @@ def make_backend_class():
             """The card is composed; it is acknowledged once the next frame is painted."""
             self._pending_render = action_id
 
+        @Slot(str, str, int)
+        def documentRendered(self, action_id: str, digest: str, line: int) -> None:
+            self._pending_document = (action_id, digest, line)
+
+        @Slot()
+        def closeDocument(self) -> None:
+            controller = self._live()
+            if controller is not None:
+                controller.close_document(actions.CANCELLED)
+
         def frame_painted(self) -> None:
             action_id, self._pending_render = self._pending_render, None
+            document, self._pending_document = self._pending_document, None
             controller = self._live()
             if action_id and controller is not None:
                 controller.display_committed(action_id)
+            if document is not None and controller is not None:
+                controller.document_committed(*document)
 
         @Slot(bool)
         def setReducedMotion(self, value: bool) -> None:

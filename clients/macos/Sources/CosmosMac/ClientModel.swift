@@ -69,6 +69,8 @@ public final class ClientModel: ObservableObject {
     @Published public private(set) var taskOutput: String?
     /// The owner's own name for the task the output belongs to.
     @Published public private(set) var taskLabel: String?
+    @Published public private(set) var presentedDocument: DocumentPresentation?
+    private var documentReported = false
     /// Ticks once a second while a task or a ceremony is current, so the elapsed
     /// time and the countdown move without the rest of the panel redrawing.
     @Published public private(set) var clock: Int64 = ClientModel.nowMs()
@@ -745,7 +747,10 @@ public final class ClientModel: ObservableObject {
         if panelVisible != visible { panelVisible = visible }
         guard wantedVisible != visible else { return }
         wantedVisible = visible
-        if !visible { acknowledging?.cancel(); acknowledging = nil }
+        if !visible {
+            acknowledging?.cancel(); acknowledging = nil
+            closeDocument()
+        }
         guard descriptor != nil else { return }
         reporting?.cancel()
         reporting = Task { [weak self] in
@@ -786,7 +791,45 @@ public final class ClientModel: ObservableObject {
         return TaskCard.ceremony(request, now: clock, blocked: ceremonyBlocked(request))
     }
     /// A running command this Mac can stop. Closing the panel does not.
-    public var canCancelTask: Bool { running != nil }
+    public var canCancelTask: Bool { running != nil || (presentedDocument != nil && !documentReported) }
+
+    /// Called by the native text view after drawing the matching snapshot with
+    /// its requested line in the visible rectangle. It is not an onAppear ack.
+    @discardableResult
+    public func documentCommitted(actionID: UUID, digest: String, line: UInt32) -> Bool {
+        guard let presentation = presentedDocument, !documentReported,
+              presentation.task.actionID == actionID, presentation.content.digest == digest,
+              presentation.content.line == line, boundTask == actionID,
+              snapshot.phase == .connected, snapshot.task == presentation.task,
+              snapshot.confirmation == nil,
+              wantedVisible, panelVisible, snapshot.visible, policy != nil,
+              Self.nowMs() < min(presentation.task.expiresAtMs, presentation.task.reportByMs) else { return false }
+        documentReported = true
+        let report = ActionReport(outcome: .completed, evidence: .open(
+            resolvedApp: "dk.andersmadsen.cosmos.desktop", opened: true, documentDigest: digest))
+        executor.remember(report, forKey: presentation.task.idempotencyKey, now: Self.nowMs())
+        Task { [weak self] in
+            guard let self else { return }
+            let accepted = await send(report, for: presentation.task)
+            guard boundTask == presentation.task.actionID else { return }
+            activity = accepted ? Self.activity(for: report, task: presentation.task) : .cannotConfirm
+        }
+        return true
+    }
+
+    /// Drop the retained bytes when the view, its permission or its lifetime ends.
+    public func closeDocument(cancelled: Bool = false) {
+        guard let presentation = presentedDocument else { return }
+        presentedDocument = nil
+        if !documentReported {
+            documentReported = true
+            let report = ActionReport(outcome: cancelled ? .cancelled : .unknown,
+                                      evidence: .open(resolvedApp: nil, opened: false, documentDigest: nil))
+            activity = Self.activity(for: report, task: presentation.task)
+            Task { [weak self] in await self?.send(report, for: presentation.task) }
+        }
+        syncTicker()
+    }
 
     /// Holds exactly what the owner allowed on this connection, and nothing
     /// while there is no connection.
@@ -802,6 +845,7 @@ public final class ClientModel: ObservableObject {
         }
         // This exact copy was already decided about; re-delivery changes nothing.
         guard policySeen != held else { return }
+        closeDocument()
         policySeen = held
         let binding = PolicyBinding(held)
         guard policyBinding == nil || policyBinding == binding else {
@@ -830,6 +874,7 @@ public final class ClientModel: ObservableObject {
     /// connection that ends takes its copy and its binding with it.
     private func dropPolicy(refused: Bool) {
         policy = nil
+        closeDocument()
         // A named document rests on a root in that copy. Without the copy there
         // is no root, so the name goes with it; the attached text stays.
         document = nil
@@ -878,6 +923,7 @@ public final class ClientModel: ObservableObject {
     private func syncRevocation() {
         guard let revoked = snapshot.revoked, handledRevoke != revoked.actionID else { return }
         handledRevoke = revoked.actionID
+        if presentedDocument?.task.actionID == revoked.actionID { closeDocument(cancelled: true) }
         guard let running, running.task.actionID == revoked.actionID else {
             // Nothing had started, so nothing has to stop; the owner still reads
             // why the task went away.
@@ -904,6 +950,7 @@ public final class ClientModel: ObservableObject {
     private func syncTask() {
         guard let task = snapshot.task else { return }
         guard boundTask != task.actionID else { return }
+        closeDocument()
         boundTask = task.actionID
         carrying?.cancel()
         carrying = Task { [weak self] in await self?.carryOut(task) }
@@ -924,14 +971,15 @@ public final class ClientModel: ObservableObject {
         // A repeat of the same command produces no second effect: the report the
         // first one produced is sent again and nothing runs.
         if let earlier = executor.report(forKey: task.idempotencyKey, now: Self.nowMs()) {
-            await send(earlier, for: task)
-            activity = Self.activity(for: earlier, task: task)
+            let accepted = await send(earlier, for: task)
+            activity = accepted ? Self.activity(for: earlier, task: task) : .cannotConfirm
             return
         }
         // The owner's copy is what this command is checked against, so a task
         // that arrives with one still being read waits for it.
         await loadingPolicy?.value
         guard let policy else { await refuse(.notPermitted, for: task); return }
+        let heldPolicy = policySeen
         let planned: PlannedAction
         switch policy.plan(task.operation) {
         case .failure(let reason):
@@ -948,14 +996,22 @@ public final class ClientModel: ObservableObject {
             await refuse(.noAttestation, for: task)
             return
         }
-        await deliver { [client] in try await client.acknowledgeTask(task) }
+        guard await deliver({ [client] in try await client.acknowledgeTask(task) }),
+              !Task.isCancelled, snapshot.phase == .connected, snapshot.task == task,
+              boundTask == task.actionID, policySeen == heldPolicy, self.policy != nil,
+              Self.nowMs() < task.expiresAtMs else { return }
         switch planned {
         case .run(let entry):
             await execute(entry, for: task)
+        case .showDocument(let content):
+            documentReported = false
+            presentedDocument = DocumentPresentation(task: task, content: content)
+            activity = .working(label: task.operation.label, startedAtMs: Self.nowMs(), cancellable: true)
+            syncTicker()
         default:
             let report = executor.open(planned)
-            await send(report, for: task)
-            activity = Self.activity(for: report, task: task)
+            let accepted = await send(report, for: task)
+            activity = accepted ? Self.activity(for: report, task: task) : .cannotConfirm
         }
     }
 
@@ -976,7 +1032,7 @@ public final class ClientModel: ObservableObject {
         progressing?.cancel()
         progressing = nil
         running = nil
-        await send(report, for: task)
+        guard await send(report, for: task) else { activity = .cannotConfirm; return }
         if case .command(_, let exitCode, let durationMs, _, _) = report.evidence {
             if let reason = stoppedBy {
                 activity = TaskCard.revoked(reason, label: entry.label)
@@ -1020,6 +1076,7 @@ public final class ClientModel: ObservableObject {
     /// The owner stopping the task at this Mac. It needs no new authority: this
     /// installation stops its own work and says it stopped it.
     public func cancelTask() {
+        closeDocument(cancelled: true)
         guard running != nil else { return }
         stoppedBy = .cancelled
         executor.stop()
@@ -1084,9 +1141,10 @@ public final class ClientModel: ObservableObject {
 
     /// Exactly one report per task, remembered so a repeat of the same command
     /// re-sends it rather than doing anything again.
-    private func send(_ report: ActionReport, for task: DeviceTask) async {
+    @discardableResult
+    private func send(_ report: ActionReport, for task: DeviceTask) async -> Bool {
         executor.remember(report, forKey: task.idempotencyKey, now: Self.nowMs())
-        await deliver { [client] in try await client.report(report, for: task) }
+        return await deliver { [client] in try await client.report(report, for: task) }
     }
 
     static func activity(for report: ActionReport, task: DeviceTask) -> TaskActivity {
@@ -1108,14 +1166,19 @@ public final class ClientModel: ObservableObject {
     /// One second at a time, only while something is actually moving. A quiet
     /// panel never redraws.
     private func syncTicker() {
-        let wanted = running != nil || snapshot.confirmation != nil
+        let wanted = running != nil || snapshot.confirmation != nil || presentedDocument != nil
         guard wanted else { ticker?.cancel(); ticker = nil; return }
         guard ticker == nil else { return }
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 clock = Self.nowMs()
-                if running == nil, snapshot.confirmation == nil { ticker = nil; return }
+                if let presentation = presentedDocument {
+                    let deadline = documentReported ? presentation.task.expiresAtMs : min(
+                        presentation.task.expiresAtMs, presentation.task.reportByMs)
+                    if clock >= deadline { closeDocument() }
+                }
+                if running == nil, snapshot.confirmation == nil, presentedDocument == nil { ticker = nil; return }
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
@@ -1124,20 +1187,22 @@ public final class ClientModel: ObservableObject {
     /// Sends one control, waiting out any operation the panel started. A
     /// refusal, a report or a grant is never dropped because something else was
     /// in flight.
-    private func deliver(_ body: @escaping @MainActor () async throws -> Void) async {
+    @discardableResult
+    private func deliver(_ body: @escaping @MainActor () async throws -> Void) async -> Bool {
         for _ in 0..<100 {
             while busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return false }
             do {
                 try await body()
-                return
+                return true
             } catch ClientFailure.busy {
                 try? await Task.sleep(for: .milliseconds(100))
             } catch {
                 snapshot = client.snapshot
-                return
+                return false
             }
         }
+        return false
     }
 
     public func publicDescriptorData() -> Data? { descriptorData }

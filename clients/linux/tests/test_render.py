@@ -42,6 +42,14 @@ PYTHON = render_python()
 
 @unittest.skipUnless(PYTHON is not None, "no Python with PySide6 (set COSMOS_LINUX_PYTHON)")
 class OffscreenRenderTest(unittest.TestCase):
+    def test_a_real_document_frame_completes_the_matching_task_once(self):
+        environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software",
+                       "QT_QUICK_CONTROLS_STYLE": "Basic", "PYTHONDONTWRITEBYTECODE": "1"}
+        result = subprocess.run(
+            [str(PYTHON), "-B", "-c", "from tests.test_render import document_scenario; document_scenario()"],
+            cwd=CLIENT, env=environment, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def render(self, kind: str, output: Path, extra_env: dict = None) -> str:
         environment = {
             **os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software",
@@ -71,6 +79,84 @@ class OffscreenRenderTest(unittest.TestCase):
             noise = self.render("connected", Path(temporary) / "light.png",
                                 {"COSMOS_THEME": "light", "COSMOS_REDUCED_MOTION": "1"})
             self.assertEqual(noise, "")
+
+
+def document_scenario():
+    """Actual QML layout/frame-swap against a synthetic admitted command.
+
+    Exercises the renderer/bridge/controller together, with no enrolled device
+    or private request. This is not a physical handoff acceptance test.
+    """
+    from PySide6.QtCore import QObject, QTimer, QUrl
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtQml import QQmlApplicationEngine
+    from cosmos_linux import strings as S
+    from cosmos_linux.app import PACKAGE_DIR, make_backend_class, theme_tokens
+    from tests.test_device_actions import HandoffTest
+    from tests.fixtures import TASK_ID, revoked
+
+    application = QGuiApplication([])
+    harness = HandoffTest()
+    harness.setUp()
+    try:
+        harness.document.write_text("😀 Heading\n" + "\n".join(f"Line {line}" for line in range(2, 101)), encoding="utf-8")
+        harness.connected()
+        harness.show()
+        harness.fold(task=harness.act(position={"kind": "line", "line": 70}))
+        harness.settle("acknowledge_task")
+        expected = harness.state.document
+        assert harness.commands("report") == []
+        backend = make_backend_class()(harness.controller, "Synthetic test", True)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty("backend", backend)
+        engine.rootContext().setContextProperty("theme", theme_tokens())
+        engine.rootContext().setContextProperty("S", S.as_map())
+        engine.load(QUrl.fromLocalFile(str(PACKAGE_DIR / "qml" / "Main.qml")))
+        window = engine.rootObjects()[0]
+        window.frameSwapped.connect(backend.frame_painted)
+        window.requestActivate()
+        errors = []
+        finished = False
+
+        def check():
+            nonlocal finished
+            try:
+                harness.controller.drain()
+                reports = harness.commands("report")
+                if not reports:
+                    window.update()
+                    return
+                assert len(reports) == 1 and reports[0][1]["outcome"] == "completed", reports
+                assert reports[0][1]["evidence"]["documentDigest"] == expected.digest
+                harness.settle("report")
+                assert harness.state.task.phase == "done"
+                editor = window.findChild(QObject, "documentText")
+                assert editor is not None and editor.property("text") == expected.text
+                assert editor.property("cursorPosition") == expected.cursor
+                harness.fold(revoked=revoked())
+                assert harness.state.document is None
+                backend.documentRendered(TASK_ID, expected.digest, expected.line)
+                backend.frame_painted()
+                assert len(harness.commands("report")) == 1, "a stale frame cannot report twice"
+                finished = True
+                application.quit()
+            except Exception as error:
+                errors.append(error)
+                application.quit()
+
+        timer = QTimer()
+        timer.timeout.connect(check)
+        timer.start(30)
+        QTimer.singleShot(5000, application.quit)
+        application.exec()
+        timer.stop()
+        window.hide()
+        if errors:
+            raise errors[0]
+        assert finished, "the actual QML document/line frame never completed"
+    finally:
+        harness.controller.shutdown()
+        harness.doCleanups()
 
 
 if __name__ == "__main__":

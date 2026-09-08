@@ -173,7 +173,7 @@ class OpenTest(unittest.TestCase):
     def file_operation(self, **overrides) -> dict:
         operation = {"kind": "open",
                      "locator": {"scheme": "file", "rootId": "repo", "relative": "src/state.rs"},
-                     "version": self.digest, "position": {"kind": "line", "line": 1710},
+                     "version": self.digest, "position": {"kind": "line", "line": 1},
                      "label": "state.rs"}
         operation.update(overrides)
         return {key: value for key, value in operation.items() if value is not None}
@@ -204,13 +204,28 @@ class OpenTest(unittest.TestCase):
         self.assertFalse(line.bound)
         self.assertEqual(line.refusal, A.NO_HANDLER)
 
-    def test_a_file_under_a_declared_root_opens_at_its_line(self):
+    def test_a_versioned_file_is_held_for_the_internal_viewer_without_launching_an_editor(self):
         decision = A.plan(task(self.file_operation()), self.policy, self.openers, which_all)
         self.assertTrue(decision.bound)
-        self.assertEqual(decision.launch.argv,
-                         ("code", "-g", f"{os.path.realpath(self.document)}:1710"))
-        self.assertEqual(decision.launch.resolved_app, "code")
-        self.assertEqual(decision.launch.document_digest, self.digest)
+        self.assertIsNone(decision.launch)
+        self.assertEqual(decision.document.digest, self.digest)
+        self.assertEqual(decision.document.line, 1)
+        self.document.write_text("changed after planning\n", encoding="utf-8")
+        self.assertEqual(decision.document.text, "fn main() {}\n")
+
+    def test_an_explicit_fragment_replaces_the_previous_position_and_is_url_encoded(self):
+        operation = {"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a#old"},
+                     "label": "A", "position": {"kind": "fragment", "value": "new section"}}
+        decision = A.plan(task(operation), self.policy, self.openers, which_all)
+        self.assertEqual(decision.launch.argv, ("xdg-open", "https://github.com/a#new%20section"))
+
+    def test_a_versioned_url_is_refused_before_any_external_browser_launch(self):
+        operation = {"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a"},
+                     "label": "A", "version": self.digest}
+        decision = A.plan(task(operation), self.policy, self.openers, which_all)
+        self.assertFalse(decision.bound)
+        self.assertEqual(decision.refusal, A.VERSION_CHANGED)
+        self.assertIsNone(decision.launch)
 
     def test_a_root_this_installation_never_declared_is_refused(self):
         decision = A.plan(task(self.file_operation(
@@ -237,7 +252,7 @@ class OpenTest(unittest.TestCase):
         self.assertEqual(decision.refusal, A.VERSION_CHANGED)
 
     def test_a_missing_tool_is_a_plain_refusal_and_never_a_crash(self):
-        for operation in (self.file_operation(),
+        for operation in (self.file_operation(version=None),
                           {"kind": "open", "locator": {"scheme": "https", "url": "https://github.com/a"},
                            "label": "A"},
                           {"kind": "open", "locator": {"scheme": "app", "id": "dev.zed.Zed"}, "label": "Zed"}):
@@ -269,6 +284,9 @@ class OpenTest(unittest.TestCase):
         zed = task({"kind": "open", "locator": {"scheme": "app", "id": "dev.zed.Zed"}, "label": "Zed"})
         decision = A.plan(zed, self.policy, self.openers, which_all)
         self.assertEqual(decision.launch.argv, ("gio", "launch", "dev.zed.Zed.desktop"))
+        self.assertEqual(decision.launch.resolved_app, "dev.zed.Zed")
+        report = A.report_for(decision.launch, A.Observation(A.EXITED, 0))
+        self.assertEqual(report["evidence"]["resolvedApp"], "dev.zed.Zed")
         # A local entry for an application the owner never allowed starts nothing.
         other = task({"kind": "open", "locator": {"scheme": "app", "id": "com.other.App"}, "label": "Other"})
         unknown = A.plan(other, self.policy, local_openers(
@@ -283,14 +301,13 @@ class OpenTest(unittest.TestCase):
 class ReportTest(unittest.TestCase):
     """Only an observation may say completed."""
 
-    LAUNCH = A.Launch(argv=("xdg-open", "https://github.com/a"), resolved_app="code",
-                      document_digest="a" * 64, label="PR 412")
+    LAUNCH = A.Launch(argv=("xdg-open", "https://github.com/a"), resolved_app="code", label="PR 412")
 
-    def test_a_launcher_that_exited_zero_is_the_observation_of_an_open(self):
+    def test_a_launcher_that_exited_zero_does_not_prove_what_the_destination_displayed(self):
         report = A.report_for(self.LAUNCH, A.Observation(A.EXITED, 0))
-        self.assertEqual(report["outcome"], "completed")
-        self.assertTrue(report["evidence"]["opened"])
-        self.assertEqual(report["evidence"]["documentDigest"], "a" * 64)
+        self.assertEqual(report["outcome"], "unknown")
+        self.assertFalse(report["evidence"]["opened"])
+        self.assertNotIn("documentDigest", report["evidence"])
         self.assertEqual(report["evidence"]["resolvedApp"], "code")
 
     def test_a_launch_this_computer_could_not_observe_is_unknown_and_never_completed(self):

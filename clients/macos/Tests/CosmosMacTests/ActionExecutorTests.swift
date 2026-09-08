@@ -221,10 +221,14 @@ final class ActionExecutorTests: XCTestCase {
         try Data("fn main() {}\n".utf8).write(to: file)
         let digest = try XCTUnwrap(Filesystem.real.digest(file.path))
         let policy = Self.policy(roots: [DeviceRoot(id: "repo", label: "Projects", path: base.path)])
-        XCTAssertEqual(policy.plan(.open(locator: .file(rootID: "repo", relative: "state.rs"),
-                                         version: digest, position: .line(17), label: "state.rs")),
-                       .success(.openFile(URL(fileURLWithPath: file.path))))
+        let planned = try policy.plan(.open(locator: .file(rootID: "repo", relative: "state.rs"),
+                                             version: digest, position: .line(1), label: "state.rs")).get()
+        guard case .showDocument(let snapshot) = planned else { return XCTFail("a verified native snapshot") }
+        XCTAssertEqual(snapshot.text, "fn main() {}\n")
+        XCTAssertEqual(snapshot.digest, digest)
+        XCTAssertEqual(snapshot.line, 1)
         try Data("fn main() { changed() }\n".utf8).write(to: file)
+        XCTAssertEqual(snapshot.text, "fn main() {}\n", "rendering retains the verified bytes")
         XCTAssertEqual(policy.plan(.open(locator: .file(rootID: "repo", relative: "state.rs"),
                                          version: digest, position: .line(17), label: "state.rs")),
                        .failure(.versionChanged))
@@ -450,8 +454,8 @@ final class ActionExecutorTests: XCTestCase {
         let url = URL(string: "https://github.com/owner/repo/pull/412")!
         let took = WorkspaceOpener(open: { _ in "com.apple.Safari" }, launch: { _ in nil })
         XCTAssertEqual(executor.open(.openLink(url), opener: took),
-                       ActionReport(outcome: .completed,
-                                    evidence: .open(resolvedApp: "com.apple.Safari", opened: true,
+                       ActionReport(outcome: .unknown,
+                                    evidence: .open(resolvedApp: "com.apple.Safari", opened: false,
                                                     documentDigest: nil)))
         let refused = WorkspaceOpener(open: { _ in nil }, launch: { _ in nil })
         let report = executor.open(.openLink(url), opener: refused)

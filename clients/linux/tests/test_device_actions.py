@@ -78,7 +78,7 @@ class DeviceActionHarness(unittest.TestCase):
         self.fold(operation="policy", policy=policy_record(document, **overrides))
 
     def fold(self, **overrides):
-        base = dict(connected=True, needsReconnect=False)
+        base = dict(connected=True, needsReconnect=False, visible=self.state.visible)
         if self.surface.policy is not None:
             # Every snapshot names the copy the worker holds, exactly as the
             # library's own does.
@@ -124,9 +124,9 @@ class BindingTest(DeviceActionHarness):
         self.controller.drain()
         reports = self.commands("report")
         self.assertEqual(len(reports), 1)
-        self.assertEqual(reports[0][1], {"outcome": "completed", "evidence": {
-            "kind": "open", "opened": True, "resolvedApp": "code"}})
-        self.assertEqual(self.state.task.phase, viewstate.TASK_DONE)
+        self.assertEqual(reports[0][1], {"outcome": "unknown", "evidence": {
+            "kind": "open", "opened": False, "resolvedApp": "code"}})
+        self.assertEqual(self.state.task.phase, viewstate.TASK_UNKNOWN)
         self.assertEqual(self.state.task.elapsed, 3)
         # Nothing more is sent for the same command.
         self.controller.drain()
@@ -284,42 +284,126 @@ class StaleReportTest(DeviceActionHarness):
         self.fold(operation="report", error="stale_task")
         self.assertIsNone(self.state.failure, "a stale report is not a failed effect")
         self.assertEqual(self.state.phase, Phase.CONNECTED)
-        self.assertEqual(self.state.task.phase, viewstate.TASK_DONE)
+        self.assertEqual(self.state.task.phase, viewstate.TASK_UNKNOWN)
         self.assertEqual(len(self.commands("report")), 1, "it is never re-sent for that action")
 
 
 class HandoffTest(DeviceActionHarness):
-    """"Explain this document on the Mac, continue on my PC": the receiving half.
-
-    The runtime binds the locator from the document handle the Mac attached to
-    its screen context, and this computer opens exactly that, at exactly that
-    place, only when the file it holds still hashes to the version the Mac read.
-    """
+    """Destination tests using a local file. These do not establish transfer,
+    private routing eligibility or a physical Mac-to-PC handoff."""
 
     def act(self, **overrides) -> dict:
         operation = {"kind": "open",
                      "locator": {"scheme": "file", "rootId": "repo", "relative": "src/state.rs"},
                      "version": A.file_digest(str(self.document)),
-                     "position": {"kind": "line", "line": 1710},
+                     "position": {"kind": "line", "line": 1},
                      "label": "state.rs"}
         operation.update(overrides)
-        return open_task({key: value for key, value in operation.items() if value is not None},
-                         privacy="private")
+        result = open_task({key: value for key, value in operation.items() if value is not None},
+                           privacy="shared_room")
+        result["expiresAtMs"] = self.now_ms + 60_000
+        result["reportByMs"] = self.now_ms + 10_000
+        return result
 
-    def test_the_pc_opens_the_same_document_at_the_same_place(self):
+    def show(self):
+        self.controller.set_visible(True)
+        self.controller.drain()
+        self.settle("set_visible")
+        self.fold(visible=True)
+
+    def paint(self, **overrides):
+        values = dict(action_id=TASK_ID, digest=self.state.document.digest, line=self.state.document.line)
+        values.update(overrides)
+        return self.controller.document_committed(**values)
+
+    def test_completion_waits_for_the_exact_document_and_line_to_be_painted(self):
         self.connected()
+        self.show()
         self.fold(task=self.act())
-        self.assertEqual(self.launcher.started[0].argv,
-                         ("code", "-g", f"{os.path.realpath(self.document)}:1710"))
+        self.assertEqual(self.launcher.started, [])
+        self.assertEqual(self.state.document.text, "fn main() {}\n")
+        self.assertEqual(self.commands("report"), [])
         self.settle("acknowledge_task")
-        self.launcher.observe(A.Observation(A.EXITED, 0))
+        self.assertFalse(self.paint(digest="f" * 64))
+        self.assertFalse(self.paint(line=2))
+        self.assertFalse(self.paint(action_id="f" * 36))
+        self.assertEqual(self.commands("report"), [])
+        self.assertTrue(self.paint())
         self.controller.drain()
         self.assertEqual(self.commands("report")[0][1], {
             "outcome": "completed",
-            "evidence": {"kind": "open", "opened": True, "resolvedApp": "code",
+            "evidence": {"kind": "open", "opened": True, "resolvedApp": "dk.andersmadsen.cosmos.linux",
                          "documentDigest": A.file_digest(str(self.document))}})
+        self.assertFalse(self.paint(), "the same frame cannot complete twice")
+        self.assertEqual(self.state.task.phase, viewstate.TASK_WORKING, "the report has not committed yet")
+        self.settle("report")
         card = viewstate.task_card(self.state.task)
         self.assertEqual((card.title, card.detail), (S.COMPLETED, "state.rs is open on this computer."))
+
+    def test_source_changes_after_reading_do_not_substitute_what_gets_rendered(self):
+        self.connected()
+        self.show()
+        self.fold(task=self.act())
+        original = self.state.document.digest
+        self.document.write_text("different bytes\n", encoding="utf-8")
+        self.settle("acknowledge_task")
+        self.assertEqual(self.state.document.text, "fn main() {}\n")
+        self.assertTrue(self.paint())
+        self.controller.drain()
+        self.assertEqual(self.commands("report")[0][1]["evidence"]["documentDigest"], original)
+
+    def test_a_rejected_render_report_never_becomes_a_completed_status(self):
+        self.connected()
+        self.show()
+        self.fold(task=self.act())
+        self.settle("acknowledge_task")
+        self.assertTrue(self.paint())
+        self.controller.drain()
+        self.assertEqual(self.state.task.phase, viewstate.TASK_WORKING)
+        self.fold(operation="report", error="stale_task")
+        self.assertEqual(self.state.task.phase, viewstate.TASK_UNKNOWN)
+
+    def test_a_confirmation_covering_the_view_invalidates_a_pending_frame(self):
+        self.connected()
+        self.show()
+        self.fold(task=self.act())
+        self.settle("acknowledge_task")
+        self.fold(confirmation=confirmation())
+        self.assertFalse(self.paint())
+        self.assertEqual(self.commands("report"), [])
+
+    def test_hidden_or_expired_views_cannot_report_completion(self):
+        self.connected()
+        self.fold(task=self.act())
+        self.assertFalse(self.paint())
+        self.show()
+        self.now_ms += 10_000
+        self.assertFalse(self.paint())
+        self.controller.drain()
+        self.assertIsNone(self.state.document)
+        self.assertEqual(self.state.task.phase, viewstate.TASK_UNKNOWN)
+
+    def test_revocation_cancellation_disconnect_and_policy_change_release_the_snapshot(self):
+        for transition in ("revoke", "cancel", "disconnect", "policy", "hide"):
+            with self.subTest(transition=transition):
+                self.setUp()
+                self.connected()
+                self.show()
+                self.fold(task=self.act())
+                self.settle("acknowledge_task")
+                digest = self.state.document.digest
+                if transition == "revoke":
+                    self.fold(revoked=revoked())
+                elif transition == "cancel":
+                    self.controller.cancel_task()
+                elif transition == "disconnect":
+                    self.fold(connected=False)
+                elif transition == "policy":
+                    self.deliver(policy_document(hosts=["github.com"], revision=4))
+                else:
+                    self.controller.set_visible(False)
+                self.assertIsNone(self.state.document)
+                self.assertFalse(self.controller.document_committed(TASK_ID, digest, 1))
 
     def test_a_document_that_changed_on_the_way_is_not_opened_and_never_substituted(self):
         original = A.file_digest(str(self.document))

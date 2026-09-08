@@ -173,6 +173,7 @@ public enum ActionRefusal: String, Error, Equatable, Sendable, CaseIterable {
 public enum PlannedAction: Equatable, Sendable {
     case openLink(URL)
     case openFile(URL)
+    case showDocument(DocumentSnapshot)
     case openApplication(bundleID: String)
     case run(CommandEntry)
 
@@ -388,8 +389,8 @@ public struct DevicePolicy: Equatable, Sendable {
         case .unsupported:
             // macOS declares neither route nor play; nothing here can carry one out.
             return .failure(.noHandler)
-        case .open(let locator, let version, _, _):
-            return plan(locator, version: version, filesystem: filesystem)
+        case .open(let locator, let version, let position, _):
+            return plan(locator, version: version, position: position, filesystem: filesystem)
         case .run(let entryID, _, let entryDigest, let argvDigest, _, _):
             guard let entry = entry(entryID) else { return .failure(.notPermitted) }
             // The argv is this file's, keyed by id. The digests only prove the
@@ -401,7 +402,7 @@ public struct DevicePolicy: Equatable, Sendable {
         }
     }
 
-    private func plan(_ locator: DeviceLocator, version: String?,
+    private func plan(_ locator: DeviceLocator, version: String?, position: DevicePosition?,
                       filesystem: Filesystem) -> Result<PlannedAction, ActionRefusal> {
         switch locator {
         case .https(let value):
@@ -410,9 +411,19 @@ public struct DevicePolicy: Equatable, Sendable {
                 return .failure(.unresolvable)
             }
             guard hosts.contains(host) else { return .failure(.notPermitted) }
+            if let position {
+                guard case .fragment(let fragment) = position,
+                      var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                    return .failure(.noHandler)
+                }
+                parts.fragment = fragment
+                guard let target = parts.url else { return .failure(.unresolvable) }
+                return .success(.openLink(target))
+            }
             return .success(.openLink(url))
         case .app(let id):
             guard apps.contains(where: { $0.id == id }) else { return .failure(.notPermitted) }
+            guard version == nil, position == nil else { return .failure(.noHandler) }
             return .success(.openApplication(bundleID: id))
         case .file(let rootID, let relative):
             guard let root = root(rootID) else { return .failure(.unresolvable) }
@@ -420,9 +431,12 @@ public struct DevicePolicy: Equatable, Sendable {
             case .failure(let refusal): return .failure(refusal)
             case .success(let path):
                 if let version {
-                    guard let actual = filesystem.digest(path) else { return .failure(.unresolvable) }
-                    guard actual == version else { return .failure(.versionChanged) }
+                    do { return .success(.showDocument(try DocumentSnapshot.read(
+                        path: path, version: version, position: position))) }
+                    catch let reason as ActionRefusal { return .failure(reason) }
+                    catch { return .failure(.unresolvable) }
                 }
+                guard position == nil else { return .failure(.noHandler) }
                 return .success(.openFile(URL(fileURLWithPath: path)))
             }
         }

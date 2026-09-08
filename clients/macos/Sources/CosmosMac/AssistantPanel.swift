@@ -310,6 +310,24 @@ public struct AssistantPanel: View {
                              cancel: model.cancelTask)
                     .transition(.opacity)
             }
+            if let presentation = model.presentedDocument {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(presentation.task.operation.label).font(.headline).lineLimit(1)
+                        Spacer()
+                        Text("Read-only · Line \(presentation.content.line)")
+                            .font(.caption).foregroundStyle(CosmosTokens.secondary)
+                        Button("Close document") { model.closeDocument(cancelled: true) }
+                            .buttonStyle(QuietButton())
+                    }
+                    DocumentView(presentation: presentation, committed: model.documentCommitted)
+                        .frame(height: 260)
+                }
+                .padding(12)
+                .background(CosmosTokens.surface, in: RoundedRectangle(cornerRadius: CosmosTokens.cardRadius))
+                .overlay(RoundedRectangle(cornerRadius: CosmosTokens.cardRadius)
+                    .strokeBorder(CosmosTokens.accent, lineWidth: 1))
+            }
             if hasResponse { responseCard }
             // A quiet, empty panel offers only the ask field; the room's own controls
             // appear once there is a turn to act on, or a room state to get out of.

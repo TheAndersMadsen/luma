@@ -202,10 +202,11 @@ acceptance work:
   before model disclosure. Native routing questions also perform no history
   read. Authenticated personal continuation, physical privacy evidence and
   privacy-aware observer rendering remain acceptance work.
-- A document handle carries a locator, version and position. It does not
-  transfer a file, unsaved edits or the current explanation/task. macOS and
-  Linux can observe a handler accepting an open request; this is insufficient
-  evidence that the exact document, position and task are visible there.
+- A document handle carries a locator, version and position. macOS and Linux
+  now hold a verified local text snapshot for their own read-only viewers and
+  report completion only after drawing that version at the requested line.
+  External launcher acceptance reports an unknown outcome. The handle still
+  does not transfer a file, unsaved edits or the current explanation/task.
 - TV subtitles previously acknowledged the whole card even when they showed
   only a clipped prefix or a place-query title. Acknowledgment now requires a
   complete caption or every rendered page of the full answer. Physical Shield
@@ -466,7 +467,7 @@ Reports also match the bound operation: the command entry, playback provider
 and recommendation item, explicit application identity, and document version.
 A versioned open requires the matching document digest before completion;
 missing version evidence may report an unknown outcome. This validates the
-device's statement, not that the destination actually rendered the document.
+device's statement; the desktop viewers supply their own render observation.
 Current playback operations carry a title query and recommendation digest, so
 neither Cosmos nor the shared client accepts a completed playback report for
 them. Exact provider media identity and observed playback remain required.
@@ -806,6 +807,29 @@ external specialist collaboration. None supplies the missing document transfer,
 origin-scoped grants or physical outcome evidence. The next document capability
 must transport an authorized immutable snapshot and task revision, then observe
 that exact content at the destination through the existing action pipeline.
+
+The destination implementation on macOS and Linux now reads a versioned local
+file once, verifies those retained bytes, and presents them in a native read-only
+viewer. It supports UTF-8 text up to 256 KiB and an existing line number; CRLF
+line endings display as newlines while the version digest covers the original
+bytes. Markup remains literal text. PDF pages, web-content versions, fragments
+inside local files and unsaved application buffers need their own supported
+adapters. They are not silently opened at another position. Unversioned files
+and links may still use an external handler, whose acceptance reports an unknown
+outcome because Cosmos cannot observe its document.
+
+The internal viewer reports completion only after the matching text and line
+are drawn in a visible view, with the action still current and its permission
+and deadline valid. Its task card waits for Cosmos to accept that report before
+showing Completed; a rejected or lost report remains unconfirmed.
+Revocation, policy changes, disconnect, hiding and expiry
+drop the retained snapshot. Tests exercise the real Qt layout/frame-swap path
+and AppKit text drawing with synthetic window availability; live Mac visibility
+acceptance remains separate. These are destination tests, not a connected-device
+transfer demonstration. The source
+file must currently exist under an approved root on the receiving computer.
+Actual byte transfer, explanation/task continuation and an eligible private
+origin/output remain required for the Mac-to-Omarchy product scenario.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:

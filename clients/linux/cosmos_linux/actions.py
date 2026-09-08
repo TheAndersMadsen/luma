@@ -36,8 +36,10 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from . import policy as policy_module
+from . import document as document_module
 from .policy import NO_OPENERS, Openers, Policy, Resolved, resolve_under_root
 
 log = logging.getLogger("cosmos.actions")
@@ -156,7 +158,6 @@ class Launch:
 
     argv: tuple
     resolved_app: Optional[str] = None
-    document_digest: Optional[str] = None
     # What the owner reads while it happens: "Opening state.rs".
     label: str = ""
 
@@ -168,6 +169,7 @@ class Plan:
 
     bound: bool
     launch: Optional[Launch] = None
+    document: Optional[document_module.Document] = None
     refusal: Optional[str] = None
     # An operation this platform does not offer at all, named plainly.
     unsupported: Optional[str] = None
@@ -175,8 +177,7 @@ class Plan:
 
 def plan(task, policy: Optional[Policy], openers: Openers = NO_OPENERS,
          which: Callable[[str], Optional[str]] = shutil.which,
-         resolve: Callable[..., Resolved] = resolve_under_root,
-         digest_of: Callable[[str], Optional[str]] = file_digest) -> Plan:
+         resolve: Callable[..., Resolved] = resolve_under_root) -> Plan:
     """What this computer will do with one command, decided entirely locally.
 
     ``policy`` is the owner's own permission as Cosmos delivered it, or None
@@ -203,22 +204,25 @@ def plan(task, policy: Optional[Policy], openers: Openers = NO_OPENERS,
     position = operation.get("position")
     label = operation.get("label") or ""
     if scheme == "https":
-        return _plan_https(locator.get("url") or "", position, label, policy, which)
+        return _plan_https(locator.get("url") or "", operation.get("version"), position, label, policy, which)
     if scheme == "app":
-        return _plan_app(locator.get("id") or "", position, label, policy, openers, which)
+        return _plan_app(locator.get("id") or "", operation.get("version"), position, label, policy, openers, which)
     if scheme == "file":
         return _plan_file(locator, operation.get("version"), position, label, policy, openers, which,
-                          resolve, digest_of)
+                          resolve)
     return Plan(bound=False, refusal=UNRESOLVABLE)
 
 
-def _plan_https(url: str, position: Optional[dict], label: str, policy: Policy,
+def _plan_https(url: str, version: Optional[str], position: Optional[dict], label: str, policy: Policy,
                 which: Callable[[str], Optional[str]]) -> Plan:
     if not policy_module.valid_https(url):
         return Plan(bound=False, refusal=UNRESOLVABLE)
     if not policy.allows_host(url):
         # The owner did not write this host in this installation's own policy.
         return Plan(bound=False, refusal=NOT_PERMITTED)
+    if version is not None:
+        # An external browser gives this client no exact-content observation.
+        return Plan(bound=False, refusal=VERSION_CHANGED)
     target = url
     if position is not None:
         if position.get("kind") != "fragment":
@@ -226,20 +230,20 @@ def _plan_https(url: str, position: Optional[dict], label: str, policy: Policy,
             # anyway would be opening it at the wrong place.
             return Plan(bound=False, refusal=NO_HANDLER)
         fragment = position.get("value") or ""
-        if "#" not in url:
-            target = f"{url}#{fragment}"
+        parts = urlsplit(url)
+        target = urlunsplit(parts._replace(fragment=quote(fragment, safe="!$&'()*+,;=:@/?-._~")))
     if which(XDG_OPEN) is None:
         return Plan(bound=False, refusal=NO_HANDLER)
     return Plan(bound=True, launch=Launch(argv=(XDG_OPEN, target), label=label))
 
 
-def _plan_app(identifier: str, position: Optional[dict], label: str, policy: Policy, openers: Openers,
+def _plan_app(identifier: str, version: Optional[str], position: Optional[dict], label: str, policy: Policy, openers: Openers,
               which: Callable[[str], Optional[str]]) -> Plan:
     entry = policy.app(identifier)
     if entry is None:
         # Only an application the delivered policy names is ever started.
         return Plan(bound=False, refusal=NOT_PERMITTED)
-    if position is not None:
+    if position is not None or version is not None:
         # Starting an application puts nothing at a place.
         return Plan(bound=False, refusal=NO_HANDLER)
     desktop = openers.desktop_for(identifier)
@@ -248,19 +252,19 @@ def _plan_app(identifier: str, position: Optional[dict], label: str, policy: Pol
         # it. That is a local gap, not a permission.
         return Plan(bound=False, refusal=NO_HANDLER)
     return Plan(bound=True, launch=Launch(argv=(GIO, "launch", desktop),
-                                          resolved_app=desktop, label=label or entry.label))
+                                          resolved_app=identifier, label=label or entry.label))
 
 
 def _plan_file(locator: dict, version: Optional[str], position: Optional[dict], label: str, policy: Policy,
-               openers: Openers, which: Callable[[str], Optional[str]], resolve: Callable[..., Resolved],
-               digest_of: Callable[[str], Optional[str]]) -> Plan:
+               openers: Openers, which: Callable[[str], Optional[str]], resolve: Callable[..., Resolved]) -> Plan:
     resolved = resolve(policy, locator.get("rootId") or "", locator.get("relative") or "")
     if resolved.path is None:
         return Plan(bound=False, refusal=resolved.reason or UNRESOLVABLE)
     if version is not None:
-        # Like against like: the file's own bytes, exactly what the source hashed.
-        if digest_of(resolved.path) != version:
-            return Plan(bound=False, refusal=VERSION_CHANGED)
+        try:
+            return Plan(bound=True, document=document_module.read(resolved.path, version, position))
+        except document_module.Unavailable as error:
+            return Plan(bound=False, refusal=error.reason)
     relative = locator.get("relative") or ""
     # How this desktop opens that suffix is its own business, never Cosmos's.
     opener = openers.opener_for(relative)
@@ -278,14 +282,14 @@ def _plan_file(locator: dict, version: Optional[str], position: Optional[dict], 
             return Plan(bound=False, refusal=NO_HANDLER)
         argv = opener.command(resolved.path, line=position.get("line"), page=position.get("page"))
         return Plan(bound=True, launch=Launch(argv=argv, resolved_app=_app_name(opener.program),
-                                              document_digest=version, label=label))
+                                              label=label))
     if opener is not None and which(opener.program) is not None:
         argv = opener.command(resolved.path)
         return Plan(bound=True, launch=Launch(argv=argv, resolved_app=_app_name(opener.program),
-                                              document_digest=version, label=label))
+                                              label=label))
     if which(XDG_OPEN) is None:
         return Plan(bound=False, refusal=NO_HANDLER)
-    return Plan(bound=True, launch=Launch(argv=(XDG_OPEN, resolved.path), document_digest=version, label=label))
+    return Plan(bound=True, launch=Launch(argv=(XDG_OPEN, resolved.path), label=label))
 
 
 def _app_name(program: str) -> Optional[str]:
@@ -317,9 +321,8 @@ def refusal_report(reason: str) -> dict:
 def report_for(launch: Launch, observation: Observation) -> dict:
     """What this computer says happened, and nothing more than it saw.
 
-    A launcher that exited zero found and started a handler; that is an
-    observation. A launcher still running when the budget ran out is not one:
-    it is ``unknown``, never ``completed``.
+    A launcher exiting zero is not an observation of the destination. Without
+    a renderer/application bridge it cannot establish what opened there.
     """
     evidence = {"kind": "open", "opened": False, **_app(launch)}
     if observation.kind == NOT_STARTED:
@@ -327,10 +330,7 @@ def report_for(launch: Launch, observation: Observation) -> dict:
     if observation.kind == STOPPED:
         return {"outcome": CANCELLED, "evidence": evidence}
     if observation.kind == EXITED and observation.exit_code == 0:
-        evidence["opened"] = True
-        if launch.document_digest is not None:
-            evidence["documentDigest"] = launch.document_digest
-        return {"outcome": COMPLETED, "evidence": evidence}
+        return {"outcome": UNKNOWN, "evidence": evidence}
     if observation.kind == EXITED:
         return {"outcome": FAILED, "evidence": evidence}
     return {"outcome": UNKNOWN, "evidence": evidence}

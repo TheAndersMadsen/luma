@@ -116,6 +116,7 @@ final class MockClientBridge: ClientBridge {
     var acknowledgedSpeech: [SpeechReply] = []
     var acknowledgedTasks: [DeviceTask] = []
     var reports: [(ActionReport, DeviceTask)] = []
+    var reportHandler: ((ActionReport, DeviceTask) async throws -> Void)?
     var progressMessages: [(UInt32, Int64)] = []
     var grants: [(Bool, Attestation?, ConfirmationRequest)] = []
     var speechAudioHandler: ((SpeechReply) async throws -> Data)?
@@ -205,6 +206,7 @@ final class MockClientBridge: ClientBridge {
     func report(_ report: ActionReport, for task: DeviceTask) async throws {
         guard capabilities.actions else { throw ClientFailure.featureUnavailable }
         reports.append((report, task))
+        if let reportHandler { try await reportHandler(report, task) }
     }
     func progress(sequence: UInt32, elapsedMs: Int64, for task: DeviceTask) async throws {
         guard capabilities.actions else { throw ClientFailure.featureUnavailable }

@@ -528,7 +528,8 @@ final class TaskCardStateTests: XCTestCase {
             generation: 7, channel: channel,
             contentDigest: String(repeating: "b", count: 64),
             idempotencyKey: String(repeating: "a", count: 64),
-            operation: operation, expiresAtMs: 1_757_260_000_000, reportByMs: 1_757_260_030_000,
+            operation: operation, expiresAtMs: ClientModel.nowMs() + 60_000,
+            reportByMs: ClientModel.nowMs() + 90_000,
             privacy: "shared_room")
     }
 

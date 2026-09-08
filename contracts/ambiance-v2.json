@@ -1246,6 +1246,38 @@
       "limitation": "Client transport and journal checks only; no file transfer, unsaved-buffer preservation or destination document/position/task observation."
     },
     {
+      "id": "linux-document-destination-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_device_actions.py",
+      "anchor": "def test_completion_waits_for_the_exact_document_and_line_to_be_painted",
+      "scope": "The destination holds verified immutable local file bytes and reports completion only for its matching document/line render callback. Source changes, stale callbacks, hiding, expiry, cancellation, permission changes and disconnect do not substitute content or produce a completed outcome.",
+      "limitation": "Synthetic admitted task and local file; no byte transfer, private context admission or physical Omarchy connection."
+    },
+    {
+      "id": "linux-document-render-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_render.py",
+      "anchor": "def test_a_real_document_frame_completes_the_matching_task_once",
+      "scope": "Real offscreen Qt layout and frame swap drive the controller report for a verified UTF-8 snapshot at line 70. Checks retained text and UTF-16 cursor, one matching completion and refusal of a stale frame after revocation.",
+      "limitation": "Requires PySide6. Uses a synthetic admitted command and software rendering; no physical compositor, transport or owner enrollment acceptance."
+    },
+    {
+      "id": "macos-document-destination-test-definition",
+      "kind": "test-definition",
+      "path": "clients/macos/Tests/CosmosMacTests/DocumentSnapshotTests.swift",
+      "anchor": "func testAnAcknowledgmentDoesNotCompleteAndLaterFileChangesCannotReplaceTheSnapshot",
+      "scope": "A verified local snapshot remains unchanged after the source file changes. Binding cannot complete it; only the matching version/line callback can report completion, once. Visibility, permission, disconnect and cancellation drop its bytes and invalidate late callbacks.",
+      "limitation": "Synthetic bridge with a local file; no source transfer, unsaved editing state, explanation/task migration or private routing acceptance."
+    },
+    {
+      "id": "macos-document-render-test-definition",
+      "kind": "test-definition",
+      "path": "clients/macos/Tests/CosmosMacTests/DocumentSnapshotTests.swift",
+      "anchor": "func testOffscreenDocumentPaintWithSyntheticVisibility",
+      "scope": "An offscreen AppKit text view draws immutable text at the requested line and supplies the matching report through ClientModel. Synthetic occlusion blocks completion, and stale post-close callbacks cannot complete a document.",
+      "limitation": "Real text layout/drawing with synthetic window availability. Live OS visibility was not established by this test. Native room transport, private actor/occupancy eligibility and cross-device file transfer remain separate gates."
+    },
+    {
       "id": "tv-caption-delivery-test-definition",
       "kind": "test-definition",
       "path": "clients/android/app/src/test/java/dk/andersmadsen/cosmos/android/ScreensTest.kt",
@@ -1951,6 +1983,10 @@
         "screen-context-room-test-definition",
         "screen-context-owner-api-test-definition",
         "native-document-transport-test-definition",
+        "linux-document-destination-test-definition",
+        "linux-document-render-test-definition",
+        "macos-document-destination-test-definition",
+        "macos-document-render-test-definition",
         "device-action-document-version-test-definition",
         "device-action-client-evidence-binding-test-definition",
         "device-action-dispatch-test-definition",

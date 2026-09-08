@@ -351,28 +351,26 @@ public final class ActionExecutor {
 
     // MARK: Opening
 
-    /// Hands the locator to the workspace and reports what it saw: which
-    /// application took it, and whether it opened at all.
-    public func open(_ planned: PlannedAction, opener: WorkspaceOpener = .system,
-                     filesystem: Filesystem = .real) -> ActionReport {
+    /// Workspace acceptance does not establish destination rendering. Exact
+    /// document completion belongs to the native snapshot viewer's draw path.
+    public func open(_ planned: PlannedAction, opener: WorkspaceOpener = .system) -> ActionReport {
         switch planned {
         case .openLink(let url):
             guard let handler = opener.open(url) else {
                 return ActionReport(outcome: .failed, evidence: .open(resolvedApp: nil, opened: false,
                                                                      documentDigest: nil))
             }
-            return ActionReport(outcome: .completed,
+            return ActionReport(outcome: .unknown,
                                 evidence: .open(resolvedApp: handler.isEmpty ? nil : handler,
-                                                opened: true, documentDigest: nil))
+                                                opened: false, documentDigest: nil))
         case .openFile(let url):
-            let digest = filesystem.digest(url.path)
             guard let handler = opener.open(url) else {
                 return ActionReport(outcome: .failed,
-                                    evidence: .open(resolvedApp: nil, opened: false, documentDigest: digest))
+                                    evidence: .open(resolvedApp: nil, opened: false, documentDigest: nil))
             }
-            return ActionReport(outcome: .completed,
+            return ActionReport(outcome: .unknown,
                                 evidence: .open(resolvedApp: handler.isEmpty ? nil : handler,
-                                                opened: true, documentDigest: digest))
+                                                opened: false, documentDigest: nil))
         case .openApplication(let identifier):
             guard let handler = opener.launch(identifier) else {
                 return ActionReport.refusal(.noHandler)
@@ -380,7 +378,7 @@ public final class ActionExecutor {
             // A launch this Mac cannot observe further is not an outcome.
             return ActionReport(outcome: .unknown,
                                 evidence: .open(resolvedApp: handler, opened: false, documentDigest: nil))
-        case .run:
+        case .run, .showDocument:
             return ActionReport.refusal(.noHandler)
         }
     }

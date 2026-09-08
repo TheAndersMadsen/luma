@@ -19,6 +19,7 @@ from enum import Enum
 from typing import Callable, Deque, Optional, Protocol
 
 from . import actions
+from .document import Document
 from . import strings as S
 from .context import ScreenContext
 from .endpoint import (
@@ -145,6 +146,7 @@ class State:
     # One command this computer was asked to carry out, as it is going here,
     # and the ceremony this computer is the venue for.
     task: Optional[TaskView] = None
+    document: Optional[Document] = None
     confirmation: Optional[Confirmation] = None
     # Escape dismisses the panel and answers nothing; the request then runs out.
     ceremony_dismissed: bool = False
@@ -583,6 +585,8 @@ class Controller:
         if self._wanted_visible == visible:
             return
         self._wanted_visible = visible
+        if not visible:
+            self.close_document()
         if self._surface is None or self._state.descriptor is None:
             return
         self._defer("set_visible", lambda: self._surface.set_visible(visible), replace_same=True)
@@ -628,6 +632,7 @@ class Controller:
         if self._policy_seen == seen or self._surface is None:
             # This exact copy was already decided about; re-delivery is idempotent.
             return
+        self.close_document()
         self._policy_seen = seen
         binding = (record.surface_id, record.approval_revision)
         if self._policy_binding is not None and self._policy_binding != binding:
@@ -660,6 +665,7 @@ class Controller:
     def _drop_policy(self, refused: bool) -> None:
         """Holding nothing is an ordinary state: this computer then does nothing."""
         self._policy = None
+        self.close_document()
         if not refused:
             # A connection that ends takes its copy and its binding with it; a
             # transient read failure is retried on the next snapshot.
@@ -671,6 +677,7 @@ class Controller:
     def _begin_task(self, task: Task) -> None:
         """One command, decided entirely here. Acknowledging says it is legal on
         this computer; only what this computer then observes may be reported."""
+        self.close_document()
         self._task = task
         self._task_action = task.action_id
         self._task_launch = None
@@ -701,8 +708,37 @@ class Controller:
         self._task_launch = decision.launch
         self._acknowledge_task(task)
         self._update(task=TaskView(task.action_id, label, TASK_WORKING, elapsed=0),
-                     message=S.NOTICE_TASK, failure=None)
-        self._launcher.start(decision.launch)
+                     document=decision.document, message=S.NOTICE_TASK, failure=None)
+        if decision.launch is not None:
+            self._launcher.start(decision.launch)
+
+    def document_committed(self, action_id: str, digest: str, line: int) -> bool:
+        """The viewer painted this immutable version with the requested line visible.
+
+        This callback is separate from binding/transport acknowledgment. The
+        Qt bridge calls it after a frame swap, only for a matching laid-out view.
+        """
+        task, document = self._task, self._state.document
+        if (task is None or document is None or self._task_reported or self._policy is None
+                or task.action_id != action_id or document.digest != digest or document.line != line
+                or self._state.phase != Phase.CONNECTED or not self._wanted_visible
+                or self._state.ceremony_open
+                or not self._state.visible or self._now_ms() >= min(task.expires_at_ms, task.report_by_ms)):
+            return False
+        report = {"outcome": actions.COMPLETED, "evidence": {
+            "kind": "open", "opened": True, "resolvedApp": "dk.andersmadsen.cosmos.linux",
+            "documentDigest": document.digest}}
+        self._send_report(task, report, TASK_DONE, task.label)
+        return True
+
+    def close_document(self, outcome: str = actions.UNKNOWN) -> None:
+        """Release the bytes on closure, loss of availability/permission or expiry."""
+        if self._state.document is None:
+            return
+        self._update(document=None)
+        if self._task is not None and not self._task_reported:
+            report = {"outcome": outcome, "evidence": {"kind": "open", "opened": False}}
+            self._send_report(self._task, report, self._phase_for(report), self._task.label)
 
     def _acknowledge_task(self, task: Task) -> None:
         self._defer("acknowledge_task", self._surface.acknowledge_task,
@@ -721,15 +757,32 @@ class Controller:
         self._task_launch = None
         self._ledger.remember(task.idempotency_key, report, self._scheduler.monotonic())
         elapsed = int(max(0.0, self._scheduler.monotonic() - self._task_started))
-        self._update(task=TaskView(task.action_id, label, phase, elapsed=elapsed, reason=reason,
+        # A positive local observation is reported first. Only the runtime's
+        # successful report acknowledgment may turn the card into Completed.
+        self._update(task=TaskView(task.action_id, label, TASK_WORKING if phase == TASK_DONE else phase,
+                                   elapsed=elapsed, reason=reason,
                                    unsupported=unsupported))
         if self._surface is None:
             return
         payload = actions.report_bytes(report)
         action_id = task.action_id
+        def settled(_event, ok: bool) -> None:
+            if phase == TASK_DONE and self._task_action == action_id:
+                self._update(task=TaskView(action_id, label, TASK_DONE if ok else TASK_UNKNOWN, elapsed=elapsed))
+
+        def send() -> int:
+            try:
+                code = self._surface.report(action_id, payload)
+            except NativeError:
+                settled(None, False)
+                raise
+            if code != OK:
+                settled(None, False)
+            return code
+
         # The report names the action it is about, so a command the runtime
         # replaced between this decision and the worker's queue closes nothing.
-        self._defer("report", lambda: self._surface.report(action_id, payload),
+        self._defer("report", send, on_settled=settled,
                     guard=lambda: self._task_action == action_id and self._state.phase == Phase.CONNECTED)
 
     def _collect_launch(self) -> None:
@@ -745,6 +798,7 @@ class Controller:
         """The runtime revoked it, or the owner cancelled it. Stop what can be
         stopped; the launcher then says what it saw, and ``cancelled`` is only
         for what this computer can prove."""
+        self.close_document(actions.CANCELLED)
         if self._task_action is None or self._task_reported:
             return
         log.info("stopping the running command (%s)", reason)
@@ -795,7 +849,7 @@ class Controller:
         # against the copy this snapshot delivered, never against an older one.
         self._sync_policy(event)
         revoked: Optional[Revoked] = event.revoked
-        if (revoked is not None and self._task_action == revoked.action_id and not self._task_reported):
+        if revoked is not None and self._task_action == revoked.action_id:
             self._stop_task(revoked.reason)
         task = event.task
         if task is not None and task.action_id != self._task_action:
@@ -829,6 +883,11 @@ class Controller:
 
     def _tick_action(self) -> None:
         """The clocks the cards read: elapsed time and the ceremony countdown."""
+        if self._state.document is not None and self._task is not None:
+            deadline = self._task.expires_at_ms if self._task_reported else min(
+                self._task.expires_at_ms, self._task.report_by_ms)
+            if self._now_ms() >= deadline or self._state.phase != Phase.CONNECTED:
+                self.close_document()
         state = self._state
         changes = {}
         if state.task is not None and state.task.running:
@@ -843,6 +902,7 @@ class Controller:
             self._update(**changes)
 
     def _reset_actions(self) -> None:
+        self.close_document()
         if self._task_action is not None or self._launcher.busy:
             self._launcher.stop()
         # The permission belongs to the connection; without one, nothing is held.
@@ -952,6 +1012,7 @@ class Controller:
         self._expected = None
         self._on_settled = None
         self._update(phase=Phase.BLOCKED, busy=False, failure=failure, message=failure.message)
+        self.close_document()
 
     def _check_deadline(self) -> None:
         if self._expected is None or self._scheduler.monotonic() < self._deadline:
@@ -960,6 +1021,8 @@ class Controller:
         self._expected = None
         self._on_settled = None
         log.warning("native %s did not settle before its deadline", name)
+        if name == "report" and self._task_reported and self._state.task is not None and self._state.task.running:
+            self._update(task=replace(self._state.task, phase=TASK_UNKNOWN))
         if name == "prepare":
             self._destroy_surface()
             self._update(phase=Phase.DISCONNECTED, busy=False, failure=Failure.CONNECTION_UNAVAILABLE,
