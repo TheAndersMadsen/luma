@@ -126,7 +126,8 @@ struct NativeEvent: Decodable, Sendable {
         do {
             let event = try JSONDecoder().decode(Self.self, from: bytes)
             guard event.version == 1, event.kind == "state",
-                  ["prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending",
+                  ["prepare", "connect", "send_text", "send_text_to", "send_text_with_context",
+                   "send_text_with_document", "retry_pending",
                    "cancel", "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task", "report",
                    "progress", "grant", "display", "speech", "invitation", "status", "task", "confirmation",
                    "policy", "disconnect", "heartbeat"].contains(event.operation),

@@ -139,10 +139,18 @@ public protocol ContextProvider: AnyObject {
     func selectedText() -> ContextCapture
     /// The pasteboard's plain text. Called only from the explicit "Use clipboard" action.
     func clipboardText() -> ContextCapture
+    /// Which document the application the owner was using says it is showing,
+    /// and where in it they are. Read through the same Accessibility permission
+    /// as the selection, alongside it, and never on its own. Nil whenever that
+    /// application says nothing this Mac can name.
+    func openDocument() -> DocumentObservation?
 }
 
 public extension ContextProvider {
     var canReadSelection: Bool { true }
+    /// A provider that cannot say which document is open names none, which is
+    /// an ordinary answer and not a failure.
+    func openDocument() -> DocumentObservation? { nil }
 }
 
 /// The exact System Settings pane the owner needs for a selection. Opening it is an
@@ -212,5 +220,82 @@ public final class SystemContextProvider: ContextProvider {
         let name = applicationName ?? ContextChip.unknownApp
         guard let text = NSPasteboard.general.string(forType: .string) else { return .empty(app: name) }
         return .text(app: name, text: text)
+    }
+
+    /// What that application publishes about the document it is showing. macOS
+    /// document applications answer `AXDocument` with a file URL, browsers with
+    /// the page's URL; an application that answers nothing names nothing. Only
+    /// these attributes are read — never the document and never the page.
+    public func openDocument() -> DocumentObservation? {
+        guard let application = otherApplication, !application.isTerminated, AXIsProcessTrusted() else {
+            return nil
+        }
+        let element = AXUIElementCreateApplication(application.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 1)
+        let focused = Self.element(element, kAXFocusedUIElementAttribute)
+        let window = Self.element(element, kAXFocusedWindowAttribute)
+        // The focused field first, then the window it belongs to: a browser
+        // publishes the page on its web area, an editor on its window.
+        let holders = [focused, focused.flatMap { Self.element($0, kAXTopLevelUIElementAttribute) }, window]
+        guard let value = holders.compactMap({ $0.flatMap { Self.text($0, kAXDocumentAttribute) } }).first
+        else { return nil }
+        let url = URL(string: value)
+        if let url, url.isFileURL {
+            return Self.file(url.path, focused: focused)
+        }
+        if value.hasPrefix("/") {
+            return Self.file(value, focused: focused)
+        }
+        guard let url, url.scheme?.lowercased() == "https" else { return nil }
+        // The page's own place is its fragment, which the locator carries; the
+        // title is what a person calls the page.
+        let title = window.flatMap { Self.text($0, kAXTitleAttribute) } ?? url.host ?? ""
+        return DocumentObservation(subject: .web(url: value), label: title)
+    }
+
+    private static func file(_ path: String, focused: AXUIElement?) -> DocumentObservation {
+        DocumentObservation(subject: .file(path: path),
+                            position: focused.flatMap(line).map(DocumentPosition.line),
+                            label: (path as NSString).lastPathComponent)
+    }
+
+    /// The line the caret is on, one-based, from what the application itself
+    /// reports. An application that reports neither is left without a place
+    /// rather than given a guessed one.
+    private static func line(of element: AXUIElement) -> Int? {
+        if let reported = number(element, kAXInsertionPointLineNumberAttribute) { return reported + 1 }
+        guard let raw = attribute(element, kAXSelectedTextRangeAttribute),
+              CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(raw as! AXValue, .cfRange, &range), range.location >= 0 else { return nil }
+        var location = range.location
+        guard let index = CFNumberCreate(nil, .cfIndexType, &location) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXLineForIndexParameterizedAttribute as CFString, index, &value) == .success,
+            let reported = value as? Int else { return nil }
+        return reported + 1
+    }
+
+    private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+
+    private static func element(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+        guard let value = attribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        return (value as! AXUIElement)
+    }
+
+    private static func text(_ element: AXUIElement, _ name: String) -> String? {
+        guard let value = attribute(element, name) as? String, !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func number(_ element: AXUIElement, _ name: String) -> Int? {
+        attribute(element, name) as? Int
     }
 }

@@ -159,6 +159,13 @@ public enum Words {
     public static func usingSelection(_ app: String) -> String { "Using: \(app) selection" }
     public static let usingClipboard = "Using: clipboard text"
     public static let contextExplains = "Only this text is attached. The reply stays on this Mac."
+    /// What the chip adds once this Mac can say which document that screen is.
+    /// The owner reads the name before they send anything; the name itself is
+    /// never part of what Cosmos is asked.
+    public static func usingDocument(_ name: String) -> String { " · \(name)" }
+    public static func documentContinues(_ name: String, place: String?) -> String {
+        "Cosmos can pick up \(name)\(place.map { " at \($0)" } ?? "") on another device."
+    }
     public static let removeContext = "Remove the attached text"
     public static let accessibilityOff = "Cosmos can't read the selection yet."
     public static let accessibilityAction = "Turn Cosmos on in System Settings › Privacy & Security › Accessibility."

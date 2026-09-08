@@ -8,8 +8,10 @@ private final class FakeContextProvider: ContextProvider {
     var canReadSelection = true
     var selection: ContextCapture = .noApplication
     var clipboard: ContextCapture = .empty(app: "Unknown app")
+    var observed: DocumentObservation?
     var selectionReads = 0
     var clipboardReads = 0
+    var documentReads = 0
 
     func selectedText() -> ContextCapture {
         selectionReads += 1
@@ -19,6 +21,11 @@ private final class FakeContextProvider: ContextProvider {
     func clipboardText() -> ContextCapture {
         clipboardReads += 1
         return clipboard
+    }
+
+    func openDocument() -> DocumentObservation? {
+        documentReads += 1
+        return observed
     }
 }
 
@@ -412,6 +419,140 @@ final class RequestContextTests: XCTestCase {
         model.useClipboard()
         XCTAssertNil(model.context)
         XCTAssertEqual(model.message, "The clipboard holds no text.")
+    }
+
+    // MARK: The document that screen is
+
+    /// A real file under a real root the owner declared, so the whole path from
+    /// the capture to the wire runs against the filesystem it will run against.
+    private func declaredFile(_ relative: String = "src/state.rs",
+                              contents: String = "fn main() {}") throws -> (root: DeviceRoot, path: String) {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cosmos-selection-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: base.appendingPathComponent("repo"),
+                                                withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: base) }
+        let file = base.appendingPathComponent("repo/\(relative)")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data(contents.utf8).write(to: file)
+        return (DeviceRoot(id: "repo", label: "The repository",
+                           path: base.appendingPathComponent("repo").path), file.path)
+    }
+
+    /// A connected model holding the owner's own copy, on a build whose library
+    /// can carry a document.
+    @MainActor
+    private func namedModel(_ provider: FakeContextProvider, roots: [DeviceRoot] = [],
+                            hosts: [String] = [], carries: Bool = true) async throws
+        -> (MockClientBridge, ClientModel) {
+        let client = try MockClientBridge(snapshot: ClientSnapshot(phase: .connected))
+        client.capabilities = ClientCapabilities(targets: true, context: true, document: carries,
+                                                 actions: true)
+        let policy = try fixturePolicy(actions: fixtureActions(hosts: hosts, roots: roots))
+        client.deliver(policy)
+        let model = ClientModel(client: client, initialServerOrigin: "https://center.example.invalid",
+                                contextProvider: provider)
+        client.publish(ClientSnapshot(phase: .connected, policy: policy.held))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while model.policy == nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(model.policy, "the model holds the copy this connection delivered")
+        return (client, model)
+    }
+
+    @MainActor
+    func testASelectionUnderADeclaredRootNamesItsDocumentAndSendsItWithTheScreen() async throws {
+        let file = try declaredFile()
+        let provider = FakeContextProvider()
+        provider.selection = .text(app: "Zed", text: "fn main() {}")
+        provider.observed = DocumentObservation(subject: .file(path: file.path), position: .line(1710),
+                                                label: "state.rs")
+        let (client, model) = try await namedModel(provider, roots: [file.root])
+        model.useSelection()
+
+        let named = try XCTUnwrap(model.document)
+        XCTAssertEqual(named.app, "Zed")
+        XCTAssertEqual(named.locator, .file(rootID: "repo", relative: "src/state.rs"))
+        XCTAssertEqual(named.version, Filesystem.real.digest(file.path))
+        XCTAssertEqual(named.position, .line(1710))
+        XCTAssertEqual(named.label, "state.rs")
+        XCTAssertEqual(provider.documentReads, 1, "read once, with the selection it belongs to")
+
+        model.draft = "Explain this"
+        model.send()
+        await settled(model)
+        let sent = try XCTUnwrap(client.sentRequests.first)
+        XCTAssertEqual(sent.document, named)
+        XCTAssertNotNil(sent.context, "the handle travels with the screen it came from")
+        XCTAssertNil(model.document, "a named document belongs to the request it went with")
+    }
+
+    @MainActor
+    func testADocumentOutsideEveryDeclaredRootIsSimplyNotNamed() async throws {
+        let file = try declaredFile()
+        let provider = FakeContextProvider()
+        provider.selection = .text(app: "Zed", text: "fn main() {}")
+        provider.observed = DocumentObservation(subject: .file(path: file.path), position: .line(4),
+                                                label: "state.rs")
+        // The owner declared another directory entirely.
+        let (client, model) = try await namedModel(
+            provider, roots: [DeviceRoot(id: "notes", label: "Notes", path: "/usr/share")])
+        model.useSelection()
+        XCTAssertNotNil(model.context, "the attached text is untouched")
+        XCTAssertNil(model.document)
+        XCTAssertEqual(model.message, "", "nothing is said about a document that is not named")
+        model.draft = "Explain this"
+        model.send()
+        await settled(model)
+        XCTAssertNil(try XCTUnwrap(client.sentRequests.first).document)
+    }
+
+    @MainActor
+    func testTheClipboardNamesNothingAndNeitherDoesABuildThatCannotCarryOne() async throws {
+        let file = try declaredFile()
+        let provider = FakeContextProvider()
+        provider.selection = .text(app: "Zed", text: "fn main() {}")
+        provider.clipboard = .text(app: "Zed", text: "copied")
+        provider.observed = DocumentObservation(subject: .file(path: file.path), label: "state.rs")
+
+        let (_, model) = try await namedModel(provider, roots: [file.root])
+        model.useClipboard()
+        XCTAssertNil(model.document, "the pasteboard is not that application's document")
+        XCTAssertEqual(provider.documentReads, 0)
+
+        // A library without the call names none rather than promising a handoff
+        // it cannot carry.
+        let (_, older) = try await namedModel(provider, roots: [file.root], carries: false)
+        older.useSelection()
+        XCTAssertNotNil(older.context)
+        XCTAssertNil(older.document)
+        XCTAssertEqual(provider.documentReads, 0, "nothing is read for a request that cannot carry it")
+    }
+
+    @MainActor
+    func testTheNameGoesWithTheTextAndWithTheOwnersOwnCopy() async throws {
+        let file = try declaredFile()
+        let provider = FakeContextProvider()
+        provider.selection = .text(app: "Zed", text: "fn main() {}")
+        provider.observed = DocumentObservation(subject: .file(path: file.path), label: "state.rs")
+        let (client, model) = try await namedModel(provider, roots: [file.root])
+
+        model.useSelection()
+        XCTAssertNotNil(model.document)
+        model.clearContext()
+        XCTAssertNil(model.document, "removing the text removes what was named with it")
+
+        model.useSelection()
+        XCTAssertNotNil(model.document)
+        // The root lives in the delivered copy. Without the copy there is no
+        // root, so the name goes; the text the owner attached stays.
+        client.delivered = nil
+        client.publish(ClientSnapshot(phase: .connected))
+        XCTAssertNil(model.policy)
+        XCTAssertNil(model.document)
+        XCTAssertNotNil(model.context)
     }
 
     // MARK: Destinations in the model

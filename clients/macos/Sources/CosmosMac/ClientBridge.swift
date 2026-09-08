@@ -479,11 +479,17 @@ public struct TextRequest: Equatable, Sendable {
 
     public let text: String
     public let context: ContextChip?
+    /// Which document that attached screen is, when this Mac can say honestly.
+    /// It travels with the context and never without it: it is the same screen,
+    /// under the same permission.
+    public let document: DocumentHandle?
     public let target: String?
 
-    public init(text: String, context: ContextChip? = nil, target: String? = nil) {
+    public init(text: String, context: ContextChip? = nil, document: DocumentHandle? = nil,
+                target: String? = nil) {
         self.text = text
         self.context = context
+        self.document = context == nil ? nil : document
         self.target = target
     }
 }
@@ -495,14 +501,20 @@ public struct ClientCapabilities: Equatable, Sendable {
     public let targets: Bool
     /// cosmos_surface_send_text_with_context: a request with attached local text.
     public let context: Bool
+    /// cosmos_surface_send_text_with_document: the same request, saying which
+    /// document that screen is. Without the call this Mac names no document at
+    /// all rather than promising a handoff the library cannot carry.
+    public let document: Bool
     /// acknowledge_task, report, progress and grant, together. Without all four
     /// this Mac cannot answer a ceremony or say what happened, so it refuses
     /// every command locally and loudly rather than running one silently.
     public let actions: Bool
 
-    public init(targets: Bool = false, context: Bool = false, actions: Bool = false) {
+    public init(targets: Bool = false, context: Bool = false, document: Bool = false,
+                actions: Bool = false) {
         self.targets = targets
         self.context = context
+        self.document = document
         self.actions = actions
     }
 

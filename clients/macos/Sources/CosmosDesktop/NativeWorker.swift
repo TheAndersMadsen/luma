@@ -1,6 +1,12 @@
 import CCosmosSurface
 import CosmosMac
 import Foundation
+import os
+
+/// One line per document this Mac names, in the owner's own system log, so a
+/// handoff can be seen to have been offered. It carries the root, that there is
+/// a version and what kind of place it is — never a path, a name or a fragment.
+private let documentLog = Logger(subsystem: "dk.andersmadsen.cosmos", category: "document")
 
 private final class CallbackContext: @unchecked Sendable {
     let vault: KeychainVault
@@ -125,6 +131,7 @@ enum NativeCommand: String, Sendable {
     /// request with a destination or attached text is its own operation.
     func operation(for request: TextRequest?) -> String {
         guard self == .sendText, let request else { return rawValue }
+        if request.document != nil { return "send_text_with_document" }
         if request.context != nil { return "send_text_with_context" }
         if request.target != nil { return "send_text_to" }
         return rawValue
@@ -142,6 +149,13 @@ enum OptionalSymbols {
         OpaquePointer?, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
         UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
     ) -> Int32
+    /// The same call, saying which document the attached screen is: the handle
+    /// is compact UTF-8 JSON, in the runtime's own shape, between the context
+    /// and the target.
+    typealias SendTextWithDocument = @convention(c) (
+        OpaquePointer?, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
+        UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
+    ) -> Int32
 
     typealias Handle = @convention(c) (OpaquePointer?) -> Int32
     /// A report names the command it is about, so a task the runtime replaced
@@ -157,6 +171,7 @@ enum OptionalSymbols {
 
     static let sendTextTo: SendTextTo? = resolve("cosmos_surface_send_text_to")
     static let sendTextWithContext: SendTextWithContext? = resolve("cosmos_surface_send_text_with_context")
+    static let sendTextWithDocument: SendTextWithDocument? = resolve("cosmos_surface_send_text_with_document")
     // The five device-action calls are looked up the same way and only ever
     // called through these pointers, so a library without them leaves the
     // feature reported as unavailable instead of failing to bind at first use.
@@ -168,6 +183,9 @@ enum OptionalSymbols {
 
     static let capabilities = ClientCapabilities(
         targets: sendTextTo != nil, context: sendTextWithContext != nil,
+        // Naming a document needs both calls: the handle travels with the
+        // screen it came from, never on its own.
+        document: sendTextWithContext != nil && sendTextWithDocument != nil,
         // All five, or none: this Mac must be able to read what the owner
         // allowed, acknowledge, report, stay live and answer a ceremony before
         // it carries anything out.
@@ -310,7 +328,6 @@ actor NativeWorker {
         let target = bytes(targetText)
         let targetLength = targetText.utf8.count
         if let context = request.context {
-            guard let call = OptionalSymbols.sendTextWithContext else { throw ClientFailure.featureUnavailable }
             guard (1...ContextChip.maximumAppBytes).contains(context.app.utf8.count),
                   (1...ContextChip.maximumBytes).contains(context.text.utf8.count),
                   !context.app.contains("\0"), !context.text.contains("\0") else {
@@ -318,6 +335,37 @@ actor NativeWorker {
             }
             let app = Data(context.app.utf8)
             let body = Data(context.text.utf8)
+            if let named = request.document {
+                // A handle this Mac cannot vouch for is never sent, and a
+                // library without the call rejects the request rather than
+                // quietly dropping the document out of it.
+                guard named.valid else { throw ClientFailure.invalidText }
+                guard let call = OptionalSymbols.sendTextWithDocument else {
+                    throw ClientFailure.featureUnavailable
+                }
+                let document = named.encoded()
+                let status = text.withUnsafeBytes { text in
+                    app.withUnsafeBytes { app in
+                        body.withUnsafeBytes { body in
+                            document.withUnsafeBytes { document in
+                                target.withUnsafeBytes { target in
+                                    call(handle,
+                                         text.bindMemory(to: UInt8.self).baseAddress, text.count,
+                                         app.bindMemory(to: UInt8.self).baseAddress, app.count,
+                                         body.bindMemory(to: UInt8.self).baseAddress, body.count,
+                                         document.bindMemory(to: UInt8.self).baseAddress, document.count,
+                                         target.bindMemory(to: UInt8.self).baseAddress, targetLength)
+                                }
+                            }
+                        }
+                    }
+                }
+                if status == COSMOS_SURFACE_OK {
+                    documentLog.info("sent a document handle: \(named.summary, privacy: .public)")
+                }
+                return status
+            }
+            guard let call = OptionalSymbols.sendTextWithContext else { throw ClientFailure.featureUnavailable }
             return text.withUnsafeBytes { text in
                 app.withUnsafeBytes { app in
                     body.withUnsafeBytes { body in

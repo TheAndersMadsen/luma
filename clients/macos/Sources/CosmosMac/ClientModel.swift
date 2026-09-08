@@ -11,6 +11,12 @@ public final class ClientModel: ObservableObject {
     @Published public var destination: Destination = .anywhere
     /// Text the owner attached to the next request through an explicit action.
     @Published public private(set) var context: ContextChip?
+    /// Which document that attached screen is, when this Mac can say so
+    /// honestly: a file under a root the owner declared, or a page on a host
+    /// they allowed. Nil is the ordinary answer, and it is never approximated.
+    /// It travels with the context, is dropped with it, and the owner reads its
+    /// name on the chip before they send anything.
+    @Published public private(set) var document: DocumentHandle?
     @Published public private(set) var snapshot: ClientSnapshot {
         didSet {
             // A reply that arrived on this Mac says more than the question does.
@@ -501,7 +507,8 @@ public final class ClientModel: ObservableObject {
         // library call that carries it, the request is not sent at all.
         if destination.target != nil, !capabilities.targets { message = Self.targetsUnavailableMessage; return }
         if context != nil, !capabilities.context { message = Self.contextUnavailableMessage; return }
-        let request = TextRequest(text: draft, context: context, target: destination.target)
+        let request = TextRequest(text: draft, context: context, document: document,
+                                  target: destination.target)
         let requested = destination
         pendingDraft = request.text
         admissionBeforeSend = snapshot.admission?.turnID
@@ -513,7 +520,7 @@ public final class ClientModel: ObservableObject {
             _ = try await client.send(request)
             guard !Task.isCancelled else { return }
             if draft == request.text { draft = "" }
-            if context == request.context { context = nil }
+            if context == request.context { context = nil; document = nil }
             if destination == requested { destination = .anywhere }
             pendingDraft = nil
             message = Self.admittedMessage(context: request.context, destination: requested)
@@ -581,7 +588,7 @@ public final class ClientModel: ObservableObject {
         attach(contextProvider.clipboardText(), source: .clipboard)
     }
 
-    public func clearContext() { context = nil }
+    public func clearContext() { context = nil; document = nil }
 
     private func attach(_ capture: ContextCapture, source: ContextSource) {
         accessibilityBlocked = false
@@ -592,6 +599,10 @@ public final class ClientModel: ObservableObject {
                 return
             }
             context = chip
+            // The selection came out of that application's own document, so it
+            // is that document this Mac can name. The clipboard came from
+            // wherever it came from, and names nothing.
+            document = source == .selection ? nameDocument(app: chip.app) : nil
             message = chip.truncated
                 ? "Using the first \(ContextChip.formatBytes(ContextChip.maximumBytes)) of the \(source.label.lowercased()) from \(app)."
                 : ""
@@ -605,6 +616,15 @@ public final class ClientModel: ObservableObject {
             accessibilityBlocked = true
             message = Self.accessibilityMessage
         }
+    }
+
+    /// Which document that selection is, decided entirely against this
+    /// installation's own copy of the owner's policy. A build whose library
+    /// cannot carry a document names none: the owner is never shown a handoff
+    /// that would not happen.
+    private func nameDocument(app: String) -> DocumentHandle? {
+        guard capabilities.document else { return nil }
+        return DocumentNaming.handle(for: contextProvider.openDocument(), app: app, policy: policy)
     }
 
     public func retryPending() {
@@ -810,6 +830,9 @@ public final class ClientModel: ObservableObject {
     /// connection that ends takes its copy and its binding with it.
     private func dropPolicy(refused: Bool) {
         policy = nil
+        // A named document rests on a root in that copy. Without the copy there
+        // is no root, so the name goes with it; the attached text stays.
+        document = nil
         guard !refused else { return }
         policySeen = nil
         policyBinding = nil

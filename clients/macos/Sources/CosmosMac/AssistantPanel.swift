@@ -632,10 +632,13 @@ public struct AssistantPanel: View {
     /// "Using: Safari selection ×" once text is attached. What it means is on the
     /// chip itself, not spelled out beside it.
     private func contextChip(_ chip: ContextChip) -> some View {
-        HStack(spacing: 6) {
+        let document = model.document
+        let named = document.map { Words.documentContinues($0.label, place: $0.position?.caption) }
+        return HStack(spacing: 6) {
             Image(systemName: chip.source == .selection ? "text.cursor" : "doc.on.clipboard")
                 .font(.system(size: 10)).accessibilityHidden(true)
-            Text(chip.caption).font(.system(size: 11, weight: .medium))
+            Text(chip.caption + (document.map { Words.usingDocument($0.label) } ?? ""))
+                .font(.system(size: 11, weight: .medium))
             Button(action: model.clearContext) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
             }
@@ -647,10 +650,11 @@ public struct AssistantPanel: View {
         .padding(.horizontal, 9).padding(.vertical, 4)
         .background(CosmosTokens.accent.opacity(0.12), in: Capsule())
         .overlay(Capsule().strokeBorder(CosmosTokens.accent.opacity(0.5), lineWidth: 1))
-        .help("\(Words.contextExplains) \(chip.label).")
+        .help("\(Words.contextExplains) \(chip.label).\(named.map { " \($0)" } ?? "")")
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Attached text")
-        .accessibilityValue("\(chip.label) from \(chip.app). \(Words.contextExplains)")
+        .accessibilityValue("\(chip.label) from \(chip.app). \(Words.contextExplains)"
+            + (named.map { " \($0)" } ?? ""))
         .accessibilityIdentifier("context-chip")
     }
 

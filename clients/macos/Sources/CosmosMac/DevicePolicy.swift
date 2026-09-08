@@ -406,10 +406,7 @@ public struct DevicePolicy: Equatable, Sendable {
         switch locator {
         case .https(let value):
             guard version == nil else { return .failure(.versionChanged) }
-            guard let url = URL(string: value), url.scheme?.lowercased() == "https",
-                  let host = url.host?.lowercased(), url.user == nil, url.password == nil,
-                  url.port == nil, value.utf8.count <= 2048,
-                  !value.contains(where: { $0.isWhitespace || $0.isControlCharacter }) else {
+            guard let url = Self.webURL(value), let host = url.host?.lowercased() else {
                 return .failure(.unresolvable)
             }
             guard hosts.contains(host) else { return .failure(.notPermitted) }
@@ -461,6 +458,20 @@ public struct DevicePolicy: Equatable, Sendable {
     static func token(_ value: String, maximum: Int) -> Bool {
         !value.isEmpty && value.utf8.count <= maximum
             && value.allSatisfy { ($0.isLowercase && $0.isASCII) || $0.isNumber && $0.isASCII || $0 == "-" }
+    }
+
+    /// An `https` URL that can be opened without ambiguity, in the runtime's own
+    /// shape: no userinfo, no port, no whitespace and no backslash. One
+    /// statement of it, for the command this Mac carries out and for the page it
+    /// names as a document.
+    public static let maximumURLBytes = 2048
+    public static func webURL(_ value: String) -> URL? {
+        guard !value.isEmpty, value.utf8.count <= maximumURLBytes, !value.contains("\\"),
+              !value.contains(where: { $0.isWhitespace || $0.isControlCharacter }),
+              let url = URL(string: value), url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false, url.user == nil, url.password == nil,
+              url.port == nil else { return nil }
+        return url
     }
 
     static func declaredHost(_ value: String) -> Bool {
