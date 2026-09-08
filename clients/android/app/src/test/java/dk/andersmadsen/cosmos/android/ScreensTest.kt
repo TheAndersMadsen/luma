@@ -145,6 +145,18 @@ class ScreensTest {
     }
 
     @Test
+    fun aCaptionCannotAcknowledgeUnmeasuredClippedOrMissingCardContent() {
+        val answer = TvStage.Answer(card.actionId, "An answer.", "An answer.", card)
+        assertNull(answer.captionCommitted(measured = false, overflowed = false))
+        assertNull(answer.captionCommitted(measured = true, overflowed = true))
+        assertEquals(card, answer.captionCommitted(measured = true, overflowed = false))
+        val places = card.copy(content = DisplayContent.Places("Café", listOf(PlaceItem("one", "Café", "1 Main Street", null)), emptyList()))
+        val preview = TvStage.Answer(places.actionId, "Café", places.content.plainText(), places)
+        assertNull(preview.captionCommitted(measured = true, overflowed = false))
+        assertNull(answer.copy(card = null).captionCommitted(measured = true, overflowed = false))
+    }
+
+    @Test
     fun speaksTheStatusVocabularyWithoutAnErrorTone() {
         fun status(state: String, platform: String?) = TurnStatus(turn, 1, state, platform, "shared_room")
         assertEquals("Working", status("working", null).line())

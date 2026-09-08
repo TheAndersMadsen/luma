@@ -118,7 +118,7 @@ test("partial coverage requires a bounded existing definition, not a claimed suc
   const copy = structuredClone(inventory);
   copy.evidence.push({ id: "fixture-definition", kind: "test-definition", path: "cosmos/fixture.rs", anchor: "fn fixture()", scope: "Synthetic metadata fixture only.", limitation: "Does not execute code or prove any behavior." });
   copy.requirements[0].status = "partial";
-  copy.requirements[0].evidence = ["fixture-definition"];
+  copy.requirements[0].evidence.push("fixture-definition");
   const readFixture = (file) => file === "cosmos/fixture.rs" ? "fn fixture() {}" : fs.readFileSync(path.join(root, file), "utf8");
   validate(copy, readFixture);
   assert.throws(() => validate(copy, (file) => file === "cosmos/fixture.rs" ? "fn renamed() {}" : readFixture(file)));
@@ -139,7 +139,7 @@ test("metadata permits Next.js dynamic route evidence without permitting travers
   const route = "center/src/app/api/surfaces/[surfaceId]/[...action]/route.ts";
   copy.evidence.push({ id: "dynamic-route-fixture", kind: "implementation", path: route, anchor: "function fixtureRoute()", scope: "Synthetic dynamic-route metadata fixture only.", limitation: "No runtime behavior or file existence claimed by this fixture." });
   copy.requirements[0].status = "partial";
-  copy.requirements[0].evidence = ["dynamic-route-fixture"];
+  copy.requirements[0].evidence.push("dynamic-route-fixture");
   const readFixture = (file) => file === route ? "function fixtureRoute() {}" : fs.readFileSync(path.join(root, file), "utf8");
   validate(copy, readFixture);
   copy.evidence.at(-1).path = "center/src/app/[surfaceId]/../outside.ts";

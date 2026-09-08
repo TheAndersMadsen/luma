@@ -692,19 +692,32 @@ impl AmbianceRuntime {
             principal: principal.to_owned(),
             fence: Some(fence.clone()),
         };
-        // Above the shared-room ceiling the reply can appear only on a
-        // personal surface declared for the class. Sensitive content has no
-        // display ceiling, and without a personal surface for the class there
-        // is nowhere the reply could appear, so nothing is retrieved or sent.
+        // "Why did that go to the speaker?" is answered from the runtime's own
+        // chain before anything else happens to this turn: no provider call,
+        // no memory read, no model. Recognition is a closed vocabulary, so a
+        // request that is not one of these falls through to cognition.
+        if let Some(language) = super::account::asks(&text) {
+            let result = self
+                .account(principal, &fence, language, screen_only)
+                .await?;
+            cancellation.fence = None;
+            return Ok(result);
+        }
+        // No current surface profile establishes private-memory access at
+        // its origin. Refuse before examining output permissions or touching
+        // the store: a personal destination cannot authorize this request.
+        if privacy_floor > PrivacyClass::SharedRoom && context.is_none() {
+            return self.refuse_private_context(principal, &fence).await;
+        }
+        // Check the actual output policy before exposing supplied screen
+        // text to cognition. Current profiles have no private eligible
+        // channel, even when the owner has approved a personal display.
         let mut offered_context = None;
         if privacy_floor > PrivacyClass::SharedRoom {
             let personal = privacy_floor <= PrivacyClass::Private
                 && self.personal_surfaces(principal, privacy_floor).await > 0;
             if !personal {
-                self.cancel(principal, &fence).await?;
-                return Err(Status::failed_precondition(
-                    "request cannot be handled on this surface",
-                ));
+                return self.refuse_private_context(principal, &fence).await;
             }
             match context {
                 // The origin's own screen text reaches cognition only under
@@ -742,17 +755,7 @@ impl AmbianceRuntime {
                         Err(error) => return Err(runtime_error(error)),
                     }
                 }
-                // Private memory never leaves the runtime: the reply is built
-                // here from the owner's notes, without cognition or any
-                // provider, and routed like any private card.
-                None => {
-                    let card = self.private_notes_card(principal, &fence, &text).await?;
-                    let result = self
-                        .propose_private_card(principal, &fence, card, privacy_floor)
-                        .await?;
-                    cancellation.fence = None;
-                    return Ok(result);
-                }
+                None => return Err(Status::internal("runtime admission failed")),
             }
         }
         let surface_note = if screen_only {
@@ -941,22 +944,10 @@ impl AmbianceRuntime {
                     privacy,
                 )
             }
-            // The request asked about the owner's own notes. They are read by
-            // the runtime, never by cognition, and the card they make is
-            // private by provenance whatever the words classified at.
-            super::analysis::Proposal::Recall { recall, .. } => {
-                let query = recall.query.as_deref().unwrap_or(&text);
-                let card = self.private_notes_card(principal, &fence, query).await?;
-                let result = self
-                    .propose_private_card(
-                        principal,
-                        &fence,
-                        card,
-                        privacy_floor.max(PrivacyClass::Private),
-                    )
-                    .await?;
-                cancellation.fence = None;
-                return Ok(result);
+            // A model proposal cannot authorize private-source access, even
+            // when the original wording stayed below the private classifier.
+            super::analysis::Proposal::Recall { .. } => {
+                return self.refuse_private_context(principal, &fence).await;
             }
             super::analysis::Proposal::Information {
                 intent, privacy, ..
@@ -1172,98 +1163,66 @@ impl AmbianceRuntime {
         }
     }
 
-    /// The owner's saved notes are the only private memory this increment
-    /// offers, and they never leave the runtime: the private card is composed
-    /// here, newest first, only from entries the server could index, with
-    /// entries matching the request's own words listed first. The offer is
-    /// logged under the turn and refused by the ledger unless the turn is
-    /// above the shared-room ceiling with a personal surface to render on.
-    async fn private_notes_card(
+    /// Native origins currently attest neither actor identity nor room privacy.
+    /// An owner-declared output is not permission to read the origin's history.
+    /// Give every native/browser/Pin request the same content-independent reply;
+    /// detailed accounts are composed by the owner-authenticated ledger endpoint.
+    async fn account(
         &self,
         principal: &str,
         fence: &TurnFence,
-        request: &str,
-    ) -> Result<String, Status> {
-        let notes = self
+        language: super::account::Language,
+        screen_only: bool,
+    ) -> Result<RuntimeResult, Status> {
+        let result = self
             .store
-            .recent_notes(principal, 12, None, None)
-            .await
-            .map_err(|_| Status::unavailable("private memory is unavailable"))?;
-        let total = notes.len();
-        let words: Vec<String> = request
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|word| word.chars().count() >= 4)
-            .filter(|word| {
-                !matches!(
-                    *word,
-                    "private"
-                        | "privat"
-                        | "notes"
-                        | "note"
-                        | "noter"
-                        | "read"
-                        | "show"
-                        | "what"
-                        | "mine"
-                        | "latest"
-                        | "seneste"
-                        | "besked"
-                        | "beskeder"
-                        | "message"
-                        | "messages"
-                        | "vis"
-                        | "please"
-                )
-            })
-            .map(str::to_owned)
-            .collect();
-        let mut readable: Vec<String> = notes
-            .iter()
-            .filter_map(|note| note.indexed_text.as_deref())
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(|text| {
-                text.chars()
-                    .take(400)
-                    .collect::<String>()
-                    .replace(['\n', '\r'], " ")
-            })
-            .collect();
-        if !words.is_empty() {
-            readable.sort_by_key(|text| {
-                let lowered = text.to_lowercase();
-                !words.iter().any(|word| lowered.contains(word.as_str()))
-            });
-        }
-        let mut card = String::from("Your notes, newest first");
-        let mut count = 0u32;
-        for text in &readable {
-            let line = format!("\n\n{}. {text}", count + 1);
-            if card.len() + line.len() > 3800 {
-                break;
-            }
-            card.push_str(&line);
-            count += 1;
-        }
-        let unopened = total.saturating_sub(readable.len());
-        if count == 0 {
-            card = "You have no readable saved notes.".to_owned();
-        }
-        if unopened > 0 {
-            card.push_str(&format!("\n\n{unopened} more could not be opened."));
-        }
-        self.store
             .runtime(
                 principal,
-                RuntimeOperation::OfferPrivateContext {
+                RuntimeOperation::ExpressAccount {
                     fence: fence.clone(),
-                    count,
+                    language,
+                    screen_only,
                 },
             )
             .await
             .map_err(runtime_error)?;
-        Ok(card)
+        if matches!(result, RuntimeResult::Blocked) {
+            self.store
+                .runtime(
+                    principal,
+                    RuntimeOperation::Finish {
+                        turn_id: fence.turn_id,
+                        generation: fence.generation,
+                        worker: fence.worker,
+                    },
+                )
+                .await
+                .map_err(runtime_error)?;
+        }
+        Ok(result)
+    }
+
+    /// Source permission belongs to the admitted origin. Current native,
+    /// browser and Pin profiles have no authenticated personal continuation,
+    /// so refusal is the only supported outcome and performs no private read.
+    async fn refuse_private_context(
+        &self,
+        principal: &str,
+        fence: &TurnFence,
+    ) -> Result<RuntimeResult, Status> {
+        self.store
+            .runtime(
+                principal,
+                RuntimeOperation::RefusePrivateContext {
+                    fence: fence.clone(),
+                },
+            )
+            .await
+            .map_err(runtime_error)?;
+        self.cancel(principal, fence).await?;
+        Err(Status::failed_precondition(
+            "request cannot be handled on this surface",
+        ))
     }
 
     /// The owner's bounded recent context and this turn's runtime-minted
@@ -2742,6 +2701,49 @@ mod tests {
         );
         assert_eq!(model.calls.load(Ordering::SeqCst), 1);
         assert_eq!(store.assistant_private_accesses.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ambiance_runtime_private_recall_does_not_borrow_another_devices_permission() {
+        let model = analysis_front(serde_json::json!({
+            "recall": {"query": "kitchen"}, "privacy": "public"
+        }));
+        let (runtime, store, auth) = fixture(model.clone()).await;
+        let principal = auth.principal.expose_for_authorization();
+        let enrollment = Uuid::new_v4();
+        let surface = crate::surface_registry::native_surface_id(principal, enrollment);
+        store
+            .mutate_surface(
+                principal,
+                surface,
+                crate::store::native_test_approval(enrollment, 0),
+            )
+            .await
+            .unwrap();
+        store
+            .runtime(
+                principal,
+                RuntimeOperation::SetPrivatePolicy {
+                    surface_id: surface,
+                    approval_revision: 1,
+                    expected_revision: 0,
+                    policy: Some(super::super::personal::Policy {
+                        maximum_class: PrivacyClass::Private,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        for request in ["Read my notes", "What was that idea?"] {
+            let error = runtime.stock_text(&auth, request.into()).await.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+            assert_eq!(store.assistant_private_accesses.load(Ordering::SeqCst), 0);
+        }
+        let events = store.ambiance_ledger_events(principal).await;
+        assert_eq!(events.iter().filter(|event| matches!(event,
+            super::super::ledger::LedgerEvent::Runtime(event)
+                if matches!(event.data, super::super::RuntimeData::PrivateContextRefused { .. })
+        )).count(), 2);
     }
 
     #[tokio::test]

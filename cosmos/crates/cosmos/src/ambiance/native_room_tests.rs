@@ -1595,259 +1595,130 @@ async fn open_native(store: &Arc<MemoryStore>, platform: &str) -> (NativeProof, 
     )
 }
 
-/// A private request from a shared origin is answered in the same turn from
-/// the owner's notes inside the runtime (no cognition), and the reply can appear
-/// only on the personal phone the owner declared: the Mac and a TV are
-/// suppressed with privacy blockers, the card waits while the phone is not in
-/// front, is dispatched only once its unlocked foreground reports visible,
-/// and is retired the moment that foreground goes away. A TV can never hold
-/// the permission, and without any personal surface the request is refused.
+/// Neither a personal destination nor a personal declaration on the origin
+/// authorizes private memory. All native profiles still attest unknown actor
+/// and occupancy. Direct requests and model-proposed recall must both leave
+/// the private store untouched, including when both applications are visible.
 #[tokio::test]
-async fn native_room_private_request_routes_only_to_the_owners_personal_surface() {
-    let model = Arc::new(SpyModel::default());
-    let fixture = fixture(model.clone()).await;
-    let mac = fixture.native.clone();
-    let mac_stamp = |sequence: u64, instance_id: Uuid| InputStamp {
-        sequence,
-        instance_id,
-        ..fixture.stamp.clone()
-    };
-    let mac_control =
-        |sequence: u64, instance_id: Uuid, control: BrowserControl| RuntimeOperation::RoomControl {
-            connection: RoomProof::Native(mac.clone()),
-            stamp: mac_stamp(sequence, instance_id),
-            control,
-        };
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            mac_control(1, Uuid::new_v4(), BrowserControl::State { visible: true }),
-        )
-        .await
-        .unwrap();
-    let (phone, phone_epoch) = open_native(&fixture.store, "android").await;
-    let phone_stamp = |sequence: u64, instance_id: Uuid| InputStamp {
-        sequence,
-        instance_id,
-        ..phone_epoch.clone()
-    };
-    let phone_control =
-        |sequence: u64, instance_id: Uuid, control: BrowserControl| RuntimeOperation::RoomControl {
-            connection: RoomProof::Native(phone.clone()),
-            stamp: phone_stamp(sequence, instance_id),
-            control,
-        };
-    let poll = |proof: NativeProof| {
-        fixture.store.runtime(
-            PRINCIPAL,
-            RuntimeOperation::Poll {
-                connection: RoomProof::Native(proof),
-            },
-        )
-    };
-    let invitation = |proof: NativeProof| {
-        fixture.store.runtime(
-            PRINCIPAL,
-            RuntimeOperation::Invitation {
-                connection: RoomProof::Native(proof),
-            },
-        )
-    };
-    // No personal surface yet: the private request is refused before cognition.
-    let error = fixture
-        .runtime
-        .sequenced_room_text(
-            PRINCIPAL,
-            RoomProof::Native(mac.clone()),
-            mac_stamp(2, Uuid::new_v4()),
-            "Read my private notes".into(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
-    // The owner's statement lives on the phone only; a TV is refused.
-    let (tv, _) = open_native(&fixture.store, "android_tv").await;
-    let private = Some(personal::Policy {
-        maximum_class: PrivacyClass::Private,
-    });
-    assert!(matches!(
-        fixture
-            .store
-            .runtime(
-                PRINCIPAL,
-                RuntimeOperation::SetPrivatePolicy {
-                    surface_id: tv.surface_id,
-                    approval_revision: 1,
-                    expected_revision: 0,
-                    policy: private,
-                },
-            )
-            .await,
-        Err(RuntimeError::PolicyBlocked)
-    ));
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            RuntimeOperation::SetPrivatePolicy {
-                surface_id: phone.surface_id,
-                approval_revision: 1,
-                expected_revision: 0,
-                policy: private,
-            },
-        )
-        .await
-        .unwrap();
-    // The Mac asks again. The reply is built inside the runtime from the
-    // owner's notes, with no cognition and no provider, and proposed for the
-    // phone, which is connected but not in front, so it waits.
-    let RuntimeResult::Proposed(card) = fixture
-        .runtime
-        .sequenced_room_text(
-            PRINCIPAL,
-            RoomProof::Native(mac.clone()),
-            mac_stamp(3, Uuid::new_v4()),
-            "Read my private notes".into(),
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("private card required")
-    };
-    assert_eq!(card.surface_id, phone.surface_id);
-    assert_eq!(card.origin_surface, mac.surface_id);
-    assert_eq!(card.channel, Channel::VisualCard);
-    assert_eq!(card.privacy, PrivacyClass::Private);
-    assert_eq!(card.status, ActionStatus::Proposed);
-    assert!(card.fallbacks.is_empty());
-    assert!(card.intent.text().contains("private_canary"));
-    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        fixture
-            .store
-            .assistant_private_accesses
-            .load(Ordering::SeqCst),
-        1
-    );
-    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
-    assert!(events.iter().any(|event| matches!(
-        event,
-        ledger::LedgerEvent::Runtime(event)
-            if matches!(event.data, RuntimeData::PrivateContextOffered { count: 1, ref source, ref fence, .. }
-                if source == "notes" && fence.turn_id == card.turn_id)
-    )));
-    let decision = events
-        .iter()
-        .filter_map(|event| match event {
-            ledger::LedgerEvent::Runtime(event) => match &event.data {
-                RuntimeData::Decision {
-                    turn_id,
-                    candidates,
-                    privacy,
-                    ..
-                } if *turn_id == card.turn_id => Some((candidates.clone(), *privacy)),
-                _ => None,
-            },
-            _ => None,
-        })
-        .next_back()
-        .expect("private decision logged");
-    assert_eq!(decision.1, PrivacyClass::Private);
-    for candidate in &decision.0 {
-        if candidate.surface_id == phone.surface_id && candidate.channel == Channel::VisualCard {
-            assert_eq!(candidate.blocker, None);
-        } else {
-            assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
+async fn native_room_private_recall_never_reads_without_origin_authority() {
+    for platform in ["macos", "linux", "android", "android_tv"] {
+        for personal_origin in [false, true] {
+            for personal_destination in [false, true] {
+                for model_recall in [false, true] {
+                    let model = Arc::new(SpyModel::default());
+                    if model_recall {
+                        *model.proposal.lock().unwrap() = Some(serde_json::json!({
+                            "recall": {"query": "kitchen"}, "privacy": "public"
+                        }));
+                    }
+                    let fixture = fixture(model.clone()).await;
+                    let (origin, epoch) = open_native(&fixture.store, platform).await;
+                    let (phone, phone_epoch) = open_native(&fixture.store, "android").await;
+                    for (proof, stamp, personal) in [
+                        (&origin, &epoch, personal_origin),
+                        (&phone, &phone_epoch, personal_destination),
+                    ] {
+                        if personal {
+                            let result = fixture
+                                .store
+                                .runtime(
+                                    PRINCIPAL,
+                                    RuntimeOperation::SetPrivatePolicy {
+                                        surface_id: proof.surface_id,
+                                        approval_revision: 1,
+                                        expected_revision: 0,
+                                        policy: Some(personal::Policy {
+                                            maximum_class: PrivacyClass::Private,
+                                        }),
+                                    },
+                                )
+                                .await;
+                            if proof.surface_id == origin.surface_id && platform == "android_tv" {
+                                assert!(matches!(result, Err(RuntimeError::PolicyBlocked)));
+                            } else {
+                                result.unwrap();
+                            }
+                        }
+                        fixture
+                            .store
+                            .runtime(
+                                PRINCIPAL,
+                                RuntimeOperation::RoomControl {
+                                    connection: RoomProof::Native(proof.clone()),
+                                    stamp: InputStamp {
+                                        sequence: 1,
+                                        instance_id: Uuid::new_v4(),
+                                        ..stamp.clone()
+                                    },
+                                    control: BrowserControl::State { visible: true },
+                                },
+                            )
+                            .await
+                            .unwrap();
+                    }
+                    let request = if model_recall {
+                        CURRENT_TEXT
+                    } else {
+                        "Read my private notes"
+                    };
+                    let error = fixture
+                        .runtime
+                        .sequenced_room_text(
+                            PRINCIPAL,
+                            RoomProof::Native(origin.clone()),
+                            InputStamp {
+                                sequence: 2,
+                                instance_id: Uuid::new_v4(),
+                                ..epoch
+                            },
+                            request.into(),
+                        )
+                        .await
+                        .unwrap_err();
+                    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+                    assert_eq!(error.message(), "request cannot be handled on this surface");
+                    assert_eq!(
+                        fixture
+                            .store
+                            .assistant_private_accesses
+                            .load(Ordering::SeqCst),
+                        0
+                    );
+                    assert_eq!(
+                        model.calls.load(Ordering::SeqCst),
+                        usize::from(model_recall)
+                    );
+                    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
+                    assert_eq!(events.iter().filter(|event| matches!(event,
+                        ledger::LedgerEvent::Runtime(event)
+                            if matches!(&event.data, RuntimeData::PrivateContextRefused { fence }
+                                if fence.origin_surface == origin.surface_id)
+                    )).count(), 1);
+                    assert!(!events.iter().any(|event| matches!(event,
+                        ledger::LedgerEvent::Runtime(event)
+                            if matches!(event.data, RuntimeData::PrivateContextOffered { .. }
+                                | RuntimeData::Decision { .. })
+                    )));
+                    for proof in [origin, phone] {
+                        let RuntimeResult::Pending(actions) = fixture
+                            .store
+                            .runtime(
+                                PRINCIPAL,
+                                RuntimeOperation::Poll {
+                                    connection: RoomProof::Native(proof),
+                                },
+                            )
+                            .await
+                            .unwrap()
+                        else {
+                            panic!("native poll")
+                        };
+                        assert!(actions.is_empty());
+                    }
+                }
+            }
         }
     }
-    // Only the phone is told that something waits; the Mac polls nothing and
-    // the phone's poll does not dispatch until its foreground is reported.
-    let RuntimeResult::Invitation(Some(waiting)) = invitation(phone.clone()).await.unwrap() else {
-        panic!("phone invitation required")
-    };
-    assert_eq!(waiting.id, card.id);
-    assert_eq!(waiting.origin_surface, mac.surface_id);
-    assert_eq!(waiting.privacy, PrivacyClass::Private);
-    assert_eq!(waiting.expires_at_ms, card.display_expires_at_ms);
-    assert!(matches!(
-        invitation(mac.clone()).await.unwrap(),
-        RuntimeResult::Invitation(None)
-    ));
-    let RuntimeResult::Pending(mac_pending) = poll(mac.clone()).await.unwrap() else {
-        panic!("mac poll required")
-    };
-    assert!(mac_pending.is_empty());
-    let RuntimeResult::Pending(waiting_pending) = poll(phone.clone()).await.unwrap() else {
-        panic!("phone poll required")
-    };
-    assert_eq!(
-        waiting_pending
-            .iter()
-            .map(|a| (a.id, a.status))
-            .collect::<Vec<_>>(),
-        vec![(card.id, ActionStatus::Proposed)]
-    );
-    // The owner unlocks the phone and opens Cosmos: the card is dispatched,
-    // acknowledged, and the offer is withdrawn.
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(1, Uuid::new_v4(), BrowserControl::State { visible: true }),
-        )
-        .await
-        .unwrap();
-    let RuntimeResult::Pending(dispatched) = poll(phone.clone()).await.unwrap() else {
-        panic!("phone poll required")
-    };
-    assert_eq!(
-        dispatched
-            .iter()
-            .map(|a| (a.id, a.status, a.privacy))
-            .collect::<Vec<_>>(),
-        vec![(card.id, ActionStatus::Dispatched, PrivacyClass::Private)]
-    );
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(
-                2,
-                card.id,
-                BrowserControl::Acknowledge {
-                    action_id: card.id,
-                    turn_id: card.turn_id,
-                    generation: card.generation,
-                    channel: Channel::VisualCard,
-                    content_digest: card.content_digest.clone(),
-                },
-            ),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        invitation(phone.clone()).await.unwrap(),
-        RuntimeResult::Invitation(None)
-    ));
-    // The phone leaving the foreground retires the private card.
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(3, Uuid::new_v4(), BrowserControl::State { visible: false }),
-        )
-        .await
-        .unwrap();
-    let RuntimeResult::Pending(after) = poll(phone.clone()).await.unwrap() else {
-        panic!("phone poll required")
-    };
-    assert!(after.iter().all(|a| a.status == ActionStatus::Cancelled));
-    let RuntimeResult::Pending(mac_after) = poll(mac.clone()).await.unwrap() else {
-        panic!("mac poll required")
-    };
-    assert!(mac_after.is_empty());
 }
 
 /// The request's own explicit destination carries exactly the weight of the
@@ -1996,311 +1867,153 @@ async fn native_room_explicit_target_outranks_the_model_and_binds_exact_retries(
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
 }
 
-/// Screen context is the owner's own data. Without the origin's permission
-/// the text goes nowhere and a personal surface says so; with it cognition
-/// receives the text as a delimited untrusted block after the request, the
-/// turn is private, the reply can appear only on a personal surface, every
-/// shared surface is suppressed with a privacy blocker and the ledger records
-/// the offer content-free. Sensitive screen text is refused before cognition.
+/// Screen text is private by provenance. A private-display preference and a
+/// screen-context permission cannot establish a physically private output.
+/// With current unknown-room profiles, reject before provider egress and keep
+/// the exact request identity fenced even though the request was refused.
 #[tokio::test]
-async fn native_room_screen_context_reaches_cognition_only_under_the_owners_permission() {
-    let model = Arc::new(SpyModel::default());
-    let fixture = fixture(model.clone()).await;
-    let mac = fixture.native.clone();
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            RuntimeOperation::RoomControl {
-                connection: RoomProof::Native(mac.clone()),
-                stamp: InputStamp {
-                    sequence: 2,
-                    instance_id: Uuid::new_v4(),
-                    ..fixture.stamp.clone()
-                },
-                control: BrowserControl::State { visible: true },
-            },
-        )
-        .await
-        .unwrap();
-    let (phone, phone_epoch) = open_native(&fixture.store, "android").await;
-    let phone_stamp = |sequence: u64, instance_id: Uuid| InputStamp {
-        sequence,
-        instance_id,
-        ..phone_epoch.clone()
-    };
-    let phone_control =
-        |sequence: u64, instance_id: Uuid, control: BrowserControl| RuntimeOperation::RoomControl {
-            connection: RoomProof::Native(phone.clone()),
-            stamp: phone_stamp(sequence, instance_id),
-            control,
-        };
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            RuntimeOperation::SetPrivatePolicy {
-                surface_id: phone.surface_id,
-                approval_revision: 1,
-                expected_revision: 0,
-                policy: Some(personal::Policy {
-                    maximum_class: PrivacyClass::Private,
-                }),
-            },
-        )
-        .await
-        .unwrap();
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(1, Uuid::new_v4(), BrowserControl::State { visible: true }),
-        )
-        .await
-        .unwrap();
-    let context = screen::ScreenContext::new("Settings".into(), "Wi-Fi\nConnected to Home".into());
-    let ask = |text: &str, context: screen::ScreenContext| runtime::RoomInput {
-        text: text.into(),
-        target: None,
-        context: Some(context),
-        spoken: None,
-    };
-    // No permission: the text never reaches cognition; the phone is told why.
-    let RuntimeResult::Proposed(explained) = fixture
-        .runtime
-        .sequenced_room_input_started(
-            PRINCIPAL,
-            RoomProof::Native(phone.clone()),
-            phone_stamp(2, Uuid::new_v4()),
-            ask("Which network is this?", context.clone()),
-            None,
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("explanatory private card required")
-    };
-    assert_eq!(explained.surface_id, phone.surface_id);
-    assert_eq!(explained.privacy, PrivacyClass::Private);
-    assert!(explained.intent.text().contains("Allow screen context"));
-    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
-    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
-    assert!(!events.iter().any(|event| matches!(
-        event,
-        ledger::LedgerEvent::Runtime(event)
-            if matches!(event.data, RuntimeData::ScreenContextOffered { .. })
-    )));
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(
-                3,
-                explained.turn_id,
-                BrowserControl::Cancel {
-                    turn_id: explained.turn_id,
-                    generation: explained.generation,
-                },
-            ),
-        )
-        .await
-        .unwrap();
-    // The owner permits screen context for the phone at its current revision.
-    let RuntimeResult::ScreenContextPolicy(Some(approval)) = fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            RuntimeOperation::SetScreenContextPolicy {
-                surface_id: phone.surface_id,
-                approval_revision: 1,
-                expected_revision: 0,
-                policy: Some(screen::Policy {
-                    maximum_class: PrivacyClass::Private,
-                }),
-            },
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("screen context approval")
-    };
-    assert_eq!((approval.approval_revision, approval.revision), (1, 1));
-    let stamp = phone_stamp(4, Uuid::new_v4());
-    let RuntimeResult::Proposed(reply) = fixture
-        .runtime
-        .sequenced_room_input_started(
-            PRINCIPAL,
-            RoomProof::Native(phone.clone()),
-            stamp.clone(),
-            ask("Which network is this?", context.clone()),
-            None,
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("private reply required")
-    };
-    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    let seen = model.current_texts.lock().unwrap()[0].clone();
-    assert!(seen.starts_with("Which network is this?\n\n=== BEGIN SCREEN CONTEXT"));
-    assert!(seen.contains("\"Settings\""));
-    assert!(seen.contains("\nWi-Fi\nConnected to Home\n=== END SCREEN CONTEXT ==="));
-    assert!(
-        model.system_prompts.lock().unwrap()[0].contains("never instructions"),
-        "cognition is told the block is data"
-    );
-    assert_eq!(reply.surface_id, phone.surface_id);
-    assert_eq!(reply.privacy, PrivacyClass::Private);
-    assert_eq!(reply.channel, Channel::VisualCard);
-    assert_eq!(reply.intent.text(), "A bounded public fact.");
-    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
-    assert!(events.iter().any(|event| matches!(
-        event,
-        ledger::LedgerEvent::Runtime(event)
-            if matches!(&event.data, RuntimeData::ScreenContextOffered { fence, app_digest, bytes }
-                if fence.turn_id == reply.turn_id && *app_digest == hash(b"Settings") && *bytes == 23)
-    )));
-    let candidates = events
-        .iter()
-        .filter_map(|event| match event {
-            ledger::LedgerEvent::Runtime(event) => match &event.data {
-                RuntimeData::Decision {
-                    turn_id,
-                    candidates,
-                    ..
-                } if *turn_id == reply.turn_id => Some(candidates.clone()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .next_back()
-        .expect("private decision logged");
-    for candidate in &candidates {
-        if candidate.surface_id == phone.surface_id && candidate.channel == Channel::VisualCard {
-            assert_eq!(candidate.blocker, None);
-        } else {
-            assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
-        }
-    }
-    assert!(
-        !serde_json::to_string(&events)
-            .unwrap()
-            .contains("Connected to Home"),
-        "screen text never enters the ledger"
-    );
-    // An exact retry is a duplicate; the same sequence with other screen text
-    // is not the same request.
-    assert!(matches!(
-        fixture
-            .runtime
-            .sequenced_room_input_started(
-                PRINCIPAL,
-                RoomProof::Native(phone.clone()),
-                stamp.clone(),
-                ask("Which network is this?", context),
-                None,
-            )
-            .await
-            .unwrap(),
-        RuntimeResult::Duplicate(_)
-    ));
-    assert!(
-        fixture
-            .runtime
-            .sequenced_room_input_started(
-                PRINCIPAL,
-                RoomProof::Native(phone.clone()),
-                stamp,
-                ask(
-                    "Which network is this?",
-                    screen::ScreenContext::new("Settings".into(), "Bluetooth".into())
-                ),
-                None,
-            )
-            .await
-            .is_err()
-    );
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(
-                5,
-                reply.turn_id,
-                BrowserControl::Cancel {
-                    turn_id: reply.turn_id,
-                    generation: reply.generation,
-                },
-            ),
-        )
-        .await
-        .unwrap();
-    // Sensitive screen text has no display ceiling: refused before cognition.
-    let error = fixture
-        .runtime
-        .sequenced_room_input_started(
-            PRINCIPAL,
-            RoomProof::Native(phone.clone()),
-            phone_stamp(6, Uuid::new_v4()),
-            ask(
-                "What is this?",
-                screen::ScreenContext::new("Bank".into(), "Password: hunter2".into()),
-            ),
-            None,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-    // Over-long context is rejected before admission.
-    let error = fixture
-        .runtime
-        .sequenced_room_input_started(
-            PRINCIPAL,
-            RoomProof::Native(phone.clone()),
-            phone_stamp(7, Uuid::new_v4()),
-            ask(
-                "What is this?",
-                screen::ScreenContext::new("App".into(), "x".repeat(screen::MAX_TEXT_BYTES + 1)),
-            ),
-            None,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    // The Mac, a shared surface, cannot hold the permission's benefit: its
-    // screen text with no permission of its own is explained on the phone.
-    let RuntimeResult::Proposed(from_mac) = fixture
-        .runtime
-        .sequenced_room_input_started(
-            PRINCIPAL,
-            RoomProof::Native(mac.clone()),
-            InputStamp {
+async fn native_room_screen_context_requires_physical_privacy_before_cognition() {
+    for platform in ["macos", "linux", "android"] {
+        for screen_permission in [false, true] {
+            let model = Arc::new(SpyModel::default());
+            let fixture = fixture(model.clone()).await;
+            let (origin, epoch) = open_native(&fixture.store, platform).await;
+            fixture
+                .store
+                .runtime(
+                    PRINCIPAL,
+                    RuntimeOperation::SetPrivatePolicy {
+                        surface_id: origin.surface_id,
+                        approval_revision: 1,
+                        expected_revision: 0,
+                        policy: Some(personal::Policy {
+                            maximum_class: PrivacyClass::Private,
+                        }),
+                    },
+                )
+                .await
+                .unwrap();
+            if screen_permission {
+                fixture
+                    .store
+                    .runtime(
+                        PRINCIPAL,
+                        RuntimeOperation::SetScreenContextPolicy {
+                            surface_id: origin.surface_id,
+                            approval_revision: 1,
+                            expected_revision: 0,
+                            policy: Some(screen::Policy {
+                                maximum_class: PrivacyClass::Private,
+                            }),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            fixture
+                .store
+                .runtime(
+                    PRINCIPAL,
+                    RuntimeOperation::RoomControl {
+                        connection: RoomProof::Native(origin.clone()),
+                        stamp: InputStamp {
+                            sequence: 1,
+                            instance_id: Uuid::new_v4(),
+                            ..epoch.clone()
+                        },
+                        control: BrowserControl::State { visible: true },
+                    },
+                )
+                .await
+                .unwrap();
+            let ask = |context| runtime::RoomInput {
+                text: "Explain this document".into(),
+                target: Some(policy::RoutingTarget::Macos),
+                context: Some(context),
+                spoken: None,
+            };
+            let context =
+                screen::ScreenContext::new("Editor".into(), "private screen canary".into());
+            let stamp = InputStamp {
+                sequence: 2,
+                instance_id: Uuid::new_v4(),
+                ..epoch.clone()
+            };
+            let send = |stamp, context| {
+                fixture.runtime.sequenced_room_input_started(
+                    PRINCIPAL,
+                    RoomProof::Native(origin.clone()),
+                    stamp,
+                    ask(context),
+                    None,
+                )
+            };
+            assert_eq!(
+                send(stamp.clone(), context.clone())
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::FailedPrecondition
+            );
+            assert!(matches!(
+                send(stamp.clone(), context).await.unwrap(),
+                RuntimeResult::Duplicate(_)
+            ));
+            assert!(
+                send(
+                    stamp,
+                    screen::ScreenContext::new("Editor".into(), "changed document".into())
+                )
+                .await
+                .is_err()
+            );
+            let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
+            assert!(
+                !serde_json::to_string(&events)
+                    .unwrap()
+                    .contains("private screen canary")
+            );
+            assert!(!events.iter().any(|event| matches!(event,
+                ledger::LedgerEvent::Runtime(event)
+                    if matches!(event.data, RuntimeData::ScreenContextOffered { .. } | RuntimeData::Decision { .. })
+            )));
+            assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                fixture
+                    .store
+                    .assistant_private_accesses
+                    .load(Ordering::SeqCst),
+                0
+            );
+            // Malformed input is still rejected before admission. A normal
+            // public question can use that sequence and works as before.
+            let next = InputStamp {
                 sequence: 3,
                 instance_id: Uuid::new_v4(),
-                ..fixture.stamp.clone()
-            },
-            ask(
-                "What is this window?",
-                screen::ScreenContext::new("Finder".into(), "Documents".into()),
-            ),
-            None,
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("explanatory private card required")
-    };
-    assert_eq!(from_mac.surface_id, phone.surface_id);
-    assert_eq!(from_mac.privacy, PrivacyClass::Private);
-    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        fixture
-            .store
-            .assistant_private_accesses
-            .load(Ordering::SeqCst),
-        0,
-        "screen context never reads private memory"
-    );
+                ..epoch
+            };
+            let oversized =
+                screen::ScreenContext::new("Editor".into(), "x".repeat(screen::MAX_TEXT_BYTES + 1));
+            assert_eq!(
+                send(next.clone(), oversized).await.unwrap_err().code(),
+                tonic::Code::InvalidArgument
+            );
+            assert!(matches!(
+                fixture
+                    .runtime
+                    .sequenced_room_text(
+                        PRINCIPAL,
+                        RoomProof::Native(origin),
+                        next,
+                        CURRENT_TEXT.into(),
+                    )
+                    .await
+                    .unwrap(),
+                RuntimeResult::Proposed(_)
+            ));
+            assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+        }
+    }
 }
 
 /// "Find a good film for tonight" on the TV: cognition proposes a numbered
@@ -2489,8 +2202,7 @@ async fn native_room_choice_list_is_shown_remembered_and_offered_to_the_next_tur
 /// card is proposed or dispatched elsewhere, shown once acknowledged there,
 /// nowhere when nothing could take it. A privacy-refused request and a
 /// request with no visible screen end identically for a shared origin, and
-/// a private card shown on the phone reports only "shown" on an android
-/// surface at the shared class.
+/// adding a personal destination never changes the private-source refusal.
 #[tokio::test]
 async fn native_room_origin_status_reports_committed_outcomes_without_reasons() {
     use status::{TurnState, TurnStatus};
@@ -2668,19 +2380,9 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
         )
         .await
         .unwrap();
-    // A private reply on the phone: the Mac learns "shown on an android
-    // surface" at the shared class and nothing about the card's own class.
-    let (phone, phone_epoch) = open_native(&fixture.store, "android").await;
-    let phone_control =
-        |sequence: u64, instance_id: Uuid, control: BrowserControl| RuntimeOperation::RoomControl {
-            connection: RoomProof::Native(phone.clone()),
-            stamp: InputStamp {
-                sequence,
-                instance_id,
-                ..phone_epoch.clone()
-            },
-            control,
-        };
+    // A personal destination does not change the origin's source authority,
+    // and the second refusal exposes exactly the same status as the first.
+    let (phone, _) = open_native(&fixture.store, "android").await;
     fixture
         .store
         .runtime(
@@ -2696,7 +2398,7 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
         )
         .await
         .unwrap();
-    let RuntimeResult::Proposed(private) = fixture
+    let error = fixture
         .runtime
         .sequenced_room_text(
             PRINCIPAL,
@@ -2705,80 +2407,25 @@ async fn native_room_origin_status_reports_committed_outcomes_without_reasons() 
             "Read my private notes".into(),
         )
         .await
-        .unwrap()
-    else {
-        panic!("private card required")
-    };
-    assert_eq!(private.privacy, PrivacyClass::Private);
-    let waiting = status(RoomProof::Native(mac.clone())).await.unwrap();
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    let refused_again = status(RoomProof::Native(mac.clone())).await.unwrap();
     assert_eq!(
-        (waiting.state, waiting.surface, waiting.privacy),
         (
-            TurnState::Waiting,
-            Some(phone.surface_id),
-            PrivacyClass::SharedRoom
-        )
+            refused_again.state,
+            refused_again.surface,
+            refused_again.privacy
+        ),
+        (refused.state, refused.surface, refused.privacy),
     );
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(1, Uuid::new_v4(), BrowserControl::State { visible: true }),
-        )
-        .await
-        .unwrap();
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            RuntimeOperation::Poll {
-                connection: RoomProof::Native(phone.clone()),
-            },
-        )
-        .await
-        .unwrap();
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(
-                2,
-                private.id,
-                BrowserControl::Acknowledge {
-                    action_id: private.id,
-                    turn_id: private.turn_id,
-                    generation: private.generation,
-                    channel: Channel::VisualCard,
-                    content_digest: private.content_digest.clone(),
-                },
-            ),
-        )
-        .await
-        .unwrap();
-    let shown = status(RoomProof::Native(mac.clone())).await.unwrap();
     assert_eq!(
-        (shown.state, shown.surface, shown.privacy),
-        (
-            TurnState::Shown,
-            Some(phone.surface_id),
-            PrivacyClass::SharedRoom
-        )
+        fixture
+            .store
+            .assistant_private_accesses
+            .load(Ordering::SeqCst),
+        0
     );
-    // The phone leaving the foreground retires the card; the committed
-    // outcome stands and the phone, not the origin, has no status.
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            phone_control(3, Uuid::new_v4(), BrowserControl::State { visible: false }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        status(RoomProof::Native(mac.clone())).await.unwrap().state,
-        TurnState::Shown
-    );
-    assert_eq!(status(RoomProof::Native(phone.clone())).await, None);
+    assert_eq!(status(RoomProof::Native(phone)).await, None);
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
 }
 
@@ -3198,8 +2845,8 @@ async fn native_voice_bounds_the_capture_it_will_accept() {
 /// room; the phone the owner declared personal may be spoken to at a higher
 /// class, and loses that the moment the declaration goes. Whatever the floor,
 /// the transcript's own terms still raise the turn, and a request raised above
-/// the shared room is answered on a personal surface while every shared one is
-/// suppressed — including the television that heard it.
+/// the shared room cannot read private memory from the television that heard
+/// it. The personal output declaration never supplies source authority.
 #[tokio::test]
 async fn native_voice_class_is_the_owner_floor_joined_with_what_was_said() {
     let model = Arc::new(SpyModel::default());
@@ -3280,28 +2927,11 @@ async fn native_voice_class_is_the_owner_floor_joined_with_what_was_said() {
         voice_admission(&fixture.store, &phone).await.unwrap().1,
         PrivacyClass::Private
     );
-    fixture
-        .store
-        .runtime(
-            PRINCIPAL,
-            RuntimeOperation::RoomControl {
-                connection: RoomProof::Native(phone.clone()),
-                stamp: InputStamp {
-                    epoch: tv_epoch.epoch,
-                    sequence: 1,
-                    instance_id: Uuid::new_v4(),
-                },
-                control: BrowserControl::State { visible: true },
-            },
-        )
-        .await
-        .ok();
-    // Said out loud at the television, about the owner's own notes: the floor
-    // is the shared room, the words raise it to private, and the answer is
-    // built by the runtime itself and offered to the phone.
+    // The transcript raises the turn's class, but the TV still has no
+    // authority to read private notes, even with a personal phone available.
     let (policy_revision, source_floor) = voice_admission(&fixture.store, &tv).await.unwrap();
     assert_eq!(source_floor, PrivacyClass::SharedRoom);
-    let RuntimeResult::Proposed(private) = fixture
+    let error = fixture
         .runtime
         .native_voice_transcript(
             PRINCIPAL,
@@ -3309,54 +2939,39 @@ async fn native_voice_class_is_the_owner_floor_joined_with_what_was_said() {
             InputStamp {
                 sequence: 2,
                 instance_id: Uuid::new_v4(),
-                ..tv_epoch.clone()
+                ..tv_epoch
             },
             synthetic_capture(32_000, policy_revision, source_floor),
             "Read my notes back to me".into(),
             None,
         )
         .await
-        .unwrap()
-    else {
-        panic!("a private spoken request is answered on a personal surface")
-    };
-    assert_eq!(private.privacy, PrivacyClass::Private);
-    assert_eq!(private.surface_id, phone.surface_id);
-    assert_ne!(private.surface_id, tv.surface_id);
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
     assert_eq!(
-        model.calls.load(Ordering::SeqCst),
-        0,
-        "a private turn is answered without any provider"
+        fixture
+            .store
+            .assistant_private_accesses
+            .load(Ordering::SeqCst),
+        0
     );
     let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
-    assert!(events.iter().any(|event| matches!(
-        event,
+    assert!(events.iter().any(|event| matches!(event,
         ledger::LedgerEvent::Runtime(event)
             if matches!(&event.data, RuntimeData::NativeVoiceAdmitted { fence, source_floor, privacy, .. }
-                if fence.turn_id == private.turn_id
-                    && *source_floor == PrivacyClass::SharedRoom
-                    && *privacy == PrivacyClass::Private)
+                if fence.origin_surface == tv.surface_id
+                    && *source_floor == PrivacyClass::SharedRoom && *privacy == PrivacyClass::Private)
     )));
-    let candidates = events
-        .iter()
-        .filter_map(|event| match event {
-            ledger::LedgerEvent::Runtime(event) => match &event.data {
-                RuntimeData::Decision {
-                    turn_id,
-                    candidates,
-                    ..
-                } if *turn_id == private.turn_id => Some(candidates.clone()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .next_back()
-        .expect("the private decision is logged");
-    for candidate in &candidates {
-        if candidate.surface_id == tv.surface_id {
-            assert_eq!(candidate.blocker, Some(policy::Blocker::Privacy));
-        }
-    }
+    assert!(events.iter().any(|event| matches!(event,
+        ledger::LedgerEvent::Runtime(event)
+            if matches!(&event.data, RuntimeData::PrivateContextRefused { fence }
+                if fence.origin_surface == tv.surface_id)
+    )));
+    assert!(!events.iter().any(|event| matches!(event,
+        ledger::LedgerEvent::Runtime(event)
+            if matches!(event.data, RuntimeData::Decision { .. } | RuntimeData::PrivateContextOffered { .. })
+    )));
     // Taking the phone's personal declaration away leaves its stored private
     // floor unusable: the next press is refused rather than admitted lower.
     fixture
@@ -3376,4 +2991,135 @@ async fn native_voice_class_is_the_owner_floor_joined_with_what_was_said() {
         voice_admission(&fixture.store, &phone).await,
         Err(RuntimeError::PolicyBlocked)
     ));
+}
+
+/// A signed installation and an owner-declared personal output do not grant
+/// the requesting surface access to history. Native routing questions never
+/// read the ledger or private memory, even when both endpoints are personal.
+#[tokio::test]
+async fn native_room_account_on_a_shared_channel_never_says_which_class_it_was_suppressed_at() {
+    let model = Arc::new(SpyModel::default());
+    let fixture = fixture(model.clone()).await;
+    let (phone, phone_stamp) = open_native(&fixture.store, "android").await;
+    for (proof, stamp) in [
+        (fixture.native.clone(), fixture.stamp.clone()),
+        (phone, phone_stamp),
+    ] {
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::SetPrivatePolicy {
+                    surface_id: proof.surface_id,
+                    approval_revision: 1,
+                    expected_revision: 0,
+                    policy: Some(personal::Policy {
+                        maximum_class: PrivacyClass::Private,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        fixture
+            .store
+            .runtime(
+                PRINCIPAL,
+                RuntimeOperation::RoomControl {
+                    connection: RoomProof::Native(proof),
+                    stamp: InputStamp {
+                        sequence: 1,
+                        instance_id: Uuid::new_v4(),
+                        ..stamp
+                    },
+                    control: BrowserControl::State { visible: true },
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let mut sequence = 1;
+    let mut ask = |text: &str| {
+        sequence += 1;
+        fixture.runtime.sequenced_room_text(
+            PRINCIPAL,
+            RoomProof::Native(fixture.native.clone()),
+            InputStamp {
+                sequence,
+                instance_id: Uuid::new_v4(),
+                ..fixture.stamp.clone()
+            },
+            text.to_owned(),
+        )
+    };
+    let clear = |action: &Action| {
+        fixture.store.runtime(
+            PRINCIPAL,
+            RuntimeOperation::Cancel {
+                turn_id: action.turn_id,
+                generation: action.generation,
+                worker: action.worker,
+            },
+        )
+    };
+    fixture
+        .store
+        .assistant_private_accesses
+        .store(0, Ordering::SeqCst);
+    let mut digests = Vec::new();
+    // Empty history, a public previous turn, and an existing private previous
+    // turn are indistinguishable to a routing question from this installation.
+    for previous in [None, Some(CURRENT_TEXT), Some("Read my private notes")] {
+        if previous == Some("Read my private notes") {
+            assert_eq!(
+                ask(previous.unwrap()).await.unwrap_err().code(),
+                tonic::Code::FailedPrecondition
+            );
+        } else if let Some(text) = previous {
+            let RuntimeResult::Proposed(action) = ask(text).await.unwrap() else {
+                panic!("previous turn")
+            };
+            clear(&action).await.unwrap();
+        }
+        let private_before = fixture
+            .store
+            .assistant_private_accesses
+            .load(Ordering::SeqCst);
+        let model_before = model.calls.load(Ordering::SeqCst);
+        for (question, expected) in [
+            ("Why did that go there?", account::ELSEWHERE[0]),
+            ("Hvorfor gik det derhen?", account::ELSEWHERE[1]),
+        ] {
+            let RuntimeResult::Proposed(action) = ask(question).await.unwrap() else {
+                panic!("shared account")
+            };
+            assert_eq!(action.privacy, PrivacyClass::SharedRoom);
+            assert!(action.expression);
+            assert_eq!(action.intent.text(), expected);
+            assert_eq!(
+                fixture
+                    .store
+                    .assistant_private_accesses
+                    .load(Ordering::SeqCst),
+                private_before
+            );
+            assert_eq!(model.calls.load(Ordering::SeqCst), model_before);
+            assert!(!action.intent.text().contains("private_canary"));
+            if question.starts_with("Why") {
+                digests.push(action.content_digest.clone());
+            }
+            clear(&action).await.unwrap();
+        }
+    }
+    assert!(digests.windows(2).all(|pair| pair[0] == pair[1]));
+    let events = fixture.store.ambiance_ledger_events(PRINCIPAL).await;
+    assert_eq!(events.iter().filter(|event| matches!(event,
+        ledger::LedgerEvent::Runtime(event) if matches!(event.data, RuntimeData::AccountRequested { .. })
+    )).count(), 6);
+    // Ordinary why-questions still reach cognition.
+    let calls = model.calls.load(Ordering::SeqCst);
+    let RuntimeResult::Proposed(action) = ask("Why is the sky blue?").await.unwrap() else {
+        panic!("ordinary reply")
+    };
+    assert_eq!(model.calls.load(Ordering::SeqCst), calls + 1);
+    clear(&action).await.unwrap();
 }

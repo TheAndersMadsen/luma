@@ -1,5 +1,5 @@
 use super::*;
-use crate::state::{ContextKind, ContextWire, Control, PendingRpc, Stamp};
+use crate::state::{ContextWire, Control, PendingRpc, Stamp};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use serde_json::{Value, json};
 use std::sync::{
@@ -136,11 +136,7 @@ fn stage_input(
         },
         text: text.into(),
         target,
-        context: context.map(|context| ContextWire {
-            kind: ContextKind::Screen,
-            app: context.app,
-            text: context.text,
-        }),
+        context: context.map(ContextWire::try_from).transpose()?,
     };
     let open = journal.open.as_ref().unwrap();
     journal.stage(
@@ -149,6 +145,122 @@ fn stage_input(
         open.runtime_epoch.unwrap(),
         open.connection.as_ref().unwrap().incarnation,
     )
+}
+
+#[test]
+fn document_context_survives_exact_retry_and_reopen() {
+    let document = json!({
+        "app": "Preview",
+        "locator": {"scheme": "file", "rootId": "documents", "relative": "Notes/Agenda.pdf"},
+        "version": "a".repeat(64),
+        "position": {"kind": "page", "page": 3},
+        "label": "Agenda"
+    });
+    let mut journal = connected_journal();
+    stage_input(
+        &mut journal,
+        "Explain this and continue on my PC",
+        Some(Platform::Linux),
+        Some(ScreenContext {
+            app: "Preview".into(),
+            text: "The selected paragraph".into(),
+            document: Some(document.to_string()),
+        }),
+        NOW,
+    )
+    .unwrap();
+    let before = serde_json::to_vec(&journal.pending.as_ref().unwrap().message).unwrap();
+    let mut restored = Journal::load(
+        &journal.bytes().unwrap(),
+        &config(),
+        &TestSigner::new().public_key_sec1().unwrap(),
+    )
+    .unwrap();
+    restored.reconcile(config().boot_epoch, NOW + 1);
+    let pending = restored.pending.as_ref().unwrap();
+    assert!(pending.retryable(NOW + 1));
+    assert_eq!(serde_json::to_vec(&pending.message).unwrap(), before);
+    let wire: Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(wire["context"]["document"], document);
+    assert_eq!(wire["target"], "linux");
+}
+
+#[tokio::test]
+async fn invalid_documents_never_consume_a_sequence_or_replace_pending_context() {
+    for document in [
+        "{".to_owned(),
+        "null".into(),
+        "[]".into(),
+        "42".into(),
+        "\"document\"".into(),
+        json!({"path": "x".repeat(MAX_DOCUMENT_BYTES)}).to_string(),
+        format!("{}{{}}", " ".repeat(MAX_DOCUMENT_BYTES)),
+    ] {
+        let context = ScreenContext {
+            app: "Preview".into(),
+            text: "The selected paragraph".into(),
+            document: Some(document),
+        };
+        let mut journal = connected_journal();
+        let before = journal.bytes().unwrap();
+        assert_eq!(
+            stage_input(
+                &mut journal,
+                "Explain this",
+                None,
+                Some(context.clone()),
+                NOW
+            ),
+            Err(Error::InvalidInput)
+        );
+        assert_eq!(journal.bytes().unwrap(), before);
+        let (mut client, store) = client();
+        let before = client.journal.bytes().unwrap();
+        let writes = store.writes.lock().unwrap().len();
+        assert_eq!(
+            client
+                .send_text_with_context("Explain this", context, None)
+                .await,
+            Err(Error::InvalidInput)
+        );
+        assert_eq!(client.journal.bytes().unwrap(), before);
+        assert_eq!(store.writes.lock().unwrap().len(), writes);
+    }
+}
+
+#[test]
+fn restored_document_context_rejects_null_nonobjects_and_oversized_handles() {
+    let mut journal = connected_journal();
+    stage_input(
+        &mut journal,
+        "Explain this",
+        None,
+        Some(ScreenContext {
+            app: "Preview".into(),
+            text: "Paragraph".into(),
+            document: Some("{}".into()),
+        }),
+        NOW,
+    )
+    .unwrap();
+    let original: Value = serde_json::from_slice(&journal.bytes().unwrap()).unwrap();
+    for invalid in [
+        Value::Null,
+        json!([]),
+        json!("document"),
+        json!({"path": "x".repeat(MAX_DOCUMENT_BYTES)}),
+    ] {
+        let mut value = original.clone();
+        value["pending"]["message"]["context"]["document"] = invalid;
+        assert!(matches!(
+            Journal::load(
+                &serde_json::to_vec(&value).unwrap(),
+                &config(),
+                &TestSigner::new().public_key_sec1().unwrap(),
+            ),
+            Err(Error::InvalidJournal)
+        ));
+    }
 }
 
 #[test]
@@ -161,6 +273,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
         Some(ScreenContext {
             app: "Settings".into(),
             text: "Wi-Fi\nConnected to Home".into(),
+            document: None,
         }),
         NOW,
     )
@@ -197,6 +310,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
             ScreenContext {
                 app: " ".into(),
                 text: "x".into(),
+                document: None,
             },
         ),
         (
@@ -204,6 +318,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
             ScreenContext {
                 app: "x".repeat(MAX_CONTEXT_APP_BYTES + 1),
                 text: "x".into(),
+                document: None,
             },
         ),
         (
@@ -211,6 +326,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
             ScreenContext {
                 app: "App".into(),
                 text: " \n".into(),
+                document: None,
             },
         ),
         (
@@ -218,6 +334,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
             ScreenContext {
                 app: "App".into(),
                 text: "x".repeat(MAX_CONTEXT_BYTES + 1),
+                document: None,
             },
         ),
         (
@@ -225,6 +342,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
             ScreenContext {
                 app: "App".into(),
                 text: "a\u{0007}b".into(),
+                document: None,
             },
         ),
     ] {
@@ -247,6 +365,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
         Some(ScreenContext {
             app: "App".into(),
             text: "y".repeat(MAX_CONTEXT_BYTES),
+            document: None,
         }),
         NOW,
     )
@@ -264,6 +383,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
             Some(ScreenContext {
                 app: "App".into(),
                 text: "\"".repeat(MAX_CONTEXT_BYTES),
+                document: None,
             }),
             NOW
         ),
@@ -278,6 +398,7 @@ fn explicit_target_and_screen_context_are_journaled_exactly_and_bounded() {
         Some(ScreenContext {
             app: "App".into(),
             text: "y".repeat(MAX_CONTEXT_BYTES),
+            document: None,
         }),
         NOW,
     )

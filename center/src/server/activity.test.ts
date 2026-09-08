@@ -89,3 +89,19 @@ it("keeps the list when a device list cannot be read, says so, and shows those d
   expect(activity.rows[0].asked).toBe("Asked from a removed device");
   expect(activity.rows[0].outcome).toBe("Shown in a browser");
 });
+
+it("accepts only a bounded runtime account after the owner session check", async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let account: unknown = "Cosmos selected your phone.\n\nYour phone showed it.";
+  vi.mocked(fetch).mockImplementation(async (url, options) => String(url).includes("/ledger?")
+    ? Response.json({ events: [], account }) : original(url, options));
+  expect(await readActivity()).toMatchObject({ state: "ready", account });
+  for (const invalid of [null, 42, {}, "", " ", "ø".repeat(1901)]) {
+    account = invalid;
+    expect(await readActivity()).toEqual({ state: "unavailable" });
+  }
+  vi.mocked(fetch).mockClear();
+  mocks.session.mockResolvedValue(null);
+  expect(await readActivity()).toEqual({ state: "unavailable" });
+  expect(fetch).not.toHaveBeenCalled();
+});

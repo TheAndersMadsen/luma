@@ -3050,33 +3050,17 @@ mod tests {
         fixture.state.turn.as_mut().unwrap().privacy = PrivacyClass::Private;
         let turn = fixture.state.turn.clone().unwrap();
         let offer = fixture.state.action_offer(&fixture.records, &turn, NOW + 2);
-        assert_eq!(offer.candidates.len(), 1);
-        let candidate = &offer.candidates[0];
-        assert_eq!(candidate.reference, "doc:1");
-        assert_eq!(candidate.kind, CandidateKind::Document);
-        // Nothing a person wrote travels with the identifier.
-        assert!(candidate.label.is_empty());
-        // But the runtime itself still binds the whole handle.
-        let (bound, kind) = fixture
-            .state
-            .bind_device_action(
-                &fixture.records,
-                &turn,
-                OperationKind::Open,
-                "doc:1",
-                NOW + 2,
-            )
-            .unwrap();
-        assert_eq!(kind, CandidateKind::Document);
-        assert_eq!(
-            bound,
-            Operation::Open {
-                locator: document.locator.clone(),
-                version: None,
-                position: Some(Position::Line { line: 1710 }),
-                label: "state.rs".into(),
-            }
+        // Raising the turn does not create a private physical channel. Even
+        // the reference stays unavailable while occupancy is unknown.
+        assert!(offer.candidates.is_empty());
+        let bound = fixture.state.bind_device_action(
+            &fixture.records,
+            &turn,
+            OperationKind::Open,
+            "doc:1",
+            NOW + 2,
         );
+        assert!(matches!(bound, Err(RuntimeError::InvalidRequest)));
         // An operation that disagrees with the reference is not resolved.
         assert!(matches!(
             fixture.state.bind_device_action(
@@ -4382,8 +4366,8 @@ mod tests {
     }
 
     /// No action channel is eligible above the shared-room ceiling on an
-    /// installation without a current personal declaration, and a television
-    /// can never hold one.
+    /// installation with unknown occupancy, even with a personal declaration.
+    /// A television can never hold the declaration.
     #[test]
     fn ambiance_no_action_channel_is_eligible_above_shared_room_without_a_declaration() {
         let (mut fixture, ids) = Fixture::new(&["android_tv", "macos"]);
@@ -4442,17 +4426,16 @@ mod tests {
                 )
                 .is_err()
         );
-        // The Mac's own declaration lifts its ceiling, and the owner's action
-        // permission is still checked at that class.
+        // The owner's declaration cannot lift the physical privacy ceiling.
         fixture.allow_private(mac);
         assert_eq!(
             blocker(&fixture, mac, Channel::ActionOpen, PrivacyClass::Private),
-            None
+            Some(crate::ambiance::policy::Blocker::Privacy)
         );
         fixture.set_actions(mac, None).unwrap();
         assert_eq!(
             blocker(&fixture, mac, Channel::ActionOpen, PrivacyClass::Private),
-            Some(crate::ambiance::policy::Blocker::Unavailable)
+            Some(crate::ambiance::policy::Blocker::Privacy)
         );
         assert!(!fixture.state.action_permits(&fixture.records, mac, &open));
     }
@@ -4533,7 +4516,8 @@ mod tests {
 
     /// A non-zero exit code is a command that ran: the runtime would lie in
     /// exactly the direction the outcome gate exists to prevent if it called
-    /// that a failure. Its output is content and lands as content.
+    /// that a failure. Its private output is suppressed while occupancy is
+    /// unknown without losing the committed command outcome.
     #[test]
     fn ambiance_exit_code_one_is_completed_and_its_output_is_routed_as_private_content() {
         let (mut fixture, ids) = Fixture::new(&["macos"]);
@@ -4578,16 +4562,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fixture.action(action.id).status, ActionStatus::Completed);
-        // The command's own bytes join to at least private, so they can only
-        // land on a personal surface.
-        let card = fixture
-            .state
-            .actions
-            .values()
-            .find(|candidate| candidate.channel == Channel::VisualCard)
-            .unwrap();
-        assert_eq!(card.surface_id, mac);
-        assert!(card.privacy >= PrivacyClass::Private);
+        // The command's own bytes join to at least private. No current
+        // profile may carry them, regardless of its owner's display setting.
+        assert!(
+            !fixture
+                .state
+                .actions
+                .values()
+                .any(|candidate| candidate.channel == Channel::VisualCard)
+        );
     }
 
     #[test]

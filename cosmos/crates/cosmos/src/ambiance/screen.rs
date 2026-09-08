@@ -178,8 +178,8 @@ impl RuntimeState {
     /// Admit the origin's screen text to this turn's cognition: once per
     /// turn, for a turn already raised to `private` by that text, only while
     /// the origin holds the permission at its current approval revision and
-    /// a personal surface exists to show the reply. `PolicyBlocked` means the
-    /// permission is missing; the runtime then explains that instead.
+    /// a physically eligible personal output exists to show the reply.
+    /// Current profiles have none, so supplied text never reaches cognition.
     pub(super) fn offer_screen_context(
         &mut self,
         records: &BTreeMap<Uuid, Record>,
@@ -204,7 +204,7 @@ impl RuntimeState {
             || turn.screen_context.is_some()
             || turn.privacy != PrivacyClass::Private
             || !self.origin_valid(turn, records, now)
-            || self.personal_surfaces(records, turn.privacy) == 0
+            || self.personal_surfaces(records, turn.privacy, now) == 0
         {
             return Err(RuntimeError::Stale);
         }

@@ -386,24 +386,24 @@
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/ambiance/personal.rs",
       "anchor": "pub(super) fn invitation_for",
-      "scope": "A request above shared_room is answered in the same turn: the runtime retrieves the owner's saved notes itself, proposes the reply at the request's class, and policy admits only a personal installation the owner declared for that class (visual card, never speech) while every shared surface is suppressed with a privacy blocker. The personal installation holds the card while connected, is told only that something waits, receives it once its unlocked foreground reports visible, and loses it when that foreground goes away. A TV can never hold the permission; without a personal surface the request is refused before cognition, and the origin's expression is the same shared-safe sentence used for any elsewhere-routed card.",
-      "limitation": "Unlock is enforced by the personal client before it reports visible, not proven to Cosmos; the permission is the owner's statement about the device. Notes are the only private source; unopenable notes are counted, not read."
+      "scope": "Owner display preferences remain consent ceilings. Current profiles declare shared channels and unknown occupancy, so no private output is eligible. Screen-context admission checks the same output policy before model disclosure; private-note recall is independently refused before source access.",
+      "limitation": "No positive private-output path, authenticated native personal continuation or physical privacy attestation is implemented. Owner-control-plane physical privacy remains unverified."
     },
     {
       "id": "private-routing-room-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
-      "anchor": "native_room_private_request_routes_only_to_the_owners_personal_surface",
-      "scope": "Without a personal surface a Mac's private request is refused before cognition. With the phone declared, the same request builds the private card from the notes inside the runtime with no cognition call, proposes it for the phone alone with the Mac and a TV blocked by privacy, the Mac polls nothing, the phone is told only that something waits and its poll does not dispatch until it reports visible, the card is then dispatched and acknowledged, and it is cancelled when the phone reports not visible. A TV is refused the permission.",
-      "limitation": "Store-level test with a synthetic model; no real phone unlock, LiveKit transport or Pin audio."
+      "anchor": "native_room_private_recall_never_reads_without_origin_authority",
+      "scope": "All four native platform profiles refuse direct private-memory requests and model-proposed recall without reading private storage, including visible origin and destination apps with owner-declared personal permissions. Refusals are committed without content, counts or a private render decision. Voice and origin-status regressions exercise the same boundary.",
+      "limitation": "MemoryStore and synthetic model/voice fixtures only. No authenticated native personal continuation, room observation or real-device acceptance."
     },
     {
       "id": "private-display-policy-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
-      "anchor": "hints_rank_only_eligible_candidates_and_never_the_origin",
-      "scope": "The runtime's personal finding lifts the shared-room ceiling for a personal surface's visual card only: never for a surface without it, never for speech.",
-      "limitation": "Pure policy test."
+      "anchor": "fn every_current_profile_blocks_above_shared_room_on_every_channel",
+      "scope": "Current browser, native and Pin profiles block output above shared_room even with favorable routing hints. Physical privacy never comes from owner preferences.",
+      "limitation": "Pure policy fixtures; physical occupancy and revocation on actual hardware remain unverified."
     },
     {
       "id": "center-private-display-test-definition",
@@ -754,16 +754,16 @@
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/ambiance/screen.rs",
       "anchor": "pub(super) fn offer_screen_context(",
-      "scope": "Defines the owner's native-only screen-context permission bound to the installation's approval revision and the once-per-turn offer that admits the origin's own screen text to cognition only for a private turn with a personal surface to render on, recorded content-free with the app digest and byte count.",
-      "limitation": "Cosmos cannot verify what was actually on the screen or who captured it; the permission is the owner's statement about the installation. Provider handling of the text after disclosure is outside the runtime."
+      "scope": "The native screen-context permission is bound to the installation revision. Context admission additionally requires a physically eligible private output through dispatch policy, which current unknown-room profiles cannot provide.",
+      "limitation": "Current profiles refuse supplied screen text before model disclosure. No authenticated private continuation or positive document explanation is established."
     },
     {
       "id": "screen-context-room-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
-      "anchor": "async fn native_room_screen_context_reaches_cognition_only_under_the_owners_permission()",
-      "scope": "Defines that screen text never reaches cognition without the origin's permission (a private card on the phone explains why), reaches it only as a delimited untrusted block after the request, makes the turn private with every shared surface privacy-blocked, is logged as a content-free offer, binds exact retries, and is refused before cognition when sensitive or over-long.",
-      "limitation": "Synthetic cognition and MemoryStore only; the model's obedience to the untrusted-block instruction is not proven here, and no physical device or real screen capture is exercised."
+      "anchor": "async fn native_room_screen_context_requires_physical_privacy_before_cognition()",
+      "scope": "Mac, Linux and Android screen requests are refused before model or private-store access, including visible apps with private-display and screen-context permissions. Exact retries retain identity, modified context is rejected, oversized input consumes no sequence, and a subsequent public request still works.",
+      "limitation": "Synthetic cognition and MemoryStore only; actual capture permissions and physical privacy remain unverified."
     },
     {
       "id": "screen-context-owner-api-test-definition",
@@ -970,7 +970,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
       "anchor": "fn ambiance_exit_code_one_is_completed_and_its_output_is_routed_as_private_content",
-      "scope": "A command that ran and exited non-zero is completed, because conflating it with a failure would make the runtime lie in the direction the outcome gate exists to prevent. Its output joins to at least private and lands on a personal surface as content; the chain keeps its digest, byte count and exit code.",
+      "scope": "A command with exit code one commits its completed outcome. Its private output is withheld while the destination has unknown occupancy, including after a personal-display preference is saved.",
       "limitation": "Synthetic output through the ordinary card path. No command was executed and no client rendered the result."
     },
     {
@@ -1034,7 +1034,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
       "anchor": "fn ambiance_no_action_channel_is_eligible_above_shared_room_without_a_declaration",
-      "scope": "No action channel is eligible above the shared-room ceiling on an installation without a current personal declaration, a television can never hold one, and the owner's own permission for the exact command is still required at that class.",
+      "scope": "Action channels remain privacy-blocked above shared_room before and after a personal-display declaration, including on Mac. TVs cannot hold a personal declaration; independent action permissions remain necessary for shared actions.",
       "limitation": "A candidate-level ablation; it does not observe who is actually in the room."
     },
     {
@@ -1106,7 +1106,7 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/policy.rs",
       "anchor": "fn a_film_list_asked_of_the_pin_goes_to_the_television_and_is_never_spoken",
-      "scope": "The seven owner situations as ranking tests over one synthetic fleet, plus the ordering properties the published weights must satisfy, the older-profile floor and replay determinism.",
+      "scope": "Shared film, trailer, desktop-open, navigation and voice scenarios exercise shape ranking. Private-document and private-message scenarios have no eligible current output. Includes older-profile score floors, stable tie-breaking and hint-stripped routing.",
       "limitation": "Synthetic records and presences. It does not exercise transport, clients or a real device."
     },
     {
@@ -1116,6 +1116,102 @@
       "anchor": "fn a_screen_nobody_is_looking_at_is_ranked_below_its_shape_never_skipped",
       "scope": "A reachable installation reporting no foreground stays eligible for a card, carries the bounded penalty, and is refused speech with the distinct unattended blocker.",
       "limitation": "Synthetic presence values. It does not show a real client coming forward to claim a held card."
+    },
+    {
+      "id": "runtime-account-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/account.rs",
+      "anchor": "pub fn compose",
+      "scope": "Recognizes closed English/Danish routing questions and composes a bounded account from the owner-authenticated ledger endpoint. Delivery binds to the selected action, generation, surface and channel, following committed repairs. Visual/audio acknowledgments prove rendering/playback; device actions require completed status. Status indicators, command acceptance, missing decisions and ranking differences never become invented outcomes or user instructions.",
+      "limitation": "Recognition is a whitelist over a fixed word list, so an unlisted phrasing falls through to cognition as an ordinary request; there is no language model, no paraphrase and no multi-turn history beyond the last decided turn."
+    },
+    {
+      "id": "runtime-account-routing-definition",
+      "kind": "implementation",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn account(",
+      "scope": "Every native, browser-surface and Pin account request returns the same shared-safe direction to Activity without reading the ledger or private memory. Owner-declared private output permissions do not grant history access. The request is fenced and recorded as account_requested.",
+      "limitation": "Detailed native accounts are unavailable until a new linked request proves actor authentication, private-origin source access and physical privacy. The existing owner Activity endpoint authenticates its reader but does not establish physical room privacy."
+    },
+    {
+      "id": "runtime-account-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/account.rs",
+      "anchor": "fn ambiance_account_speaks_every_class_and_never_the_shared_sentence",
+      "scope": "Unit definitions over recognition in both languages against ordinary why-questions, the ledger fold that skips expressions, earlier accounts and the asking turn, composition at all five privacy classes with folded device counts and no surface identifier, an empty window, and the shared sentence's fixed bytes.",
+      "limitation": "Pure functions over synthetic ledger events; it exercises no store, no routing and no delivery."
+    },
+    {
+      "id": "runtime-account-outcome-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/account.rs",
+      "anchor": "fn ambiance_account_outcome_requires_the_exact_substantive_action",
+      "scope": "Rejects acknowledgments for the wrong action, generation, surface or channel and excludes expressions before and after a real answer. Adjacent regressions follow a committed repair and distinguish device command acceptance from completion.",
+      "limitation": "Synthetic ledger events exercise the account composer, not physical rendering or execution."
+    },
+    {
+      "id": "owner-activity-outcome-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/lib/contracts/activity.test.ts",
+      "anchor": "does not count a repaired status indicator as delivery of the reply",
+      "scope": "Activity excludes status indicators across repair chains and confirmation acknowledgments from answer delivery. Shape-ranking tests keep selection separate from delivery and do not infer a user instruction from a score difference.",
+      "limitation": "Synthetic ledger projection only; owner browser privacy and physical delivery remain unverified."
+    },
+    {
+      "id": "runtime-account-room-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/native_room_tests.rs",
+      "anchor": "async fn native_room_account_on_a_shared_channel_never_says_which_class_it_was_suppressed_at",
+      "scope": "An end-to-end MemoryStore test asks in both languages after empty, public and private history, with private-display permissions on both origin and destination. Asserts identical shared replies, zero additional ledger/private-store reads and zero model calls for each account question. Ordinary why-questions still reach cognition.",
+      "limitation": "MemoryStore and synthetic cognition only; no SFU, actual rendering or room/actor attestation."
+    },
+    {
+      "id": "owner-account-http-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/surface_api.rs",
+      "anchor": "async fn ambiance_ledger_http_is_owner_only_bounded_and_content_free",
+      "scope": "The owner ledger route rejects absent/invalid authentication, bounds its requested tail, isolates principals and returns a bounded runtime account with its existing events.",
+      "limitation": "In-memory HTTP checks; browser room privacy and actual native personal continuation are not established."
+    },
+    {
+      "id": "owner-account-ui-test-definition",
+      "kind": "test-definition",
+      "path": "center/src/app/settings/account/activity/ActivityList.test.tsx",
+      "anchor": "offers the runtime's latest routing account on demand",
+      "scope": "The signed-in Activity presentation exposes an escaped, collapsed routing account that renders without JavaScript. Server tests reject oversized or malformed accounts and skip upstream reads without a session.",
+      "limitation": "Rendered component/server fixtures rather than a live owner session."
+    },
+    {
+      "id": "native-document-transport-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/tests.rs",
+      "anchor": "fn document_context_survives_exact_retry_and_reopen",
+      "scope": "Carries a versioned document handle with exact destination and request identity through journal reopen/retry. Rejects malformed, null, non-object and oversized handles before sequence consumption; the C bridge rejects null-pointer/nonzero-length input before queueing.",
+      "limitation": "Client transport and journal checks only; no file transfer, unsaved-buffer preservation or destination document/position/task observation."
+    },
+    {
+      "id": "tv-caption-delivery-test-definition",
+      "kind": "test-definition",
+      "path": "clients/android/app/src/test/java/dk/andersmadsen/cosmos/android/ScreensTest.kt",
+      "anchor": "fun aCaptionCannotAcknowledgeUnmeasuredClippedOrMissingCardContent",
+      "scope": "An unmeasured caption, clipped caption, Places query preview or speech caption without a visual card cannot acknowledge the full card. The native paged renderer waits until every complete page has been laid out.",
+      "limitation": "Unit policy and compiled Compose wiring; physical Shield visibility, page traversal and third-party overlay behavior remain unverified."
+    },
+    {
+      "id": "private-recall-stock-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/runtime.rs",
+      "anchor": "async fn ambiance_runtime_private_recall_does_not_borrow_another_devices_permission",
+      "scope": "Direct stock private-note requests and model-proposed recall are refused before any private-store read even when another native device has a private-display preference. Both refusals are logged.",
+      "limitation": "Synthetic model and MemoryStore; no physical Pin request or authenticated personal continuation."
+    },
+    {
+      "id": "private-output-recovery-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/state.rs",
+      "anchor": "fn ambiance_private_payloads_restored_from_earlier_policy_are_retired_before_dispatch",
+      "scope": "Private card payloads restored in proposed, dispatched or acknowledged states are cleared by current policy before any subsequent dispatch.",
+      "limitation": "Serialized in-memory state fixture; already-seen content cannot be revoked and actual client cleanup remains a device acceptance gate."
     }
   ],
   "requirements": [
@@ -1132,7 +1228,9 @@
       "evidence": [
         "runtime-policy-revalidation-test-definition",
         "native-speech-revocation-test-definition",
-        "native-visual-routing-test-definition"
+        "native-visual-routing-test-definition",
+        "private-display-policy-test-definition",
+        "private-output-recovery-test-definition"
       ]
     },
     {
@@ -1190,7 +1288,9 @@
         "screen-context-definition",
         "screen-context-room-test-definition",
         "device-action-untrusted-content-test-definition",
-        "device-action-class-ceiling-test-definition"
+        "device-action-class-ceiling-test-definition",
+        "private-routing-room-test-definition",
+        "private-recall-stock-test-definition"
       ]
     },
     {
@@ -1248,7 +1348,8 @@
         "native-client-status-test-definition",
         "device-action-shared-expression-test-definition",
         "device-action-class-ceiling-test-definition",
-        "situation-routing-test-definition"
+        "situation-routing-test-definition",
+        "runtime-account-room-test-definition"
       ]
     },
     {
@@ -1292,7 +1393,7 @@
         "9.2"
       ],
       "requirement": "Spoken and expressive outcome claims require the matching committed runtime outcome.",
-      "acceptance": "Require the exact action's acknowledgment, reject stale/unrelated acknowledgments, represent unknown outcomes honestly, and resolve unrestricted-outcome-prose before claiming universal coverage.",
+      "acceptance": "Require the exact visual/audio action's acknowledgment or a device action's matching completed report, reject stale/unrelated acknowledgments, represent unknown outcomes honestly, and resolve unrestricted-outcome-prose before claiming universal coverage.",
       "status": "partial",
       "evidence": [
         "runtime-display-outcome-test-definition",
@@ -1304,7 +1405,10 @@
         "device-action-outcome-test-definition",
         "device-action-exit-code-test-definition",
         "device-action-shared-expression-test-definition",
-        "device-action-client-report-test-definition"
+        "device-action-client-report-test-definition",
+        "tv-caption-delivery-test-definition",
+        "runtime-account-outcome-test-definition",
+        "owner-activity-outcome-test-definition"
       ]
     },
     {
@@ -1337,6 +1441,30 @@
         "routing-hint-policy-test-definition",
         "declared-audience-definition",
         "situation-routing-test-definition"
+      ]
+    },
+    {
+      "id": "on-demand-account",
+      "basis": "paper",
+      "sourceSections": [
+        "4.4",
+        "4.6",
+        "4.8",
+        "8",
+        "9.2"
+      ],
+      "requirement": "\"Why did that go to the speaker?\" is answerable from any surface, composed by the runtime from its own decision timeline rather than by cognition; full rationale reaches only a private authenticated surface, and every shared-perceivable channel receives one outcome-indistinguishable sentence.",
+      "acceptance": "Verify owner-only detailed accounts and zero private-history reads for all shared origins, even when a personal output exists. Compare shared answers across empty/public/private histories; require a fresh linked personal request, source grant and attested physical privacy before native full rationale can be enabled.",
+      "status": "partial",
+      "evidence": [
+        "runtime-account-definition",
+        "runtime-account-routing-definition",
+        "runtime-account-test-definition",
+        "runtime-account-outcome-test-definition",
+        "owner-activity-outcome-test-definition",
+        "runtime-account-room-test-definition",
+        "owner-account-http-test-definition",
+        "owner-account-ui-test-definition"
       ]
     },
     {
@@ -1756,6 +1884,7 @@
         "screen-context-definition",
         "screen-context-room-test-definition",
         "screen-context-owner-api-test-definition",
+        "native-document-transport-test-definition",
         "device-action-dispatch-test-definition",
         "device-action-outcome-test-definition",
         "device-action-client-frame-test-definition",

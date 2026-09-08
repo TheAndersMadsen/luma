@@ -1,11 +1,8 @@
-//! Personal surfaces and private routing. Memory belongs to the runtime and is
-//! retrieved by class; the reply's class then decides where it may appear.
-//! Above `shared_room` only a personal surface the owner declared for that
-//! class is eligible: it holds the card while connected, renders it only once
-//! its unlocked foreground reports visible, and loses it the moment that
-//! foreground goes away. Every shared surface is suppressed with a privacy
-//! blocker, and what those surfaces express is the same understated
-//! "heard, handled elsewhere" they show for any elsewhere-routed request.
+//! Owner display preferences and pending invitations. A preference is a
+//! consent ceiling, never evidence of actor identity or physical privacy.
+//! Current profiles report unknown occupancy and declare shared channels, so
+//! no output above shared_room is eligible. Private-memory access is checked
+//! independently at the requesting origin before any source is read.
 use super::{ActionStatus, Channel, PrivacyClass, RuntimeData, RuntimeError, RuntimeState};
 use crate::surface_registry::{Binding, Record};
 use serde::{Deserialize, Serialize};
@@ -93,11 +90,15 @@ impl RuntimeState {
             .map(|policy| policy.maximum_class)
     }
 
-    /// Personal surfaces the owner declared for at least this class.
+    /// Count only currently eligible personal outputs. Permission to show a
+    /// class cannot lift a channel's physical ceiling; this admission check
+    /// must use the same policy as dispatch before any screen text is offered
+    /// to cognition. Current profiles have no private eligible output.
     pub(super) fn personal_surfaces(
         &self,
         records: &BTreeMap<Uuid, Record>,
         privacy: PrivacyClass,
+        now: i64,
     ) -> usize {
         records
             .values()
@@ -106,6 +107,20 @@ impl RuntimeState {
                     && self
                         .personal_ceiling(records, r.surface_id)
                         .is_some_and(|ceiling| privacy <= ceiling)
+                    && self
+                        .candidate(
+                            records,
+                            r,
+                            r.surface_id,
+                            Channel::VisualCard,
+                            super::policy::Shape::Note,
+                            privacy,
+                            None,
+                            None,
+                            now,
+                        )
+                        .blocker
+                        .is_none()
             })
             .count()
     }

@@ -69,10 +69,12 @@ it("reads every permission on mount, never writes, and says what the device may 
   render(<DeviceCard {...props} />);
   expect(screen.getByRole("heading", { name: "Phone" })).toBeVisible();
   expect(screen.getByText("Connected")).toBeVisible();
-  await screen.findByText("Shows shared replies · Speaks replies · Looks things up · Shows private replies");
+  await screen.findByText("Shows shared replies · Speaks replies · Looks things up · Private features unavailable");
   for (const kind of ["speech-disclosure", "web-lookup", "places-lookup", "private-display", "screen-context"] as const) expect(reads(mock, kind)).toHaveLength(1);
   expect(posts(mock)).toHaveLength(0);
-  expect(props.onRegionUsed).toHaveBeenCalledWith("westeurope");
+  // The summary renders before useSpeechRegion's passive effect reports the
+  // saved region to the page. Wait for that separate observable effect.
+  await waitFor(() => expect(props.onRegionUsed).toHaveBeenCalledWith("westeurope"));
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   expect(screen.queryByText(row.enrollmentId)).not.toBeInTheDocument();
   manage();
@@ -83,7 +85,7 @@ it("reads every permission on mount, never writes, and says what the device may 
   expect(toggle("Use what's on the screen")).not.toBeChecked();
   expect(screen.getByText(/Region: westeurope/u)).toBeVisible();
   expect(screen.getByText(/Uses SearXNG at/u)).toHaveTextContent(searx.endpoint);
-  expect(screen.getByText("After you unlock this device and choose Continue, private replies appear only here.")).toBeVisible();
+  expect(screen.getByText("Private replies are unavailable until room privacy can be verified. This saves your preference.")).toBeVisible();
   expect(screen.getByText("Cosmos cannot tell who is looking at the screen.")).toBeVisible();
   expect(screen.queryByText(/Only you can see this/u)).not.toBeInTheDocument();
   expect(screen.queryByText(row.enrollmentId)).not.toBeInTheDocument();
@@ -190,10 +192,10 @@ it("a recorded provider that is no longer configured authorizes nothing: the lin
 it("private replies post the private ceiling and revoke with null, while a TV never reads or offers them", async () => {
   const mock = cosmos(); const phone = render(<DeviceCard {...props} />); await settled(); manage();
   fireEvent.click(toggle("Show private replies here"));
-  await screen.findByText("Cosmos confirmed private replies may appear here after you continue on this device.");
+  await screen.findByText("Preference saved. Private replies still need verified room privacy.");
   expect(posts(mock)[0][0]).toBe(`${base}/private-display`);
   expect(JSON.parse(String(posts(mock)[0][1]?.body))).toEqual({ approval: PRIVATE_DISPLAY_APPROVAL, approvalRevision: 3, expectedRevision: 0, policy: { maximumClass: "private" } });
-  expect(screen.getByText("Shows shared replies · Shows private replies")).toBeVisible();
+  expect(screen.getByText("Shows shared replies · Private features unavailable")).toBeVisible();
   fireEvent.click(toggle("Show private replies here"));
   await screen.findByText("Cosmos confirmed private replies off for this device.");
   expect(JSON.parse(String(posts(mock)[1][1]?.body))).toEqual({ approval: PRIVATE_DISPLAY_APPROVAL, approvalRevision: 3, expectedRevision: 1, policy: null });
@@ -203,18 +205,18 @@ it("private replies post the private ceiling and revoke with null, while a TV ne
   expect(screen.getByRole("heading", { name: "TV" })).toBeVisible();
   expect(screen.queryByRole("switch", { name: "Show private replies here" })).not.toBeInTheDocument();
   expect(reads(tv, "private-display")).toHaveLength(0);
-  expect(screen.queryByText(/Shows private replies/u)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Private features unavailable/u)).not.toBeInTheDocument();
 });
 
 it("screen context posts the private policy on a phone, revokes with null, is hidden on a TV, and is a switch but not a set-up step on a Mac", async () => {
   const mock = cosmos(); const phone = render(<DeviceCard {...props} />); await settled(); manage();
-  expect(screen.getByText("When you ask about what is on this device’s screen, Cosmos reads the visible text once and sends it to the assistant model.")).toBeVisible();
-  expect(screen.getByText("The reply stays private to this device. It is never spoken and never shown on a shared screen.")).toBeVisible();
+  expect(screen.getByText("This saves permission to use selected screen text when private requests become available.")).toBeVisible();
+  expect(screen.getByText("Screen requests are currently unavailable because room privacy cannot be verified.")).toBeVisible();
   fireEvent.click(toggle("Use what's on the screen"));
-  await screen.findByText("Cosmos confirmed this device may use what's on its screen when you ask.");
+  await screen.findByText("Permission saved. Screen requests still need verified room privacy.");
   expect(posts(mock)[0][0]).toBe(`${base}/screen-context`);
   expect(JSON.parse(String(posts(mock)[0][1]?.body))).toEqual({ approval: SCREEN_CONTEXT_APPROVAL, approvalRevision: 3, expectedRevision: 0, policy: { maximumClass: "private" } });
-  expect(screen.getByText("Shows shared replies · Uses what's on the screen")).toBeVisible();
+  expect(screen.getByText("Shows shared replies · Private features unavailable")).toBeVisible();
   fireEvent.click(toggle("Use what's on the screen"));
   await screen.findByText("Cosmos confirmed screen context off for this device.");
   expect(JSON.parse(String(posts(mock)[1][1]?.body))).toEqual({ approval: SCREEN_CONTEXT_APPROVAL, approvalRevision: 3, expectedRevision: 1, policy: null });
@@ -227,11 +229,11 @@ it("screen context posts the private policy on a phone, revokes with null, is hi
   expect(screen.getByRole("switch", { name: "Speak replies" })).toBeVisible();
   expect(screen.queryByRole("switch", { name: "Use what's on the screen" })).not.toBeInTheDocument();
   expect(reads(tv, "screen-context")).toHaveLength(0);
-  expect(screen.queryByText(/Uses what's on the screen/u)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Private features unavailable/u)).not.toBeInTheDocument();
   television.unmount();
   const mac = cosmos({ "screen-context": { approvalRevision: 3, revision: 1, policy: { maximumClass: "private" } } }, { web: [searx], places: [] });
   render(<DeviceCard {...props} row={{ ...row, platform: "macos" }} servicesRegion="westeurope" offerSetup />); await settled();
-  expect(screen.getByText("Shows shared replies · Uses what's on the screen")).toBeVisible();
+  expect(screen.getByText("Shows shared replies · Private features unavailable")).toBeVisible();
   expect(await setupResults()).toEqual(["Speak replies — On.", "Look things up on the web — On.", "Find places — No place provider is set up in Services."]);
   expect(posts(mac).map(([url]) => String(url).slice(base.length + 1))).toEqual(["speech-disclosure", "web-lookup"]);
   expect(toggle("Use what's on the screen")).toBeChecked();
@@ -278,19 +280,19 @@ it("the usual set-up reads each permission fresh, writes in sequence and reports
   render(<DeviceCard {...props} servicesRegion="westeurope" offerSetup />); await settled();
   expect(screen.getByRole("group", { name: "Set up the usual permissions" })).toBeVisible();
   const before = mock.mock.calls.length;
-  expect(screen.getByText("Turn on spoken replies, web lookup, place lookup and what's on the screen in one go. Cosmos confirms each one separately.")).toBeVisible();
+  expect(screen.getByText("Turn on spoken replies, web lookup and place lookup in one go. Cosmos confirms each one separately.")).toBeVisible();
   expect(await setupResults()).toEqual(["Speak replies — On.", "Look things up on the web — On.", "Find places — No place provider is set up in Services.",
-    "Use what's on the screen — On."]);
+    "Use what's on the screen — Unavailable until room privacy can be verified."]);
   const sequence = mock.mock.calls.slice(before).map(([url, options]) => `${options?.method ?? "GET"} ${String(url).slice(base.length + 1)}`);
-  expect(sequence).toEqual(["GET speech-disclosure", "POST speech-disclosure", "GET web-lookup", "POST web-lookup", "GET places-lookup", "GET screen-context", "POST screen-context"]);
+  expect(sequence).toEqual(["GET speech-disclosure", "POST speech-disclosure", "GET web-lookup", "POST web-lookup", "GET places-lookup"]);
   expect(JSON.parse(String(posts(mock)[0][1]?.body))).toEqual({ approval: SPEECH_DISCLOSURE_APPROVAL, approvalRevision: 3, expectedRevision: 0, policy: speechPolicy });
   expect(JSON.parse(String(posts(mock)[1][1]?.body)).policy).toEqual({ provider: searx, maximumClass: "shared_room" });
-  expect(JSON.parse(String(posts(mock)[2][1]?.body))).toEqual({ approval: SCREEN_CONTEXT_APPROVAL, approvalRevision: 3, expectedRevision: 0, policy: { maximumClass: "private" } });
+  expect(posts(mock)).toHaveLength(2);
   expect(toggle("Speak replies")).toBeChecked();
   expect(toggle("Look things up on the web")).toBeChecked();
   expect(toggle("Find places")).not.toBeChecked();
-  expect(toggle("Use what's on the screen")).toBeChecked();
-  expect(screen.getByText("Shows shared replies · Speaks replies · Looks things up · Uses what's on the screen")).toBeVisible();
+  expect(toggle("Use what's on the screen")).not.toBeChecked();
+  expect(screen.getByText("Shows shared replies · Speaks replies · Looks things up")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Set up the usual permissions" })).not.toBeInTheDocument();
 });
 
@@ -298,10 +300,9 @@ it("the usual set-up skips what is already on, reports a needed choice and never
   const mock = cosmos({ "speech-disclosure": { approvalRevision: 3, revision: 2, policy: speechPolicy } }, { web: [searx, serp], places: [google] }, ["places-lookup"]);
   render(<DeviceCard {...props} offerSetup />); await settled();
   expect(await setupResults()).toEqual(["Speak replies — Already on.", "Look things up on the web — Choose a provider below, then turn it on.",
-    "Find places — Not confirmed. Check its switch below.", "Use what's on the screen — On."]);
-  expect(posts(mock)).toHaveLength(2);
+    "Find places — Not confirmed. Check its switch below.", "Use what's on the screen — Unavailable until room privacy can be verified."]);
+  expect(posts(mock)).toHaveLength(1);
   expect(posts(mock)[0][0]).toBe(`${base}/places-lookup`);
-  expect(posts(mock)[1][0]).toBe(`${base}/screen-context`);
   expect(toggle("Find places")).toBeDisabled();
   expect(screen.getAllByRole("alert")).toHaveLength(1);
   expect(screen.getByLabelText("Provider")).toBeEnabled();
@@ -387,20 +388,20 @@ it("Let this device act writes the whole list once, sorted, and never a permissi
   expect(JSON.parse(String(posts(mock)[1][1]?.body))).toMatchObject({ expectedRevision: 1, policy: null });
 });
 
-it("caps what an action may carry by this device's own private-display ceiling", async () => {
+it("caps action content at the shared-room ceiling even with a private-display preference", async () => {
   cosmos(); render(<DeviceCard {...props} />); await settled(); manage();
   fireEvent.click(toggle("Let this device act"));
   const field = screen.getByLabelText("The most private thing this may carry") as HTMLSelectElement;
   expect(Array.from(field.options).map(option => option.value)).toEqual(["public", "shared_room"]);
-  expect(screen.getByText(/Turn on “Show private replies here” first to allow more/u)).toBeVisible();
+  expect(screen.getByText(/A private-display preference cannot verify room privacy/u)).toBeVisible();
   cleanup();
-  // With the private-display permission, the ceiling it names is the ceiling here.
+  // A saved preference never raises the physical output ceiling.
   cosmos({ "private-display": { approvalRevision: 3, revision: 1, policy: { maximumClass: "private" } } });
   render(<DeviceCard {...props} />); await settled(); manage();
   fireEvent.click(toggle("Let this device act"));
   const raised = screen.getByLabelText("The most private thing this may carry") as HTMLSelectElement;
-  expect(Array.from(raised.options).map(option => option.value)).toEqual(["public", "shared_room", "near_user", "private"]);
-  expect(screen.queryByText(/Turn on “Show private replies here” first/u)).not.toBeInTheDocument();
+  expect(Array.from(raised.options).map(option => option.value)).toEqual(["public", "shared_room"]);
+  expect(screen.getByText(/A private-display preference cannot verify room privacy/u)).toBeVisible();
 });
 
 it("Tasks on this device is macOS only, fixes argv one part per line, and stops at eight", async () => {

@@ -133,6 +133,38 @@ fn openrouter_proposal_normalizes_nested_and_combined_lookups() {
         combined,
         json!({"web_lookup":{"query":"Round Tower height"},"privacy":"public","target":"macos"})
     );
+    // A note the owner asked to keep arrives nested as often as a lookup, and
+    // the words to keep are the model's own either way. Live on 2026-09-07 the
+    // provider answered "note that I like bees" with the note inside intent,
+    // which the strict parse refused and the turn was cancelled.
+    let kept = with(
+        r#"{"intent":{"kind":"remember","text":"I like bees","title":"Bees"},"privacy":"private"}"#,
+    )
+    .unwrap();
+    let kept: Value = serde_json::from_str(&kept).unwrap();
+    assert_eq!(
+        kept,
+        json!({"remember":{"text":"I like bees","title":"Bees"},"privacy":"private"})
+    );
+    let asked =
+        with(r#"{"intent":{"kind":"recall","query":"kitchen"},"privacy":"private"}"#).unwrap();
+    let asked: Value = serde_json::from_str(&asked).unwrap();
+    assert_eq!(
+        asked,
+        json!({"recall":{"query":"kitchen"},"privacy":"private"})
+    );
+    // Nothing is invented: a nested note with no words is still a parse failure.
+    assert!(with(r#"{"intent":{"kind":"remember","title":"Bees"},"privacy":"private"}"#).is_err());
+    // A note beside an unsourced answer keeps the note, exactly as a lookup does.
+    let beside = with(
+        r#"{"intent":{"kind":"informational_speech","text":"Noted."},"remember":{"text":"I like bees"},"privacy":"private"}"#,
+    )
+    .unwrap();
+    let beside: Value = serde_json::from_str(&beside).unwrap();
+    assert_eq!(
+        beside,
+        json!({"remember":{"text":"I like bees"},"privacy":"private"})
+    );
     assert!(with(r#"{"intent":{"kind":"bogus","text":"x"},"privacy":"public"}"#).is_err());
     assert!(with(r#"{"intent":{"kind":"place_lookup"},"privacy":"public"}"#).is_err());
     // A choice list nested inside intent is lifted, and a list next to an

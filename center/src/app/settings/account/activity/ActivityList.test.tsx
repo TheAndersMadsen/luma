@@ -15,6 +15,16 @@ const rows = [
 
 afterEach(() => { vi.useRealTimers(); });
 
+it("offers the runtime's latest routing account on demand, escaped and readable without JavaScript", () => {
+  const account = "Cosmos selected your phone.\n\n<unsafe> was a device label.";
+  const markup = renderToStaticMarkup(<ActivityList activity={{ state: "ready", rows, unnamed: false, account }} />);
+  expect(markup).toContain("Why did the last reply go there?");
+  expect(markup).toContain("<p>Cosmos selected your phone.</p>");
+  expect(markup).toContain("&lt;unsafe&gt;");
+  expect(markup).not.toContain("<unsafe>");
+  expect(markup).not.toContain("<details open");
+});
+
 it("lists turns newest first with time, where it was asked, what happened and a Why disclosure, without JavaScript", () => {
   const { container } = render(<ActivityList activity={{ state: "ready", rows, unnamed: false }} />);
   const items = Array.from(screen.getByRole("list", { name: "Recent turns" }).children) as HTMLElement[];

@@ -558,7 +558,7 @@ class DestinationAndContextTest(ControllerHarness):
         self.controller.send("What is this?")
         self.fold(snapshot("send_text", connected=True, needsReconnect=False, error="denied"))
         self.assertEqual(self.state.failure, Failure.SCREEN_CONTEXT_OFF)
-        self.assertEqual(self.state.message, "Screen context is off. Turn it on in Center → Devices.")
+        self.assertEqual(self.state.message, "Screen requests are unavailable. Check this device’s status in Center.")
         self.assertEqual(self.state.phase, Phase.CONNECTED)
         self.assertIsNotNone(self.state.context, "nothing was sent; the chip stays for a retry after turning it on")
 

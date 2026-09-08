@@ -10,8 +10,6 @@ export const LEDGER_LIMIT = 300;
 export const ACTIVITY_TURNS = 50;
 export const CHANNELS = ["visual.card", "audio.tts", "action.open", "action.route", "action.play", "action.run", "confirm.tap"] as const;
 export type Channel = typeof CHANNELS[number];
-/** Channels that change something about the world rather than showing or saying it. */
-const ACTION_CHANNELS: readonly Channel[] = ["action.open", "action.route", "action.play", "action.run"];
 /**
  * Why a device was passed over. `unavailable` is "nothing could be sent there";
  * `unattended` is "it was reachable, but its own app was not in front of
@@ -204,6 +202,12 @@ export function parseLedgerTurns(value: unknown): LedgerTurn[] {
         for (const turn of turns.values()) for (const action of turn.actions) if (action.actionId === data.action_id) action.failed = true;
         break;
       }
+      case "repair": {
+        // A status indicator remains an expression when delivery moves to a
+        // fallback. Its acknowledgment cannot prove the actual reply arrived.
+        if (uuid(data.previous_action) && expressions.has(data.previous_action) && uuid(data.action_id)) expressions.add(data.action_id);
+        break;
+      }
       case "turn_finished": case "turn_cancelled": {
         const turn = turns.get(key(data.turn_id, data.generation) ?? "");
         if (turn) { if (data.kind === "turn_cancelled") turn.cancelled = true; else turn.finished = true; }
@@ -372,7 +376,7 @@ function outcome(turn: LedgerTurn, kinds: SurfaceKinds): string {
   if (done) return `Done ${placed(kinds, done.surfaceId)}`;
   const refused = turn.actions.find(action => action.status === "refused" || action.status === "failed");
   if (refused) return `Not done ${placed(kinds, refused.surfaceId)}`;
-  const shown = turn.actions.find(action => action.status === "acknowledged" && !ACTION_CHANNELS.includes(action.channel));
+  const shown = turn.actions.find(action => action.status === "acknowledged" && (action.channel === "visual.card" || action.channel === "audio.tts"));
   if (shown) {
     if (shown.channel === "audio.tts") return `Spoken ${placed(kinds, shown.surfaceId)}`;
     return `${privateClass(turn.privacy) ? "Private reply" : "Shown"} ${placed(kinds, shown.surfaceId)}`;
@@ -435,9 +439,9 @@ function choiceLines(turn: LedgerTurn, kinds: SurfaceKinds): string[] {
   const suited = eligible.find(candidate => candidate.fit === best)!;
   const lines = [chosen.fit === best
     ? `This was ${answer}, and that belongs ${placed(kinds, chosen.surfaceId)}.`
-    // A destination the owner named outranks the fit, so the two facts are
-    // separate sentences: where it belonged, and why it went elsewhere.
-    : `This was ${answer}. It belongs ${placed(kinds, suited.surfaceId)}, and Cosmos sent it to ${named(kinds, chosen.surfaceId)} because you asked for that.`];
+    // Shape is only one ranking term. Selection proves neither delivery nor
+    // that the owner requested this destination; the logged hint is separate.
+    : `This was ${answer}. ${capitalize(named(kinds, suited.surfaceId))} suited that shape best; Cosmos selected ${named(kinds, chosen.surfaceId)}.`];
   // Devices that suited it better are already named above; the rest read as
   // "could have, but" or as an equal, folded by kind so two tabs are one line.
   const groups: { kind: string; surfaceId: string; channel: Channel; equal: boolean; background: boolean; count: number }[] = [];

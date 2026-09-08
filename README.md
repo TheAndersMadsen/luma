@@ -182,29 +182,43 @@ Its metadata tests validate the inventory and evidence references only; the
 paper's reference implementation and reported test results are unavailable for
 independent reproduction.
 
-The current server preview is published as `v0.2.0-ambiance.18` and deployed at
-`https://center.andersmadsen.dk/`, reporting release
-`bf2f1cd69d849bba3c7222018de664e635358d53` and environment `production`. That
-release was built on the workstation after GitHub Actions minutes ran out: the
-Cosmos and Center images were built and pushed locally, the other three images
-were reused from `v0.2.0-ambiance.10`, and its GitHub release carries no
-sigstore bundle. It carries the request's own destination, the origin's
-outcome-gated status, screen context behind an owner permission, numbered
-choice lists, the owner's ledger read behind the Activity page, and device
-actions: the per-platform approval profiles, the two owner permissions, the
-confirmation ceremony and reports believed only from the device that acted.
-The three releases before it (`.16` reporting `e26f5f9`, `.17` reporting
-`ff978c6`) each passed the same production verification.
-The signed operator, public discovery, OIDC and configured Pin certificate chain
-passed production verification. The upgrade preserved the configured profiles,
-connections and nonblank credentials. Web lookup's exact-commit CI and built
-Center/native-client acceptance passed with a controlled search fixture;
-conversation acceptance against a real search provider remains open.
-External browser RPC passed over direct TCP
-7881 with observed ICE selection and increasing byte counters. UDP 7882 and
-TURN/UDP 3478 remain blocked before packets reach the VPS network interface;
-their acceptance remains open. Full owner conversation acceptance, native
-clients, the voice loop and physical Pin acceptance remain incomplete.
+The live server preview at `https://center.andersmadsen.dk/` was checked on
+2026-09-08. `/api/version` reports release
+`ea1707b27cc9a5a07b74eb92a1f18db37aefb396` and environment `production`;
+the running Center and Cosmos container labels match it and the application
+services report healthy. The former `.18` record was stale. This check does
+not re-establish release-archive provenance, signatures, owner conversation,
+native device behavior or physical Pin acceptance. Those checks remain open.
+The current branch also contains the later TV overlay and Mac document-handle
+changes, plus the document-transport and account corrections described below.
+
+The 2026-09-08 source audit corrected four paths and identified their remaining
+acceptance work:
+
+- `policy.rs` now enforces the shared-channel ceiling for every current
+  profile, including native devices with a private-display preference. Unknown
+  occupancy cannot be upgraded by an owner setting. Ambiance note recall is
+  refused before private-store access, and supplied screen text is refused
+  before model disclosure. Native routing questions also perform no history
+  read. Authenticated personal continuation, physical privacy evidence and
+  privacy-aware observer rendering remain acceptance work.
+- A document handle carries a locator, version and position. It does not
+  transfer a file, unsaved edits or the current explanation/task. macOS and
+  Linux can observe a handler accepting an open request; this is insufficient
+  evidence that the exact document, position and task are visible there.
+- TV subtitles previously acknowledged the whole card even when they showed
+  only a clipped prefix or a place-query title. Acknowledgment now requires a
+  complete caption or every rendered page of the full answer. Physical Shield
+  rendering, remote behavior and all third-party player contexts remain open.
+- Routing accounts now bind delivery to the selected action, turn generation,
+  surface and channel, following committed repairs. Status indicators and
+  command acceptance cannot become completion claims. Center also excludes
+  repaired indicators and confirmation acknowledgments from answer delivery;
+  its routing explanation distinguishes selection from observed delivery.
+
+These are source findings and bounded regression checks, not full paper
+conformance. Native shared speech uses Cosmos/Azure; remaining stock Pin
+speech paths and the physical voice loop still require device acceptance.
 
 Ambiance v2 is the target architecture, not an optional addition to the existing
 assistant. Existing Cosmos behavior is not a correctness requirement where it
@@ -304,8 +318,8 @@ application-path evidence; actual provider availability, owner login and
 physical device behavior still need their separate acceptance.
 
 The shared-display increment makes an approved native installation a visual
-surface and gives requests a bounded routing hint. The native approval profile
-is now `native-shared-speech-v3`: it declares one shared-room `visual.card`
+surface and gives requests a bounded routing hint. Its original approval profile
+was `native-shared-speech-v3`: it declares one shared-room `visual.card`
 output, one shared-room `audio.tts` output, a `state.visibility` input and the
 `visible_foreground_only` and `no_background_output` constraints. Persisted
 `native-shared-display-v2` approvals keep rendering cards but play no speech
@@ -324,9 +338,10 @@ The device-action increment gives a surface a third thing it can be asked to
 do. An action travels the same pipeline as a card and a spoken reply: cognition
 proposes, the runtime binds, policy decides, and only the device's own report
 may say it happened. The runtime now binds, decides, confirms, dispatches and
-records the outcome; what is still missing is the other half of every effect —
-no client carries a command out yet, so a dispatched action reaches an approved
-installation and waits there for an executor that has not been written.
+records the outcome. Native clients execute their implemented action kinds
+under the matching local policy and report what they observe. Compiled clients
+and synthetic reports do not establish physical device acceptance or support
+for every third-party application.
 
 The native approval profile is now `native-audience-v6` and it differs per
 platform, because what a device may be asked to do depends on what its
@@ -340,9 +355,9 @@ audience until the owner reapproves. macOS declares `action.open`,
 authentication; the Omarchy PC declares `action.open` and a keyboard-first
 `confirm.tap`; the phone declares `action.open` and `action.route`; the Shield
 declares `action.play` and no ceremony venue at all, because a television is
-bystander-perceivable by construction. Every channel declares the shared-room
-ceiling, which only the owner's own `approve-private-display-v1` for that
-installation lifts. Persisted `native-shared-speech-v3` and
+bystander-perceivable by construction. Every current channel declares the
+shared-room ceiling; `approve-private-display-v1` saves a consent preference
+and cannot lift that physical limit. Persisted `native-shared-speech-v3` and
 `native-shared-display-v2` approvals keep connecting, rendering and speaking and
 declare no action channel until the owner reapproves: the challenge now carries
 the approval the record actually holds, so publishing a new profile never stops
@@ -357,8 +372,8 @@ device's card. **Let this device act** (`approve-device-actions-v1`, route
 hosts, applications and directory roots it may open, whether it may route to a
 place, and which media providers it may play; only the operations that
 installation's approved manifest declares are offered, and its class is capped
-by that installation's private-display ceiling — an action permission spends a
-posture, it never raises one. **Tasks on this device**
+by the actual shared-channel ceiling. A saved private-display preference cannot
+make a private action eligible. **Tasks on this device**
 (`approve-device-command-v1`, macOS only, route `…/device-commands`, 4096
 bytes, which the editor counts down as the list grows) is a list of at most
 eight commands the owner authored, each with a fixed `argv` array written one
@@ -496,33 +511,35 @@ lookup permission, routed by the usual policy and an explicit target such as
 the phone. Owner listing and deletion of this memory beyond expiry, and other
 context kinds, are later increments.
 
-Private replies follow the paper's routing rather than a separate flow. A
-request above the shared-room ceiling ("read my private notes", "min private
-besked") is answered in the same turn: Cosmos retrieves the owner's saved notes
-itself, logs that offer against the turn, and proposes the reply at the
-request's class. Policy admits only a personal installation the owner declared
-for that class in Center ("Show private replies here", a statement about the
-device that Cosmos cannot verify and never grants to a TV), on its visual card
-channel and never as speech; every shared surface is suppressed with a privacy
-blocker. The personal phone holds the card while its signed connection is
-current: it is told only that something is waiting (a notification may say
-that much and nothing else), receives the card once its unlocked foreground
-reports visible, and loses it as soon as that foreground goes away. Sensitive
-content has no display ceiling, a request with no personal surface for its
-class is refused before cognition, and the shared origin expresses nothing that
-names privacy: a Pin hears the same outcome-gated "Displayed on your approved
-screen" it hears for any card acknowledged elsewhere. Owner listing and
-deletion of what was offered, and private sources beyond notes, are later
-increments.
+Private memory is scoped to the requesting origin. Current browser, Pin and
+native profiles do not establish actor authentication or room privacy, so a
+request above the shared-room ceiling without explicitly supplied screen
+context ("read my private notes", "min private besked") is refused before
+cognition or private-store access. A model-proposed `recall` is refused at the
+same source boundary even when the original words classified as public. The
+runtime records `PrivateContextRefused`, cancels the turn and returns the
+ordinary unavailable-surface response; it reveals no note count or contents.
+An owner-declared personal display on either endpoint does not change that
+decision. Native recall needs a new authenticated personal request, a scoped
+source grant and independently established physical privacy before it can be
+enabled. The owner-authenticated Notes interface remains the existing way to
+read saved notes.
 
-A phone, Mac or Linux PC may also use what is on its own screen. In Center,
-each such device's Manage panel offers **Use what's on the screen**: when the
-owner asks about what is on that device's screen, Cosmos may read the visible
-text once and send it to the assistant model, and the reply is private to that
-device. The permission is one owner statement per installation, read before it
-is written and confirmed by Cosmos at the next revision, and it is never
-offered for a TV or a browser. Set up the usual permissions turns it on for
-phones only.
+Private output is also blocked independently of source access. The approved
+profiles all declare shared channels and unknown occupancy; an owner setting,
+foreground report, routing hint or model proposal cannot raise that physical
+ceiling. Revalidation retires pending private payloads admitted by an earlier
+policy before dispatch. A completed command still records its actual outcome
+when its private output cannot be shown.
+
+A phone, Mac or Linux PC can capture selected screen text locally. In Center,
+each such device's Manage panel offers **Use what's on the screen**: the
+owner may save a permission for explicitly selected screen text. Current device
+profiles cannot establish room privacy, so these requests are unavailable and
+the text is not sent to a model. Center distinguishes the saved permission
+from operational capability, and its usual setup enables shared speech, web
+lookup and place lookup only. The permission remains bound to one installation
+and its current approval revision; TVs and browsers cannot hold it.
 
 **Settings → Account → Activity** lists recent turns from the runtime ledger,
 newest first and grouped by day: when and from which kind of device each was
@@ -580,8 +597,9 @@ declare. Reapproving it is what teaches Cosmos the room.
 
 `shape_fit` is then a published table over shape and audience, and it is the
 largest term in the score after an explicit destination. A list goes to the
-television, a long read to the desk screen, a route to the phone, a short answer
-to whichever personal screen the request came from.
+television, a long read to the desk screen and a route to the phone. Short
+shared-safe replies use the same shape and origin preferences. Private content
+has no eligible output under the current profiles.
 
 Availability splits in two. **Reachable** — a current signed connection or
 lease — is an eligibility blocker. **Attended** — the installation's own
@@ -589,13 +607,14 @@ foreground report — is a bounded rank penalty smaller than the origin term, so
 a Mac with its lid shut is ranked below the screen that suits the answer instead
 of vanishing from the fleet. A card, a ceremony and a command are held for a
 reachable installation and delivered when its foreground reports, for twenty
-seconds at the shared class and five minutes above it; when nobody comes the
+seconds at the shared class; when nobody comes the
 card repairs to the next logged fallback. Speech is the one channel nothing can
 hold, so an installation reporting no foreground is blocked for it with the
 distinct `unattended` reason.
 
-Nothing in the decision reads occupancy, actor identity, trust level, which
-device was used last, or where a surface runs. The complete published weight
+The rank score does not infer occupancy, actor identity, which device was used
+last, or where a surface runs. Privacy remains a separate blocker, capped at
+shared-room output for every current profile. The complete published weight
 vector is the eligible floor 1000, shape fit 40–200, origin affinity 10, hint
 400 and attention −20, with learned preference a permanently zero logged slot.
 The constants are chosen so the ordering is provable rather than tuned: a named
@@ -683,9 +702,9 @@ while an action is proposed or dispatched to a surface of a named kind,
 `shown` or `spoken` once that surface acknowledged it, `nowhere` when nothing
 could take it, `unknown` when delivery deadlines ran out. The frame names the
 kind of device only, never a surface identity, content or a reason, and its
-class is capped by the origin's own ceiling: a private card shown on the phone
-reaches a shared Mac as "shown on an android surface" at the shared class,
-and a privacy-refused request looks exactly like one with no visible screen.
+class is capped by the origin's own ceiling. Current profiles cannot dispatch
+private replies; a privacy-refused request carries no private content or
+reason and looks like a request with no eligible screen.
 That is the paper's "heard, handled elsewhere": suppression, capability misses
 and ordinary re-routing are indistinguishable on a shared surface. The shared
 client exposes `status_changes`/`turn_status`, and the C and JNI snapshots
@@ -694,19 +713,14 @@ carry `status` with operation `status`. Browsers receive no status frames.
 Screen context is the owner's own data and follows the private policy. A native
 installation may send bounded text from its own screen (`context: {kind:
 "screen", app, text}`, at most 64 and 8000 UTF-8 bytes) with a request; the
-turn starts at the `private` class, needs a personal surface declared for that
-class, and the reply is routed like any private card: only personal surfaces,
-never speech, every shared surface suppressed. The text reaches cognition only
-if the origin installation holds the owner's screen-context permission at its
-current approval revision (`approve-screen-context-v1` under Devices, route
-`/surface-api/v1/surfaces/:surfaceId/screen-context`, native only), and then
-as a delimited untrusted block after the user's request that the prompt names
-as data, never instructions; the ledger records `screen_context_offered` with
-the app digest and byte count and never the text. Without the permission the
-runtime proposes a private card explaining that screen context must be
-allowed for this device in Center, and the text goes nowhere. Sensitive
-screen text is refused before cognition, lookups derived from a private turn
-are refused by the existing lookup ceilings, and the shared client exposes
+turn starts at the `private` class and needs a physically eligible output.
+Current profiles cannot establish that output, so the runtime refuses the
+request before cognition even when the origin holds the owner's screen-context
+permission at its current approval revision (`approve-screen-context-v1` under
+Devices, route `/surface-api/v1/surfaces/:surfaceId/screen-context`). The ledger
+contains the refusal without the supplied text. Exact retries retain the same
+request identity; changed context at the same sequence is refused, and oversized
+context is rejected before admission. The shared client still exposes
 `send_text_with_context`, `cosmos_surface_send_text_with_context` and JNI
 `sendTextWithContext`.
 
@@ -722,6 +736,54 @@ runtime remembers its title and numbered titles as recent context of kind
 under the origin's own lookup permission or an informational answer. Nothing
 is played yet; media playback on the Shield remains a separate increment, and a
 private list is never remembered.
+
+#### Asking why, from wherever you are
+
+The runtime recognizes conservative English and Danish routing questions such
+as "Why did that go there?" and "Hvorfor gik det derhen?" before cognition.
+Every thin-client, browser-surface and Pin request receives a fixed shared-safe
+sentence directing the owner to Activity in Center. It reads no history, calls
+no model and logs only that the account was requested. Declaring a personal
+output in Center does not change this behavior or give the requesting device
+private-memory clearance.
+
+The signed-in Activity page offers **Why did the last reply go there?** as an
+ordinary disclosure that also works without JavaScript. The owner-only ledger
+endpoint composes it from the same bounded chain it already returns: at most
+300 events and a ten-minute window. It names the chosen kind of device,
+recorded blockers, routing preference and committed outcome. Visual and audio
+delivery requires the exact selected action's acknowledgment; a device action
+requires its committed completed status. Both match the turn generation,
+surface and channel, and repairs update that binding. Status indicators and
+acknowledged command acceptance cannot supply completion. It never
+promotes a selected destination into a delivery claim or invents a user
+instruction from a score difference. Missing history says that a decision is
+unavailable, not that no question was asked. The account is capped at 3,800
+UTF-8 bytes and is rendered as escaped text.
+
+Detailed native accounts remain pending: the paper requires a private,
+authenticated origin and an eligible private output. Current profiles report
+unknown actor and occupancy. Owner sign-in protects Activity's account access;
+it does not establish the paper's physical room-privacy requirement.
+
+The Mac's optional document handle now travels through the shared Rust client
+and C boundary with the screen context. The pending journal retains the exact
+handle, destination and request identity across a retry or process reopen.
+Malformed, non-object, oversized or explicitly null handles are rejected rather
+than silently dropped; a null C pointer with nonzero length queues nothing.
+A missing handle preserves the existing context-only wire shape. This is
+transport for the declared locator/version/position, not a content-transfer or
+exact-document-rendering service.
+
+The Grok reconstruction was reviewed as source reference only. Its separate
+box/user-machine execution scopes, stale-target checks and shared adapter
+registry are useful implementation patterns. Its model classifier and direct
+GUI primitives are not Cosmos authority. ACP remains an optional coding-agent
+client protocol; MCP supplies approved tool/data adapters, and A2A supplies
+external specialist collaboration. None supplies the missing document transfer,
+origin-scoped grants or physical outcome evidence. The next document capability
+must transport an authorized immutable snapshot and task revision, then observe
+that exact content at the destination through the existing action pipeline.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:
@@ -2413,8 +2475,9 @@ long-pressing Home opens the same panel over the current app with the screen the
 owner was looking at: the session reads the visible text nodes of the assist
 structure once, skipping password fields, de-duplicated in order and bounded to
 8,000 bytes, and shows an honest chip, **Using: Gmail screen**, with the line
-that this is the text on screen when Cosmos opened and that the reply stays on
-this phone. Removing the chip sends the request bare; a locked screen or absent
+that this is the text on screen when Cosmos opened. This is local capture UI;
+current Cosmos profiles refuse screen requests before cognition because they
+cannot establish room privacy. Removing the chip sends the request bare; a locked screen or absent
 assist data gets one calm line instead of a chip; the fallback activity says the
 role is needed and offers it. No screenshots are read and no audio is captured;
 the recognition service the role requires refuses every request. Beside the ask
@@ -2550,10 +2613,9 @@ taken away. A confirmation ceremony presents itself and never fades, because
 dismissing it would answer it. Nothing presents itself while the screen is
 locked, while Do Not Disturb or another Focus is on (read from the system's own
 Focus assertions), while an application is in full screen on that display, or
-where the menu-bar item is out of reach; and a card above `shared_room` never
-reaches a panel that is not already on screen, because the runtime releases
-private content to an unlocked foreground and the owner's own open is what
-makes one. In each of those cases the menu-bar glyph shows the waiting state —
+where the menu-bar item is out of reach. Current profiles cannot receive any
+card above `shared_room`; opening the panel and unlocking do not establish
+physical privacy. For a held shared reply, the menu-bar glyph shows the waiting state —
 as it now does for any reply that landed while the panel was closed — and the
 reply is there when the owner opens Cosmos. "Show replies automatically" in the
 menu-bar menu turns the whole behaviour off and is remembered across launches.

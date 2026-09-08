@@ -422,6 +422,66 @@ fn bound_text_target_and_context_arguments_are_checked_before_queueing() {
 }
 
 #[test]
+fn document_arguments_are_preserved_or_rejected_before_queueing() {
+    let (mut handle, mut receiver) = queued_handle();
+    let pointer = (&mut *handle) as *mut CosmosSurface;
+    let send = |document: *const u8, length| unsafe {
+        cosmos_surface_send_text_with_document(
+            pointer,
+            b"Explain this".as_ptr(),
+            12,
+            b"Preview".as_ptr(),
+            7,
+            b"Paragraph".as_ptr(),
+            9,
+            document,
+            length,
+            b"linux".as_ptr(),
+            5,
+        )
+    };
+    assert_eq!(send(ptr::null(), 1), INVALID_ARGUMENT);
+    assert!(receiver.try_recv().is_err());
+    for invalid in [
+        b"{".to_vec(),
+        b"null".to_vec(),
+        b"[]".to_vec(),
+        b"\"document\"".to_vec(),
+        b"\xff".to_vec(),
+        vec![b'x'; MAX_DOCUMENT + 1],
+    ] {
+        assert_eq!(send(invalid.as_ptr(), invalid.len()), INVALID_ARGUMENT);
+        assert!(receiver.try_recv().is_err());
+    }
+    let document =
+        br#"{"app":"Preview","locator":{"scheme":"https","url":"https://example.test/agenda"},"label":"Agenda"}"#;
+    for (bytes, length, expected) in [
+        (
+            document.as_ptr(),
+            document.len(),
+            Some(std::str::from_utf8(document).unwrap()),
+        ),
+        (ptr::null(), 0, None),
+    ] {
+        assert_eq!(send(bytes, length), OK);
+        let Command::TextWithContext {
+            text,
+            context,
+            target,
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("wrong command")
+        };
+        assert_eq!(text, "Explain this");
+        assert_eq!(context.app, "Preview");
+        assert_eq!(context.text, "Paragraph");
+        assert_eq!(context.document.as_deref(), expected);
+        assert_eq!(target, Some(Platform::Linux));
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
 fn failed_create_clears_the_output_without_retaining_callback_context() {
     let mut output = ptr::dangling_mut::<CosmosSurface>();
     let callback = callbacks(missing, ptr::null_mut());

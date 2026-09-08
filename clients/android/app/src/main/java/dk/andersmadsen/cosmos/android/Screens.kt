@@ -300,6 +300,10 @@ private fun DisplayCard.answer(): TvStage = when (val body = content) {
     is DisplayContent.Choices -> TvStage.Choices(actionId, body.title, body.items, this)
 }
 
+/** A subtitle is delivery of a card only when it contains the entire card and fits. */
+fun TvStage.Answer.captionCommitted(measured: Boolean, overflowed: Boolean): DisplayCard? =
+    card?.takeIf { measured && !overflowed && caption == full }
+
 /** The reply a stage carries, for dismissal and for keeping the typed request until it is answered. */
 fun TvStage.replyId(): UUID? = when (this) { is TvStage.Answer -> id; is TvStage.Choices -> id; else -> null }
 

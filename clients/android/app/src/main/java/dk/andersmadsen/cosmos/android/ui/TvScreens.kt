@@ -99,6 +99,7 @@ import androidx.tv.material3.Text
 import androidx.tv.material3.darkColorScheme
 import dk.andersmadsen.cosmos.android.Choice
 import dk.andersmadsen.cosmos.android.DisplayCard
+import dk.andersmadsen.cosmos.android.captionCommitted
 import dk.andersmadsen.cosmos.android.Phase
 import dk.andersmadsen.cosmos.android.R
 import dk.andersmadsen.cosmos.android.Screen
@@ -237,7 +238,7 @@ private fun TvSession(state: SurfaceState, stage: TvStage, actions: SurfaceActio
     // Back closes the card. It is not Cancel task, which is the corner action.
     BackHandler(enabled = task != null && !reading, onBack = actions.closeTask)
     if (reading && stage is TvStage.Answer) {
-        TvAnswerPages(stage.full)
+        TvAnswerPages(stage, actions.committed)
         return
     }
     CosmosTvStage(
@@ -305,9 +306,12 @@ fun CosmosTvOverlay(
         // The subtitle, and nothing under it: reading on needs a key this window
         // does not take, and the whole answer stays on Cosmos's own screen.
         if (stage is TvStage.Answer) {
+            var measured by remember(stage.id) { mutableStateOf(false) }
+            var overflowed by remember(stage.id) { mutableStateOf(true) }
             TvSubtitle(stage.caption, (fullHeight.value * .04f).sp,
-                Modifier.align(Alignment.BottomCenter).padding(horizontal = safeX, vertical = safeY))
-            val card = stage.card
+                Modifier.align(Alignment.BottomCenter).padding(horizontal = safeX, vertical = safeY),
+                onLayout = { overflow -> measured = true; overflowed = overflow })
+            val card = stage.captionCommitted(measured, overflowed)
             if (card != null) LaunchedEffect(card.actionId) { onCommitted(card) }
         }
         // The one frame that genuinely needs the remote, so the window takes focus for
@@ -324,10 +328,11 @@ fun CosmosTvOverlay(
 
 /** The reply as it sits over a picture: mint, bold, centred, two lines at most. */
 @Composable
-private fun TvSubtitle(caption: String, fontSize: TextUnit, modifier: Modifier) {
+private fun TvSubtitle(caption: String, fontSize: TextUnit, modifier: Modifier, onLayout: (Boolean) -> Unit) {
     BasicText(
         caption, modifier.semantics { liveRegion = LiveRegionMode.Polite },
         maxLines = 2, overflow = TextOverflow.Ellipsis, style = captionStyle(fontSize),
+        onTextLayout = { onLayout(it.hasVisualOverflow) },
     )
 }
 
@@ -610,16 +615,17 @@ private fun TvBand(modifier: Modifier, centre: @Composable BoxScope.() -> Unit) 
 /** The reply as a subtitle: two lines at most, and More for the rest in the paged view. */
 @Composable
 private fun TvCaption(answer: TvStage.Answer, fontSize: TextUnit, onMore: () -> Unit, onCommitted: (DisplayCard) -> Unit, modifier: Modifier) {
+    var measured by remember(answer.id) { mutableStateOf(false) }
     var overflowed by remember(answer.id) { mutableStateOf(false) }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         BasicText(
-            answer.caption, maxLines = 2, overflow = TextOverflow.Ellipsis, onTextLayout = { overflowed = it.hasVisualOverflow },
+            answer.caption, maxLines = 2, overflow = TextOverflow.Ellipsis, onTextLayout = { measured = true; overflowed = it.hasVisualOverflow },
             style = captionStyle(fontSize), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
         if (overflowed || answer.full != answer.caption) TvQuietAction(stringResource(R.string.tv_more), onMore, fontSize * .7f)
     }
     // Runs after the composition holding the caption is applied; More keeps the rest reachable.
-    val card = answer.card
+    val card = answer.captionCommitted(measured, overflowed)
     if (card != null) LaunchedEffect(card.actionId) { onCommitted(card) }
 }
 
@@ -656,8 +662,9 @@ private fun TvCrescent(action: TvStageAction, size: Dp, focus: FocusRequester, u
 
 /** The whole answer at full size, one page at a time: left and right page it, Back returns to the stage. */
 @Composable
-private fun TvAnswerPages(text: String) {
-    var page by rememberSaveable(text) { mutableIntStateOf(0) }
+private fun TvAnswerPages(answer: TvStage.Answer, onCommitted: (DisplayCard) -> Unit) {
+    val text = answer.full
+    var page by rememberSaveable(answer.id, text) { mutableIntStateOf(0) }
     var pages by remember { mutableIntStateOf(1) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
@@ -674,7 +681,10 @@ private fun TvAnswerPages(text: String) {
             .focusRequester(focus).focusable(),
     ) {
         Column(Modifier.fillMaxSize().padding(horizontal = maxWidth * .05f, vertical = maxHeight * .05f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            TvPagedText(text, page, onPages = { pages = it }, Modifier.weight(1f).fillMaxWidth())
+            androidx.compose.runtime.key(answer.id) {
+                TvPagedText(text, page, onPages = { pages = it }, Modifier.weight(1f).fillMaxWidth(),
+                    onComplete = { answer.card?.let(onCommitted) })
+            }
             if (pages > 1) Text(
                 stringResource(R.string.tv_page_of, page + 1, pages),
                 fontSize = 15.sp, color = CosmosPalette.secondary, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
@@ -685,7 +695,7 @@ private fun TvAnswerPages(text: String) {
 
 /** Full-size body text split into pages of whole lines; the type never shrinks to fit. */
 @Composable
-private fun TvPagedText(text: String, page: Int, onPages: (Int) -> Unit, modifier: Modifier = Modifier) {
+private fun TvPagedText(text: String, page: Int, onPages: (Int) -> Unit, modifier: Modifier = Modifier, onComplete: () -> Unit) {
     val measurer = rememberTextMeasurer()
     BoxWithConstraints(modifier) {
         val width = constraints.maxWidth
@@ -698,7 +708,16 @@ private fun TvPagedText(text: String, page: Int, onPages: (Int) -> Unit, modifie
             }
         }
         LaunchedEffect(pageTexts.size) { onPages(pageTexts.size) }
-        Text(pageTexts[page.coerceIn(0, pageTexts.lastIndex)], style = BODY)
+        val currentPage = page.coerceIn(0, pageTexts.lastIndex)
+        var seen by remember(text, width, height) { mutableStateOf(emptySet<Int>()) }
+        var measured by remember(text, width, height, currentPage) { mutableStateOf(false) }
+        Text(pageTexts[currentPage], style = BODY, onTextLayout = { measured = !it.hasVisualOverflow })
+        LaunchedEffect(text, width, height, currentPage, measured) {
+            if (measured) {
+                seen = seen + currentPage
+                if (seen.size == pageTexts.size) onComplete()
+            }
+        }
     }
 }
 

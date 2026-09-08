@@ -140,6 +140,25 @@ fn normalize_arguments(arguments: &str) -> Option<String> {
                 "operation": intent.get("operation")?.clone(),
                 "reference": intent.get("reference")?.clone(),
             }),
+            // A note the owner asked to keep arrives nested exactly as often
+            // as a lookup does, and the words to keep are the model's own
+            // either way. Only the fields the branch declares are carried.
+            "remember" => {
+                let mut branch = json!({"text": intent.get("text")?.clone()});
+                for field in ["title", "reply"] {
+                    if let Some(value) = intent.get(field) {
+                        branch[field] = value.clone();
+                    }
+                }
+                branch
+            }
+            "recall" => {
+                let mut branch = json!({});
+                if let Some(query) = intent.get("query") {
+                    branch["query"] = query.clone();
+                }
+                branch
+            }
             _ => return None,
         };
         Some((kind.to_owned(), branch))
@@ -170,9 +189,16 @@ fn normalize_arguments(arguments: &str) -> Option<String> {
         tracing::warn!("cognition combined a device action with another branch");
         return None;
     }
-    if ["analysis", "web_lookup", "place_lookup", "choice_list"]
-        .iter()
-        .any(|branch| object.contains_key(*branch))
+    if [
+        "analysis",
+        "web_lookup",
+        "place_lookup",
+        "choice_list",
+        "remember",
+        "recall",
+    ]
+    .iter()
+    .any(|branch| object.contains_key(*branch))
         && object.remove("intent").is_some()
     {
         normalized = true;

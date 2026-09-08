@@ -9,7 +9,7 @@ import styles from "./surfaces.module.css";
 import { fingerprintLines } from "./fingerprint";
 import { PermissionSwitch } from "./PermissionSwitch";
 import { LOOKUP, LookupSwitch, SpeechSwitch, useSpeechRegion } from "./SurfaceSwitches";
-import { actionCeiling, BLAST_RADIUS, DeviceActsEditor, DeviceTasksEditor } from "./DeviceActionEditors";
+import { BLAST_RADIUS, DeviceActsEditor, DeviceTasksEditor } from "./DeviceActionEditors";
 import { activeLookupProvider, deviceActionsPermission, deviceCommandsPermission, lookupPermission, lookupPolicy, PRIVATE_POLICY, privatePermission, SCREEN_CONTEXT_POLICY, screenContextPermission, speechPermission, speechPolicy, usePermission, type Outcome } from "./permissions";
 
 /** The owner's own words for a kind of device — the same names the Mac, Linux, phone and TV clients use. */
@@ -28,8 +28,8 @@ const AUDIENCE: Record<Audience, string> = {
   desk: "This is a screen you sit at.",
 };
 const AUDIENCE_UNDECLARED = "This device has not said what kind of screen it is. Approve it again and Cosmos can send each reply to the screen that suits it.";
-const SCREEN_CONTEXT = "When you ask about what is on this device’s screen, Cosmos reads the visible text once and sends it to the assistant model.";
-const SCREEN_CONTEXT_PRIVACY = "The reply stays private to this device. It is never spoken and never shown on a shared screen.";
+const SCREEN_CONTEXT = "This saves permission to use selected screen text when private requests become available.";
+const SCREEN_CONTEXT_PRIVACY = "Screen requests are currently unavailable because room privacy cannot be verified.";
 const TRUST = "Approved for shared text requests, one shared reply card and one spoken reply while its app is in front. It cannot use the microphone, read media context or private memories, or act on other devices. Approval is not proof of a connection or of delivery: a card or spoken reply counts only after the app acknowledges it, and Cosmos cannot tell who is in the room.";
 const describe = (outcome: Outcome) => outcome.result === "confirmed" ? "On." : outcome.result === "skipped" ? outcome.reason
   : outcome.failure === "unconfirmed" ? "Not confirmed. Check its switch below." : outcome.failure === "changed" ? "This device’s approval changed. Refresh devices." : "Could not be read. Check its switch below.";
@@ -78,27 +78,26 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
   const providers = { web: activeLookupProvider(web.snapshot), places: activeLookupProvider(places.snapshot) } as const;
   const privateOn = priv.snapshot !== undefined ? priv.snapshot?.policy != null : row.privateDisplay;
   const screenOn = screenContext.snapshot?.policy != null;
-  // An action permission can never raise a posture, only spend one: its class
-  // is capped by this installation's own private-display ceiling.
-  const ceiling = actionCeiling(priv.snapshot?.policy?.maximumClass ?? null);
+  // All current profiles have shared output and unknown room occupancy.
+  const ceiling = "shared_room";
   const actsOn = acts.snapshot?.policy != null;
   const tasksOn = tasks.snapshot?.policy != null;
   const states = [speech, web, places, ...(tv ? [] : [priv, screenContext])];
   const reading = states.some(state => state.snapshot === undefined && state.failure === null);
   const unreadable = states.some(state => state.failure !== null);
   const capabilities = ["Shows shared replies", ...(speaks ? ["Speaks replies"] : []), ...(providers.web ? ["Looks things up"] : []),
-    ...(providers.places ? ["Finds places"] : []), ...(privateOn && !tv ? ["Shows private replies"] : []), ...(screenOn && !tv ? ["Uses what's on the screen"] : []),
+    ...(providers.places ? ["Finds places"] : []), ...((privateOn || screenOn) && !tv ? ["Private features unavailable"] : []),
     ...(actsOn ? ["Acts on your behalf"] : []), ...(tasksOn ? ["Runs your tasks"] : [])];
 
   async function togglePrivate(next: boolean) {
     await priv.commit(() => ({ policy: next ? PRIVATE_POLICY : null }),
-      next ? "Cosmos confirmed private replies may appear here after you continue on this device." : "Cosmos confirmed private replies off for this device.");
+      next ? "Preference saved. Private replies still need verified room privacy." : "Cosmos confirmed private replies off for this device.");
   }
   async function toggleScreenContext(next: boolean) {
     await screenContext.commit(() => ({ policy: next ? SCREEN_CONTEXT_POLICY : null }),
-      next ? "Cosmos confirmed this device may use what's on its screen when you ask." : "Cosmos confirmed screen context off for this device.");
+      next ? "Permission saved. Screen requests still need verified room privacy." : "Cosmos confirmed screen context off for this device.");
   }
-  /** Spoken replies, web lookup, place lookup and, on a phone, screen context in sequence, each read fresh and confirmed by Cosmos on its own. */
+  /** Enable the currently available shared capabilities, each confirmed by Cosmos. */
   async function setupUsual() {
     const steps: Step[] = [];
     const report = (title: string, outcome: string) => { steps.push({ title, outcome }); setSetup({ running: true, steps: [...steps] }); };
@@ -120,9 +119,7 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
       report(LOOKUP[service].title, describe(outcome));
     }
     if (phone) {
-      const outcome = await screenContext.commit(saved => saved?.policy ? { skip: "Already on." } : { policy: SCREEN_CONTEXT_POLICY },
-        "Cosmos confirmed this device may use what's on its screen when you ask.", true);
-      report("Use what's on the screen", describe(outcome));
+      report("Use what's on the screen", "Unavailable until room privacy can be verified.");
     }
     setSetup({ running: false, steps });
   }
@@ -145,7 +142,7 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
       <p className={styles.line}>{row.audience ? AUDIENCE[row.audience] : AUDIENCE_UNDECLARED}</p>
       {offerSetup ? <div className={styles.setup} role="group" aria-label="Set up the usual permissions">
         {setup === null ? <>
-          <p className={styles.line}>Turn on spoken replies, web lookup{phone ? ", place lookup and what's on the screen" : " and place lookup"} in one go. Cosmos confirms each one separately.</p>
+          <p className={styles.line}>Turn on spoken replies, web lookup and place lookup in one go. Cosmos confirms each one separately.</p>
           <button type="button" className={styles.secondary} disabled={states.some(state => state.busy)} onClick={() => void setupUsual()}>Set up the usual permissions</button>
         </> : <ul className={styles.steps} aria-label="Set-up results">
           {setup.steps.map(step => <li key={step.title}><strong>{step.title}</strong> — {step.outcome}</li>)}
@@ -160,7 +157,7 @@ export function DeviceCard({ row, servicesRegion, lastRegion, onRegionUsed, offe
       {!tv ? <PermissionSwitch title="Show private replies here" checked={priv.snapshot !== undefined && privateOn} busy={priv.busy}
         reading={priv.snapshot === undefined && priv.failure === null} failure={priv.failure} message={priv.message}
         onChange={next => void togglePrivate(next)} onRetry={priv.failure === "changed" ? onRefreshDevices : () => void priv.load()}
-        description="After you unlock this device and choose Continue, private replies appear only here."
+        description="Private replies are unavailable until room privacy can be verified. This saves your preference."
         privacy="Cosmos cannot tell who is looking at the screen." /> : null}
       {!tv ? <PermissionSwitch title="Use what's on the screen" checked={screenContext.snapshot !== undefined && screenOn} busy={screenContext.busy}
         reading={screenContext.snapshot === undefined && screenContext.failure === null} failure={screenContext.failure} message={screenContext.message}

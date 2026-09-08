@@ -39,6 +39,7 @@ const MAX_CONFIG: usize = 2048;
 const MAX_TEXT: usize = 4000;
 const MAX_CONTEXT_APP: usize = cosmos_surface_client::MAX_CONTEXT_APP_BYTES;
 const MAX_CONTEXT: usize = cosmos_surface_client::MAX_CONTEXT_BYTES;
+const MAX_DOCUMENT: usize = cosmos_surface_client::MAX_DOCUMENT_BYTES;
 const MAX_JOURNAL: usize = 32768;
 const MAX_EVENT: usize = 16384;
 const COMMAND_CAPACITY: usize = 16;
@@ -288,7 +289,18 @@ fn parse_text(bytes: &[u8]) -> Result<String, i32> {
 }
 
 /// Bounded screen context from a binding; the client rechecks every bound.
+/// The document handle is carried, never inspected: the platform composed it
+/// from the owner's own declared folders and the runtime validates every
+/// field of it.
 fn parse_context(app: &[u8], context: &[u8]) -> Result<ScreenContext, i32> {
+    parse_context_with_document(app, context, &[])
+}
+
+fn parse_context_with_document(
+    app: &[u8],
+    context: &[u8],
+    document: &[u8],
+) -> Result<ScreenContext, i32> {
     if app.is_empty()
         || app.len() > MAX_CONTEXT_APP
         || context.is_empty()
@@ -301,9 +313,31 @@ fn parse_context(app: &[u8], context: &[u8]) -> Result<ScreenContext, i32> {
     if app.trim().is_empty() || text.trim().is_empty() {
         return Err(INVALID_ARGUMENT);
     }
+    let document = if document.is_empty() {
+        None
+    } else {
+        if document.len() > MAX_DOCUMENT {
+            return Err(INVALID_ARGUMENT);
+        }
+        let value: Value = serde_json::from_slice(document).map_err(|_| INVALID_ARGUMENT)?;
+        if !value.is_object()
+            || serde_json::to_vec(&value)
+                .map_err(|_| INVALID_ARGUMENT)?
+                .len()
+                > MAX_DOCUMENT
+        {
+            return Err(INVALID_ARGUMENT);
+        }
+        Some(
+            std::str::from_utf8(document)
+                .map_err(|_| INVALID_ARGUMENT)?
+                .to_owned(),
+        )
+    };
     Ok(ScreenContext {
         app: app.to_owned(),
         text: text.to_owned(),
+        document,
     })
 }
 
@@ -824,7 +858,15 @@ async fn run(
             Some(Command::Connect) => "connect",
             Some(Command::Text(_)) => "send_text",
             Some(Command::TextTo(..)) => "send_text_to",
-            Some(Command::TextWithContext { .. }) => "send_text_with_context",
+            // The operation a platform waits on names what it actually sent,
+            // so a client that named a document knows its handle travelled.
+            Some(Command::TextWithContext { context, .. }) => {
+                if context.document.is_some() {
+                    "send_text_with_document"
+                } else {
+                    "send_text_with_context"
+                }
+            }
             Some(Command::Retry) => "retry_pending",
             Some(Command::Cancel) => "cancel",
             Some(Command::SetVisible(_)) => "set_visible",
@@ -1410,6 +1452,74 @@ pub unsafe extern "C" fn cosmos_surface_send_text_to(
             return INVALID_ARGUMENT;
         };
         unsafe { enqueue(surface, Command::TextTo(text, target)) }
+    })
+}
+
+/// Send text with the owner's screen context and the document they were
+/// looking at, so a later request can carry on with it on another device.
+/// `document` is the compact JSON handle the platform composed; it may be
+/// null, and every field inside it is the runtime's to validate.
+///
+/// # Safety
+/// Every pointer must be null or point at a live buffer of its stated length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cosmos_surface_send_text_with_document(
+    surface: *mut CosmosSurface,
+    text: *const u8,
+    length: usize,
+    app: *const u8,
+    app_length: usize,
+    context: *const u8,
+    context_length: usize,
+    document: *const u8,
+    document_length: usize,
+    target: *const u8,
+    target_length: usize,
+) -> i32 {
+    boundary(|| {
+        if text.is_null()
+            || length == 0
+            || length > MAX_TEXT
+            || app.is_null()
+            || app_length == 0
+            || app_length > MAX_CONTEXT_APP
+            || context.is_null()
+            || context_length == 0
+            || context_length > MAX_CONTEXT
+            || document_length > MAX_DOCUMENT
+            || (document.is_null() && document_length != 0)
+        {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: Lengths are bounded and the caller guarantees live slices.
+        let (text, context, target) = unsafe {
+            (
+                parse_text(std::slice::from_raw_parts(text, length)),
+                parse_context_with_document(
+                    std::slice::from_raw_parts(app, app_length),
+                    std::slice::from_raw_parts(context, context_length),
+                    if document_length == 0 {
+                        &[]
+                    } else {
+                        std::slice::from_raw_parts(document, document_length)
+                    },
+                ),
+                optional_bytes(target, target_length, 16).and_then(parse_target),
+            )
+        };
+        let (Ok(text), Ok(context), Ok(target)) = (text, context, target) else {
+            return INVALID_ARGUMENT;
+        };
+        unsafe {
+            enqueue(
+                surface,
+                Command::TextWithContext {
+                    text,
+                    context,
+                    target,
+                },
+            )
+        }
     })
 }
 

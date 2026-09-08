@@ -70,7 +70,7 @@ USING_SELECTION = "Using: {app} selection"
 CAPTURING_SELECTION = "Reading the selection…"
 NO_SELECTION = "Nothing is selected. Select some text, then try again."
 UNKNOWN_APP = "Unknown app"
-SCREEN_CONTEXT_OFF = "Screen context is off. Turn it on in Center → Devices."
+SCREEN_CONTEXT_OFF = "Screen requests are unavailable. Check this device’s status in Center."
 OPEN_CENTER_DEVICES = "Open Center → Devices"
 DROP_CONTEXT = "Remove the attached selection"
 

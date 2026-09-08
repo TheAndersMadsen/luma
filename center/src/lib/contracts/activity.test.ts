@@ -129,6 +129,7 @@ it("parses device action rows and says what the device reported, never what it a
   // Bound and legal at the device is not an outcome; only its report is.
   expect(row([began, decision, changed("dispatched", "action.play", tv)]).outcome).toBe("Waiting for a device…");
   expect(row([began, decision, changed("acknowledged", "action.play", tv)]).outcome).toBe("Waiting for a device…");
+  expect(row([began, decision, changed("acknowledged", "confirm.tap", mac)]).outcome).toBe("Waiting for a device…");
   expect(row([began, decision, changed("running", "action.run", mac)]).outcome).toBe("Working on a device…");
   expect(row([began, decision, changed("awaiting_grant", "action.run", mac)]).outcome).toBe("Waiting for your confirmation…");
   expect(row([began, decision, changed("completed", "action.play", tv)]).outcome).toBe("Done on your TV");
@@ -146,6 +147,23 @@ it("parses device action rows and says what the device reported, never what it a
   // Nothing about an action names an operation, a locator or a digest.
   const text = JSON.stringify(row([began, decision, changed("completed", "action.play", tv)]));
   for (const secret of ["d".repeat(64), gone, tv, "action.play"]) expect(text).not.toContain(secret);
+});
+
+it("does not count a repaired status indicator as delivery of the reply", () => {
+  const events = [
+    event({ kind: "turn_began", turn_id: turn(21), generation: 1, origin: phone, privacy: "shared_room" }),
+    event({ kind: "decision", turn_id: turn(21), generation: 1, action_id: null, privacy: "shared_room",
+      candidates: [candidate(mac, "visual.card", "unavailable")] }),
+    event({ kind: "decision", turn_id: turn(21), generation: 1, action_id: action(21), privacy: "shared_room", expression: true,
+      candidates: [candidate(tv, "visual.card", null)] }),
+    event({ kind: "repair", previous_action: action(21), action_id: action(22), surface_id: mac, candidates: [candidate(mac, "visual.card", null)] }),
+    event({ kind: "repair", previous_action: action(22), action_id: action(23), surface_id: phone, candidates: [candidate(phone, "visual.card", null)] }),
+    event({ kind: "action_changed", action_id: action(23), turn_id: turn(21), generation: 1, status: "acknowledged", channel: "visual.card", surface_id: phone }),
+    event({ kind: "turn_finished", turn_id: turn(21), generation: 1 }),
+  ];
+  const [row] = activityRows(parseLedgerTurns({ events }), kinds);
+  expect(row.outcome).toBe("Nowhere to show it");
+  expect(row.why.expression).toBe(true);
 });
 
 it("rejects malformed routing events instead of guessing", () => {
@@ -330,14 +348,17 @@ it("says what kind of answer it was and which screen that kind belongs on", () =
   const folded = shaped("passage", [candidate(mac, "visual.card", null, 1200), ...tabs.map(id => candidate(id, "visual.card", null, 1040))]);
   expect(activityRows(parseLedgerTurns({ events: [began, folded] }), new Map([...kinds, ...tabs.map(id => [id, "browser"] as const)]))[0].why.choice[1])
     .toBe("2 browsers could have shown a card, but your Mac suits this better.");
-  // A destination the owner named outranks the fit, so where it belonged and
-  // where it went are two separate facts and neither is hidden.
+  // A logged preference is separate from both selection and delivery.
   const hinted = event({ kind: "decision", turn_id: turn(50), generation: 1, action_id: action(50), privacy: "shared_room",
     shape: "roster", hint: "macos", candidates: [candidate(mac, "visual.card", null, 1120), candidate(tv, "visual.card", null, 1200)] });
   expect(why(hinted).choice).toEqual([
-    "This was a list to choose from. It belongs on your TV, and Cosmos sent it to your Mac because you asked for that.",
+    "This was a list to choose from. Your TV suited that shape best; Cosmos selected your Mac.",
   ]);
   expect(why(hinted).hint).toBe("You asked for the Mac");
+  const unhinted = why(shaped("roster", [candidate(mac, "visual.card", null, 1120), candidate(tv, "visual.card", null, 1200, -20)]));
+  expect(unhinted.choice).toEqual(why(hinted).choice);
+  expect(unhinted.hint).toBeNull();
+  expect(unhinted.choice.join(" ")).not.toMatch(/sent|because you asked/);
   // Every channel is named in the owner's words when it could have been used.
   expect(why(shaped("play", [candidate(tv, "action.play", null, 1200), candidate(phone, "action.play", null, 1120)])).choice[1])
     .toBe("Your phone could have played it, but your TV suits this better.");

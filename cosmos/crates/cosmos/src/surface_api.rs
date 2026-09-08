@@ -269,7 +269,7 @@ async fn list(
 }
 
 /// How many ledger events one owner read may ask for.
-const LEDGER_MAX: usize = 300;
+const LEDGER_MAX: usize = crate::ambiance::account::LEDGER_LIMIT;
 
 /// The tail of the owner's own ledger, oldest first. The chain carries no
 /// request text and no reply content, so neither does this; it says where a
@@ -294,9 +294,32 @@ async fn ledger(
     if limit == 0 || limit > LEDGER_MAX {
         return Err(invalid());
     }
-    Ok(Json(
-        json!({"events": api.store.ledger_tail(&principal, limit).await?}),
-    ))
+    let events = api.store.ledger_tail(&principal, limit).await?;
+    let timeline = events
+        .iter()
+        .filter_map(|event| serde_json::from_value(event.clone()).ok())
+        .collect::<Vec<_>>();
+    let kinds = api
+        .store
+        .surfaces(&principal)
+        .await?
+        .iter()
+        .map(|surface| {
+            (
+                surface.surface_id,
+                crate::ambiance::account::kind(&surface.binding),
+            )
+        })
+        .collect();
+    let now = crate::surface_registry::now_ms();
+    let turn = crate::ambiance::account::accountable(&timeline, Uuid::nil(), now);
+    let account = crate::ambiance::account::compose(
+        turn.as_ref(),
+        &kinds,
+        crate::ambiance::account::Language::English,
+        now,
+    );
+    Ok(Json(json!({"events": events, "account": account})))
 }
 
 #[derive(Deserialize)]
@@ -2135,7 +2158,11 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({"events": []}));
+        assert_eq!(body["events"], json!([]));
+        assert_eq!(
+            body["account"],
+            "Nothing to account for\n\nNo routing decision is available in the recent history."
+        );
         // Approving a device writes to the chain; the owner reads exactly their
         // own events, oldest first, and another owner reads none of them.
         let enrollment = Uuid::new_v4();
@@ -2181,8 +2208,8 @@ mod tests {
                 json!(null)
             )
             .await
-            .1,
-            json!({"events": []})
+            .1["events"],
+            json!([])
         );
     }
 

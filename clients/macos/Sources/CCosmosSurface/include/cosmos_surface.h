@@ -24,6 +24,7 @@ enum {
     COSMOS_SURFACE_MAX_TEXT_BYTES = 4000,
     COSMOS_SURFACE_MAX_CONTEXT_APP_BYTES = 64,
     COSMOS_SURFACE_MAX_CONTEXT_BYTES = 8000,
+    COSMOS_SURFACE_MAX_DOCUMENT_BYTES = 3000,
     COSMOS_SURFACE_MAX_JOURNAL_BYTES = 32768,
     COSMOS_SURFACE_MAX_EVENT_BYTES = 16384,
     COSMOS_SURFACE_MAX_SPEECH_BYTES = 1048576,
@@ -104,6 +105,17 @@ int32_t cosmos_surface_send_text_with_context(CosmosSurface *surface,
                                              const uint8_t *app, size_t app_length,
                                              const uint8_t *context, size_t context_length,
                                              const uint8_t *target, size_t target_length);
+/* As send_text_with_context, with an optional document handle. A present
+ * document is a UTF-8 JSON object of at most MAX_DOCUMENT_BYTES; the runtime
+ * validates its app, locator, version, position and label. NULL requires
+ * document_length 0. Malformed handles are rejected before queuing and never
+ * silently removed. The handle is journaled with the exact pending request. */
+int32_t cosmos_surface_send_text_with_document(CosmosSurface *surface,
+                                              const uint8_t *text, size_t text_length,
+                                              const uint8_t *app, size_t app_length,
+                                              const uint8_t *context, size_t context_length,
+                                              const uint8_t *document, size_t document_length,
+                                              const uint8_t *target, size_t target_length);
 int32_t cosmos_surface_retry_pending(CosmosSurface *surface);
 int32_t cosmos_surface_cancel(CosmosSurface *surface);
 /* Report the platform's own foreground visibility (0 or 1). Cosmos treats a
@@ -214,7 +226,7 @@ int32_t cosmos_surface_disconnect(CosmosSurface *surface);
 
 /* Nonblocking safe JSON snapshot, UTF-8 bytes without a trailing NUL:
  * {version:1,kind:"state",operation:"prepare|connect|send_text|send_text_to|
- * send_text_with_context|retry_pending|cancel|set_visible|acknowledge|
+ * send_text_with_context|send_text_with_document|retry_pending|cancel|set_visible|acknowledge|
  * acknowledge_speech|acknowledge_task|report|progress|grant|display|speech|
  * invitation|status|task|confirmation|policy|disconnect|heartbeat",
  * outcome:"ok|error",error:null|STATIC_CODE,

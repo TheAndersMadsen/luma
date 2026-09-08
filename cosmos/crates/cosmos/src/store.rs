@@ -1597,6 +1597,9 @@ impl Store for MemoryStore {
         limit: usize,
     ) -> Result<Vec<serde_json::Value>, crate::surface_registry::RegistryError> {
         use crate::surface_registry::RegistryError;
+        #[cfg(test)]
+        self.assistant_private_accesses
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.state_path.is_some() {
             return Err(RegistryError::Unavailable);
         }

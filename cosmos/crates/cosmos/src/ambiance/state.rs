@@ -210,6 +210,17 @@ pub enum RuntimeOperation {
     RecentContext {
         fence: TurnFence,
     },
+    /// The one sentence a channel that is not a personal screen may carry
+    /// about routing. The text is the runtime's own constant, chosen here and
+    /// never supplied by the caller, so every account that cannot be given in
+    /// full is byte-identical whatever its turn was (§4.3, invariant 7).
+    ExpressAccount {
+        fence: TurnFence,
+        language: super::account::Language,
+        /// The origin cannot play speech, so the same sentence is bound to a
+        /// card the way any other reply to that origin would be.
+        screen_only: bool,
+    },
     /// Offer this turn's runtime-minted action candidates to cognition.
     ActionCandidates {
         fence: TurnFence,
@@ -295,12 +306,10 @@ pub enum RuntimeOperation {
         worker: Uuid,
         action_id: Option<Uuid>,
     },
-    /// The runtime read the owner's own notes for this turn. Reading them is
-    /// what raises the turn to the private class: a note is the owner's
-    /// content whatever the request's own words classified at.
-    OfferPrivateContext {
+    /// Current surface profiles attest neither the requesting actor nor room
+    /// privacy. Record the refusal before any private source is accessed.
+    RefusePrivateContext {
         fence: TurnFence,
-        count: u32,
     },
     /// Admit one note write for this turn. Cognition proposed only that the
     /// request be kept; the runtime bounded and classified the words itself
@@ -538,7 +547,7 @@ pub enum RuntimeResult {
     ProgressAccepted {
         duplicate: bool,
     },
-    PrivateContextOffered,
+    PrivateContextRefused,
     NoteWriteAdmitted,
     NoteWriteDenied(super::note::Denial),
     NoteWritten,
@@ -1164,10 +1173,18 @@ pub enum RuntimeData {
         surface_id: Uuid,
         approval: super::personal::Approval,
     },
+    // Retained for decoding the durable ledger; new turns never emit this.
     PrivateContextOffered {
         fence: TurnFence,
         source: String,
         count: u32,
+    },
+    PrivateContextRefused {
+        fence: TurnFence,
+    },
+    /// A routing question was admitted without reading the origin's history.
+    AccountRequested {
+        fence: TurnFence,
     },
     /// The runtime admitted one note write for this turn: how much text, and
     /// whether it carries a title. Never a word of it, and never a digest of
@@ -1566,22 +1583,6 @@ impl RuntimeState {
         now: i64,
     ) -> Candidate {
         let mut presence = self.presence(record, now);
-        // Above the shared-room ceiling only a personal surface may render or
-        // act, within the ceiling its owner declared. It holds the card while
-        // its signed connection is current; rendering waits for its
-        // foreground. Speech is never lifted by a personal declaration.
-        let personal = privacy > PrivacyClass::SharedRoom
-            && channel != Channel::AudioTts
-            && self
-                .personal_ceiling(records, record.surface_id)
-                .is_some_and(|ceiling| privacy <= ceiling);
-        // A card above the shared-room ceiling is held by a native
-        // installation's own signed connection. A page in a browser has none
-        // to hold it with, so it is not reachable for one whatever the owner
-        // declared about it.
-        if personal && !matches!(record.binding, Binding::Native { .. }) {
-            presence.reachable = false;
-        }
         // Native speech exists only as the runtime's own disclosed synthesis.
         // Without the origin owner's current provider permission there is no
         // speech to route, so the surface is unavailable for that channel.
@@ -1609,9 +1610,7 @@ impl RuntimeState {
                         .contains(&channel),
                 };
         }
-        policy::candidate(
-            record, presence, origin, channel, shape, privacy, hint, personal,
-        )
+        policy::candidate(record, presence, origin, channel, shape, privacy, hint)
     }
 
     /// Store transactions apply runtime admission and visibility together. A
@@ -3062,7 +3061,7 @@ impl RuntimeState {
                 RuntimeResult::PrivatePolicy(Some(approval))
             }
             RuntimeOperation::PersonalSurfaces { privacy } => {
-                RuntimeResult::PersonalSurfaces(self.personal_surfaces(records, privacy))
+                RuntimeResult::PersonalSurfaces(self.personal_surfaces(records, privacy, now))
             }
             RuntimeOperation::Invitation { connection } => {
                 let record = self.room_record(records, &connection, now)?;
@@ -3123,23 +3122,68 @@ impl RuntimeState {
                         .collect(),
                 )
             }
-            RuntimeOperation::OfferPrivateContext { fence, count } => {
+            // The account a shared-perceivable channel may carry. One fixed
+            // sentence per language, held at the shared class like every
+            // other runtime expression, naming no device, class, blocker or
+            // outcome: a suppressed turn, a capability miss, an unreachable
+            // screen and an empty window are the same bytes from here.
+            RuntimeOperation::ExpressAccount {
+                fence,
+                language,
+                screen_only,
+            } => {
                 let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
-                // Private memory is offered only to a turn already above the
-                // shared-room ceiling with a personal surface to render on.
-                if turn.finished
-                    || turn.fence.origin_surface != fence.origin_surface
-                    || turn.privacy <= PrivacyClass::SharedRoom
-                    || self.personal_surfaces(records, turn.privacy) == 0
-                {
+                if turn.finished || turn.fence.origin_surface != fence.origin_surface {
                     return Err(RuntimeError::Stale);
                 }
-                events.push(RuntimeData::PrivateContextOffered {
-                    fence,
-                    source: "notes".to_owned(),
-                    count,
+                if self.actions.values().any(|a| a.expression) {
+                    return Err(RuntimeError::Busy);
+                }
+                events.push(RuntimeData::AccountRequested {
+                    fence: fence.clone(),
                 });
-                RuntimeResult::PrivateContextOffered
+                let sentence = || SemanticIntent::InformationalSpeech {
+                    text: language.elsewhere().to_owned(),
+                };
+                let shared = |intent| OutputProposal {
+                    expression: true,
+                    intent,
+                    privacy: PrivacyClass::SharedRoom,
+                    confirmation: None,
+                    hint: None,
+                };
+                let spoken = policy::bind_channel(sentence(), screen_only);
+                let card = matches!(spoken, SemanticIntent::VisualTextCard { .. });
+                let (mut result, appended) =
+                    self.propose_output(records, &fence, shared(spoken), now)?;
+                events.extend(appended);
+                // A question asked out loud is answered out loud where the
+                // fleet can, but the answer to "why?" is not optional: when
+                // nothing may speak, the same bytes are shown instead. Which
+                // channel carries it depends on the fleet, never on the turn
+                // being accounted for.
+                if !card && matches!(result, RuntimeResult::Blocked) {
+                    let (fallback, appended) = self.propose_output(
+                        records,
+                        &fence,
+                        shared(policy::bind_channel(sentence(), true)),
+                        now,
+                    )?;
+                    events.extend(appended);
+                    result = fallback;
+                }
+                result
+            }
+            RuntimeOperation::RefusePrivateContext { fence } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished || turn.fence.origin_surface != fence.origin_surface {
+                    return Err(RuntimeError::Stale);
+                }
+                // Enrollment and permission to display private content are
+                // neither actor authentication nor origin-scoped source
+                // access. No current profile supplies the missing evidence.
+                events.push(RuntimeData::PrivateContextRefused { fence });
+                RuntimeResult::PrivateContextRefused
             }
             // One note write per turn, admitted before anything is stored. The
             // runtime has already bounded and classified the words; this
@@ -5427,6 +5471,45 @@ mod tests {
                 .reconcile(&records, action.display_expires_at_ms + 1)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn ambiance_private_payloads_restored_from_earlier_policy_are_retired_before_dispatch() {
+        for status in [
+            ActionStatus::Proposed,
+            ActionStatus::Dispatched,
+            ActionStatus::Acknowledged,
+        ] {
+            let id = Uuid::new_v4();
+            let records = BTreeMap::from([(id, browser(id))]);
+            let mut state = RuntimeState::default();
+            let fence = begin(&mut state, &records, id);
+            let action = propose(&mut state, &records, &fence);
+            // Represent a snapshot admitted by the previous output policy.
+            // No new private proposal can reach this state.
+            state.turn.as_mut().unwrap().privacy = PrivacyClass::Private;
+            let stored = state.actions.get_mut(&action.id).unwrap();
+            stored.privacy = PrivacyClass::Private;
+            stored.status = status;
+            let mut restored: RuntimeState =
+                serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+            let events = restored.reconcile(&records, 103);
+            assert!(
+                restored.actions[&action.id].intent.text().is_empty(),
+                "{status:?}"
+            );
+            assert!(events.iter().any(|event| matches!(event,
+                RuntimeData::PayloadCleared { action_id, .. } if *action_id == action.id
+            )));
+            assert!(
+                poll(&mut restored, &records, id, 104)
+                    .iter()
+                    .all(|pending| {
+                        pending.status != ActionStatus::Dispatched
+                            && pending.intent.text().is_empty()
+                    })
+            );
+        }
     }
 
     /// The origin's status is derived from committed state only: working

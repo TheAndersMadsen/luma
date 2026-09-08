@@ -531,10 +531,10 @@ fn holds_until_attended(channel: Channel) -> bool {
     channel != Channel::AudioTts
 }
 
-/// `personal` is the runtime's finding that this record is a personal
-/// surface whose owner declared it may show the requested class; it is the
-/// only way past the shared-room ceiling, and it never applies to speech.
-#[allow(clippy::too_many_arguments)]
+/// Every supported profile declares shared output and unknown occupancy.
+/// Owner display permissions cannot override that physical privacy ceiling.
+/// A private channel requires a new profile with current runtime evidence;
+/// neither a setting nor a model hint establishes one.
 pub fn candidate(
     record: &Record,
     presence: Presence,
@@ -543,7 +543,6 @@ pub fn candidate(
     shape: Shape,
     privacy: PrivacyClass,
     hint: Option<RoutingTarget>,
-    personal: bool,
 ) -> Candidate {
     let capability = match (&record.binding, channel) {
         (Binding::Browser, Channel::VisualCard) => {
@@ -561,8 +560,7 @@ pub fn candidate(
         }
         _ => false,
     };
-    let personal = personal && channel != Channel::AudioTts;
-    let blocker = if privacy > PrivacyClass::SharedRoom && !personal {
+    let blocker = if privacy > PrivacyClass::SharedRoom {
         Some(Blocker::Privacy)
     } else if !capability {
         Some(Blocker::Capability)
@@ -748,16 +746,14 @@ mod tests {
         }
     }
 
-    /// `personal` names the records whose owner declared them for the class,
-    /// and `presence` says which are reachable and which are in front of
-    /// someone. Nothing else about a record is available to the decision.
+    /// `presence` says which records are reachable and which are in front of
+    /// someone. Owner display settings are not physical privacy evidence.
     fn decide(
         fleet: &Fleet,
         intent: &SemanticIntent,
         origin: &Record,
         privacy: PrivacyClass,
         hint: Option<RoutingTarget>,
-        personal: &[Uuid],
         presence: &dyn Fn(&Record) -> Presence,
     ) -> Decision {
         let mut candidates: Vec<_> = fleet
@@ -772,7 +768,6 @@ mod tests {
                     shape(intent),
                     privacy,
                     hint,
-                    personal.contains(&record.surface_id),
                 )
             })
             .collect();
@@ -849,7 +844,6 @@ mod tests {
             &fleet.pin,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         assert_eq!(decision.lead(), fleet.tv.surface_id);
@@ -899,7 +893,6 @@ mod tests {
             &fleet.pin,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         assert_eq!(decision.lead(), fleet.tv.surface_id);
@@ -913,9 +906,8 @@ mod tests {
     // --- Situation 3 ------------------------------------------------------
 
     #[test]
-    fn an_answer_about_the_document_on_the_mac_stays_on_the_mac() {
+    fn private_document_output_is_blocked_without_physical_privacy() {
         let fleet = Fleet::new();
-        let personal = [fleet.mac.surface_id, fleet.phone.surface_id];
         for answer in [short("It is the third clause."), long()] {
             let decision = decide(
                 &fleet,
@@ -923,17 +915,13 @@ mod tests {
                 &fleet.mac,
                 PrivacyClass::Private,
                 None,
-                &personal,
                 &all_present,
             );
-            assert_eq!(decision.lead(), fleet.mac.surface_id);
-            // The television can never hold a private reply, whatever it is.
-            assert_eq!(decision.of(&fleet.tv).blocker, Some(Blocker::Privacy));
+            assert!(decision.candidates.iter().all(|candidate| {
+                candidate.blocker == Some(Blocker::Privacy) && candidate.score() == 0
+            }));
         }
-        // Long or short, the answer never leaves the desk it was asked at:
-        // the long one because a passage is a desk screen's shape, the short
-        // one because a glance suits either personal screen and the Mac is
-        // the one the owner is sitting at.
+        // Shape fitting never outranks an unknown-room privacy blocker.
         assert_eq!(shape(&long()), Shape::Passage);
         assert_eq!(shape(&short("ok")), Shape::Note);
     }
@@ -949,7 +937,6 @@ mod tests {
             &fleet.mac,
             PrivacyClass::SharedRoom,
             Some(RoutingTarget::Linux),
-            &[],
             &all_present,
         );
         assert_eq!(hinted.lead(), fleet.pc.surface_id);
@@ -962,7 +949,6 @@ mod tests {
             &fleet.mac,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         assert_eq!(ablated.lead(), fleet.mac.surface_id);
@@ -982,7 +968,6 @@ mod tests {
             &fleet.phone,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         assert_eq!(decision.lead(), fleet.phone.surface_id);
@@ -995,14 +980,36 @@ mod tests {
     // --- Situation 6 ------------------------------------------------------
 
     #[test]
-    fn a_private_reply_reaches_only_a_personal_screen_never_the_television_or_the_pin() {
+    fn every_current_profile_blocks_above_shared_room_on_every_channel() {
         let fleet = Fleet::new();
-        let personal = [fleet.mac.surface_id, fleet.phone.surface_id];
         for privacy in [
             PrivacyClass::NearUser,
             PrivacyClass::Private,
             PrivacyClass::Sensitive,
         ] {
+            for record in fleet.records() {
+                for channel in [
+                    Channel::VisualCard,
+                    Channel::AudioTts,
+                    Channel::ActionOpen,
+                    Channel::ActionRoute,
+                    Channel::ActionPlay,
+                    Channel::ActionRun,
+                    Channel::ConfirmTap,
+                ] {
+                    let blocked = candidate(
+                        record,
+                        all_present(record),
+                        fleet.mac.surface_id,
+                        channel,
+                        Shape::Note,
+                        privacy,
+                        Some(RoutingTarget::Android),
+                    );
+                    assert_eq!(blocked.blocker, Some(Blocker::Privacy));
+                    assert_eq!((blocked.score(), blocked.hint), (0, 0));
+                }
+            }
             // Even named outright, the television is refused.
             let decision = decide(
                 &fleet,
@@ -1010,16 +1017,16 @@ mod tests {
                 &fleet.mac,
                 privacy,
                 Some(RoutingTarget::AndroidTv),
-                &personal,
                 &all_present,
             );
             assert_eq!(decision.of(&fleet.tv).blocker, Some(Blocker::Privacy));
             assert_eq!(decision.of(&fleet.tv).hint, 0);
             assert_eq!(decision.of(&fleet.tv).score(), 0);
             assert_eq!(decision.of(&fleet.display).blocker, Some(Blocker::Privacy));
-            assert_eq!(decision.lead(), fleet.mac.surface_id);
-            // The Pin can only speak, and a personal declaration never lifts
-            // speech, so nothing above the ceiling is ever said out loud.
+            assert!(decision.candidates.iter().all(|candidate| {
+                candidate.blocker == Some(Blocker::Privacy) && candidate.score() == 0
+            }));
+            // The same physical privacy blocker applies to speech.
             let spoken = decide(
                 &fleet,
                 &SemanticIntent::InformationalSpeech {
@@ -1028,7 +1035,6 @@ mod tests {
                 &fleet.pin,
                 privacy,
                 None,
-                &personal,
                 &all_present,
             );
             assert!(spoken.candidates.iter().all(|c| c.blocker.is_some()));
@@ -1059,7 +1065,6 @@ mod tests {
             &fleet.phone,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         assert_eq!(decision.lead(), fleet.phone.surface_id);
@@ -1077,7 +1082,6 @@ mod tests {
             &fleet.phone,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         assert_eq!(shown.lead(), fleet.phone.surface_id);
@@ -1134,7 +1138,6 @@ mod tests {
             &fleet.phone,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &closed,
         );
         assert_eq!(decision.lead(), fleet.mac.surface_id);
@@ -1149,7 +1152,6 @@ mod tests {
             &fleet.mac,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &closed,
         );
         assert_eq!(glance.lead(), fleet.phone.surface_id);
@@ -1161,7 +1163,6 @@ mod tests {
             &fleet.phone,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &|record| {
                 if record.surface_id == fleet.mac.surface_id {
                     absent()
@@ -1186,7 +1187,6 @@ mod tests {
             &fleet.pin,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &|record| {
                 if matches!(record.binding, Binding::Pin { .. }) {
                     present(record.incarnation)
@@ -1223,7 +1223,6 @@ mod tests {
                 shape,
                 PrivacyClass::SharedRoom,
                 None,
-                false,
             )
             .score()
         };
@@ -1256,7 +1255,6 @@ mod tests {
                 &fleet.pin,
                 PrivacyClass::SharedRoom,
                 None,
-                &[],
                 &all_present,
             )
             .candidates
@@ -1282,7 +1280,6 @@ mod tests {
             &twin.pin,
             PrivacyClass::SharedRoom,
             None,
-            &[],
             &all_present,
         );
         let desks = [&twin.mac, &twin.pc];
@@ -1319,7 +1316,6 @@ mod tests {
                     Shape::Note,
                     PrivacyClass::SharedRoom,
                     hint,
-                    false,
                 ),
                 candidate(
                     &phone,
@@ -1329,7 +1325,6 @@ mod tests {
                     Shape::Note,
                     PrivacyClass::SharedRoom,
                     hint,
-                    false,
                 ),
                 candidate(
                     &display,
@@ -1339,7 +1334,6 @@ mod tests {
                     Shape::Note,
                     PrivacyClass::SharedRoom,
                     hint,
-                    false,
                 ),
             ];
             rank(&mut candidates);
@@ -1379,14 +1373,13 @@ mod tests {
             Shape::Note,
             PrivacyClass::Private,
             Some(RoutingTarget::AndroidTv),
-            false,
         );
         assert_eq!(
             (private.blocker, private.score()),
             (Some(Blocker::Privacy), 0)
         );
-        // The runtime's personal finding lifts the ceiling for a personal
-        // surface's card only: never for a surface without it, never for speech.
+        // A phone's card is still shared-perceivable under its approved
+        // profile. Its audience and a routing hint cannot raise that ceiling.
         let own = candidate(
             &phone,
             present(Uuid::new_v4()),
@@ -1395,12 +1388,8 @@ mod tests {
             Shape::Note,
             PrivacyClass::Private,
             None,
-            true,
         );
-        assert_eq!(
-            (own.blocker, own.score()),
-            (None, ELIGIBLE + Shape::Note.fit(Some(Audience::Handheld)))
-        );
+        assert_eq!((own.blocker, own.score()), (Some(Blocker::Privacy), 0));
         let elsewhere = candidate(
             &tv,
             present(Uuid::new_v4()),
@@ -1409,7 +1398,6 @@ mod tests {
             Shape::Note,
             PrivacyClass::Private,
             Some(RoutingTarget::AndroidTv),
-            false,
         );
         assert_eq!(elsewhere.blocker, Some(Blocker::Privacy));
         let spoken = candidate(
@@ -1420,7 +1408,6 @@ mod tests {
             Shape::Utterance,
             PrivacyClass::Private,
             None,
-            true,
         );
         assert_eq!(spoken.blocker, Some(Blocker::Privacy));
     }
@@ -1437,7 +1424,6 @@ mod tests {
             Shape::Note,
             PrivacyClass::Public,
             Some(RoutingTarget::Macos),
-            false,
         );
         assert_eq!(card.blocker, None);
         let candidate = candidate(
@@ -1448,7 +1434,6 @@ mod tests {
             Shape::Utterance,
             PrivacyClass::Public,
             Some(RoutingTarget::Macos),
-            false,
         );
         assert_eq!(candidate.blocker, Some(Blocker::Capability));
         assert_eq!(candidate.hint, 0);
@@ -1460,7 +1445,6 @@ mod tests {
             Shape::Utterance,
             PrivacyClass::SharedRoom,
             None,
-            false,
         );
         assert_eq!(current.blocker, None);
         assert!(!RoutingTarget::Linux.matches(&legacy));

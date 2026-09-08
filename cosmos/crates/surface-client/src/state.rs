@@ -98,6 +98,23 @@ pub(crate) struct ContextWire {
     pub(crate) kind: ContextKind,
     pub(crate) app: String,
     pub(crate) text: String,
+    /// The document the origin was looking at, so a later request can carry
+    /// on with it somewhere else. The client composes it from the owner's own
+    /// declared folders; this crate carries it and never reads inside it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "document"
+    )]
+    pub(crate) document: Option<serde_json::Value>,
+}
+
+fn document<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    // Absence is optional; an explicitly stored null must not silently strip
+    // a document from the pending request on restore.
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 impl ContextWire {
@@ -111,6 +128,37 @@ impl ContextWire {
                 .text
                 .chars()
                 .any(|c| c.is_control() && !c.is_whitespace())
+            && self.document.as_ref().is_none_or(|document| {
+                document.is_object()
+                    && serde_json::to_vec(document)
+                        .is_ok_and(|bytes| bytes.len() <= crate::MAX_DOCUMENT_BYTES)
+            })
+    }
+}
+
+impl TryFrom<crate::ScreenContext> for ContextWire {
+    type Error = Error;
+
+    fn try_from(context: crate::ScreenContext) -> Result<Self, Self::Error> {
+        let document = context
+            .document
+            .map(|document| {
+                if document.len() > crate::MAX_DOCUMENT_BYTES {
+                    return Err(Error::InvalidInput);
+                }
+                serde_json::from_str(&document).map_err(|_| Error::InvalidInput)
+            })
+            .transpose()?;
+        let context = Self {
+            kind: ContextKind::Screen,
+            app: context.app,
+            text: context.text,
+            document,
+        };
+        if !context.valid() {
+            return Err(Error::InvalidInput);
+        }
+        Ok(context)
     }
 }
 

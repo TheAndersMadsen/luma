@@ -8,7 +8,7 @@ import { parsePinSurfaces } from "@/lib/contracts/pinSurfaces";
 import { activityRows, LEDGER_LIMIT, parseLedgerTurns, type ActivityRow } from "@/lib/contracts/activity";
 
 export type Activity =
-  | { state: "ready"; rows: ActivityRow[]; /** Some device list could not be read, so some devices are shown as removed. */ unnamed: boolean }
+  | { state: "ready"; rows: ActivityRow[]; /** Runtime-composed explanation from this authenticated owner's ledger. */ account?: string; /** Some device list could not be read, so some devices are shown as removed. */ unnamed: boolean }
   | { state: "unavailable" }
   /** The wearer's session expired while reading; the page sends them back to sign in. */
   | { state: "expired" };
@@ -44,10 +44,12 @@ export async function readActivity(): Promise<Activity> {
     if (!AUTH_ENABLED || !await currentSession() || !COSMOS_WEBAPI) return { state: "unavailable" };
     const headers = await surfaceOwnerHeaders();
     const [ledger, { kinds, unnamed }] = await Promise.all([
-      read(`/surface-api/v1/ledger?limit=${LEDGER_LIMIT}`, headers, 1048576).then(parseLedgerTurns),
+      read(`/surface-api/v1/ledger?limit=${LEDGER_LIMIT}`, headers, 1048576),
       surfaceKinds(headers),
     ]);
-    return { state: "ready", rows: activityRows(ledger, kinds), unnamed };
+    const account = record(ledger).account;
+    if (account !== undefined && (typeof account !== "string" || !account.trim() || new TextEncoder().encode(account).length > 3800)) throw new Error("invalid_account");
+    return { state: "ready", rows: activityRows(parseLedgerTurns(ledger), kinds), ...(account === undefined ? {} : { account }), unnamed };
   } catch (error) {
     if (error instanceof SessionExpiredError) return { state: "expired" };
     // An unreachable Cosmos and a malformed ledger read the same: unknown, never invented.

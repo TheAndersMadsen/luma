@@ -35,8 +35,6 @@ const CLASS_LABEL: Record<ActionClass, string> = {
   private: "Things that are private to you",
 };
 const RANK: Record<ActionClass, number> = { public: 0, shared_room: 1, near_user: 2, private: 3 };
-/** Without a private-display permission for this installation, the ceiling is the shared-room one every device starts from. */
-export const actionCeiling = (privateMaximum: ActionClass | null): ActionClass => privateMaximum ?? "shared_room";
 
 const FAILURE: Record<PermissionFailure, string> = {
   unavailable: "This permission could not be read.",
@@ -81,7 +79,7 @@ function ClassField({ id, value, ceiling, personal, disabled, onChange }: {
     </label>
     {ceiling !== "shared_room" ? null
       : personal
-        ? <span className={styles.switchPrivacy}>This device may only act on things that are safe to show in a room. Turn on “Show private replies here” first to allow more.</span>
+        ? <span className={styles.switchPrivacy}>This device may only act on things that are safe to show in a room. A private-display preference cannot verify room privacy.</span>
         : <span className={styles.switchPrivacy}>A television is a screen other people can see, so nothing more private than this ever reaches it.</span>}
   </div>;
 }

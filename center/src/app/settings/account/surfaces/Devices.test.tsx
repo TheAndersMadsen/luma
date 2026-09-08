@@ -184,7 +184,7 @@ it("shows each device as a plain card: status words from the runtime, capabiliti
   render(<Devices />); await ready();
   const phoneCard = card("Phone");
   expect(phoneCard.getByText("Connected")).toBeVisible();
-  await phoneCard.findByText("Shows shared replies · Speaks replies · Looks things up · Shows private replies");
+  await phoneCard.findByText("Shows shared replies · Speaks replies · Looks things up · Private features unavailable");
   expect(card(secondCard).getByText("Connected · in the background")).toBeVisible();
   expect(card(firstCard).getByText("Offline")).toBeVisible();
   await card(firstCard).findByText("Shows shared replies");

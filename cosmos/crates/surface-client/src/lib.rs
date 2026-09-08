@@ -24,7 +24,7 @@ pub use display::{
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 pub use speech::Speech;
-use state::{ContextKind, ContextWire, Journal, PendingOpen, RpcMessage};
+use state::{ContextWire, Journal, PendingOpen, RpcMessage};
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -36,6 +36,9 @@ pub const MAX_TEXT_BYTES: usize = 4000;
 /// Screen context bounds, byte-for-byte the runtime's.
 pub const MAX_CONTEXT_APP_BYTES: usize = 64;
 pub const MAX_CONTEXT_BYTES: usize = 8000;
+/// The largest document handle a client may name. The runtime bounds every
+/// field inside it; this only keeps a malformed one out of the envelope.
+pub const MAX_DOCUMENT_BYTES: usize = 3000;
 const MAX_SEQUENCE: u64 = 9_007_199_254_740_991;
 const RECEIPT_MS: i64 = 300_000;
 const LEASE_MS: i64 = 45_000;
@@ -79,6 +82,10 @@ impl Platform {
 pub struct ScreenContext {
     pub app: String,
     pub text: String,
+    /// The document the person was looking at, as the platform client composed
+    /// it: compact JSON the runtime validates. This crate never looks inside
+    /// it, so a client that names nothing simply leaves it empty.
+    pub document: Option<String>,
 }
 
 #[derive(Clone)]
@@ -882,14 +889,7 @@ impl Client {
         if text.trim().is_empty() || text.len() > MAX_TEXT_BYTES {
             return Err(Error::InvalidInput);
         }
-        let context = context.map(|context| ContextWire {
-            kind: ContextKind::Screen,
-            app: context.app,
-            text: context.text,
-        });
-        if context.as_ref().is_some_and(|context| !context.valid()) {
-            return Err(Error::InvalidInput);
-        }
+        let context = context.map(ContextWire::try_from).transpose()?;
         let stamp = self.stamp(Uuid::new_v4())?;
         match self
             .submit(RpcMessage::Input {

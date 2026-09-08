@@ -209,10 +209,9 @@ pub fn legacy_native_speech_manifest() -> serde_json::Value {
 /// legal manifests stays closed and enumerated, and the owner reads the exact
 /// capability list in Center before approving.
 ///
-/// `maxClass: "shared_room"` on every channel is the undeclared default. The
-/// asserted privacy posture that lifts it is the owner's own
-/// `approve-private-display-v1` for the installation, bound to the record's
-/// revision and dropped on reapproval; it never applies to `audio.tts`.
+/// `maxClass: "shared_room"` and `shared: true` are physical output ceilings.
+/// An owner's private-display preference cannot raise them or establish room
+/// occupancy; private outputs require separately verified current evidence.
 /// `effect_unverified` and `no_effect_isolation` are honesty fields: a client
 /// cannot prove an effect it did not observe, and neither desktop client can
 /// sandbox what it launches.

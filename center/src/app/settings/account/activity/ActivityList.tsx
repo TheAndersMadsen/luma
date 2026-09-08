@@ -33,6 +33,10 @@ export function ActivityList({ activity }: { activity: Activity }) {
   return <section className={settings.section} aria-label="Recent activity">
     <p className={styles.lead}>Every time you ask Cosmos, this shows where you asked and where the reply went.
       Cosmos keeps no record of what you asked or what it answered, so none appears here.</p>
+    {activity.state === "ready" && activity.account ? <details className={styles.why}>
+      <summary>Why did the last reply go there?</summary>
+      <div className={styles.reason}>{activity.account.split("\n\n").map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
+    </details> : null}
     {activity.state !== "ready" ? <div className={styles.empty} role="status">
       <p className={styles.emptyTitle}>Recent activity could not be read</p>
       <p>Cosmos did not answer just now. Nothing has been lost.</p>
