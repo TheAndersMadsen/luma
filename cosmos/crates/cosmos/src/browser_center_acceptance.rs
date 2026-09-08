@@ -1351,7 +1351,10 @@ async fn browser_center_application_acceptance() {
                     assert_eq!(receipt.privacy, PrivacyClass::SharedRoom);
                     assert!(receipt.received_at_ms >= lookup.started_at_ms);
                     assert!(receipt.received_at_ms < lookup.started_at_ms + crate::ambiance::lookup::LOOKUP_MS);
-                    assert_eq!(receipt.visual.as_ref(), Some(content));
+                    assert_eq!(
+                        receipt.visual.as_ref().map(|reference| reference.for_audience(action.surface_id)),
+                        Some(content.clone())
+                    );
                     let payload = runtime.visual_card(&principal, action).expect("acknowledged Places payload remains transiently available");
                     assert_eq!(payload.value(), expected_card.value());
                     assert_eq!(payload.digest(), expected_digest);

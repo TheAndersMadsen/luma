@@ -966,6 +966,22 @@
       "limitation": "Covers the transient place-card store only. Command output and continuation explanations are not stored anywhere yet, and the check is in-process."
     },
     {
+      "id": "content-reference-cleanup-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/places_service_tests.rs",
+      "anchor": "async fn ambiance_places_conversation_cleanup_preserves_recipient_bound_content_until_revocation",
+      "scope": "A real loopback Places HTTP response stays available through runtime cleanup before and after dispatch; revoking its origin permission retires the same payload without another provider request.",
+      "limitation": "MemoryStore and a local provider fixture; this does not prove production, SFU transport or native rendering. The source document transfer path remains incomplete."
+    },
+    {
+      "id": "content-reference-repair-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/places_service_tests.rs",
+      "anchor": "async fn ambiance_places_conversation_repair_rebinds_content_to_the_logged_fallback",
+      "scope": "A Pin-origin Places request moves from a hidden browser to its logged fallback: a new action binds the same content digest and expiry to the new recipient, survives cleanup and acknowledgment, rejects delivery through the old action, and disappears after source permission revocation. Provider content stays out of durable state and the provider is called once.",
+      "limitation": "Synthetic enrolled Pin origin, browser presence and render acknowledgment with MemoryStore and a local HTTP provider; no physical Pin, browser DOM or connected-device acceptance is established."
+    },
+    {
       "id": "device-action-continuation-definition",
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/ambiance/continuation.rs",
@@ -1735,7 +1751,9 @@
       "acceptance": "Suppressed, revoked or stale recipients cannot fetch content via shared transport, cache, observer or reference; possession alone is insufficient.",
       "status": "partial",
       "evidence": [
-        "content-reference-audience-test-definition"
+        "content-reference-audience-test-definition",
+        "content-reference-cleanup-test-definition",
+        "content-reference-repair-test-definition"
       ]
     },
     {

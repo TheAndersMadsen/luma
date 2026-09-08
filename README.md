@@ -275,7 +275,13 @@ The durable action contains only an expiring content reference and digest;
 results never enter model messages, stored conversation text or browser storage.
 Cancellation, revocation and expiry retire the display. A periodic cleanup
 removes expired entries; database waits are bounded so they cannot indefinitely
-delay cleanup. Process loss makes a
+delay cleanup. Cleanup matches the content identity independently of its
+recipient binding. When a card moves to a logged fallback, Cosmos binds that
+same content to the new screen and preserves its original expiry; the old
+action loses delivery authority. The lookup, cleanup, repair, acknowledgment
+and revocation path has a regression with a local HTTP provider and the runtime
+store. This does not establish physical-device rendering.
+Process loss makes a
 pending result unavailable and never repeats its provider request. Center
 acknowledges the complete address card and its attribution only after DOM
 commit; unsupported attribution rejects the card without hiding required credit.

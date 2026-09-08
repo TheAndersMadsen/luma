@@ -23,9 +23,9 @@ pub struct Reference {
     pub id: Uuid,
     pub digest: String,
     pub expires_at_ms: i64,
-    /// The surface the decision named. A reference is authority to fetch
-    /// content for exactly that audience: membership in the store is
-    /// availability, and this is the check made at dereference.
+    /// The surface the decision named. Dereferencing requires this exact
+    /// audience as well as current runtime delivery authority; possession
+    /// of the reference or membership in the cache is insufficient.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<Uuid>,
 }
@@ -41,7 +41,7 @@ impl Reference {
 
     /// Whether this is the same stored content, whatever audience it was
     /// later bound to.
-    fn same_content(&self, other: &Self) -> bool {
+    pub(super) fn same_content(&self, other: &Self) -> bool {
         self.id == other.id
             && self.digest == other.digest
             && self.expires_at_ms == other.expires_at_ms
@@ -289,6 +289,7 @@ impl Cache {
             || entry.fence.turn_id != action.turn_id
             || entry.fence.generation != action.generation
             || entry.fence.worker != action.worker
+            || entry.fence.origin_surface != action.origin_surface
             || entry.card.digest() != action.content_digest
         {
             return None;
@@ -435,7 +436,7 @@ mod tests {
             deadline_ms: 3100,
             display_expires_at_ms: reference.expires_at_ms,
             confirmation_root: None,
-            origin_surface: Uuid::nil(),
+            origin_surface: fence.origin_surface,
             expression: false,
             attempts: 1,
             fallbacks: Vec::new(),
@@ -621,6 +622,9 @@ mod tests {
         assert!(cache.get("owner", &wrong, 101).is_none());
         wrong = action.clone();
         wrong.worker = Uuid::new_v4();
+        assert!(cache.get("owner", &wrong, 101).is_none());
+        wrong = action.clone();
+        wrong.origin_surface = Uuid::new_v4();
         assert!(cache.get("owner", &wrong, 101).is_none());
         wrong = action.clone();
         wrong.generation += 1;

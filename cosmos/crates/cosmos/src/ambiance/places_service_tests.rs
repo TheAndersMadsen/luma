@@ -809,6 +809,188 @@ async fn ambiance_places_conversation_zero_results_preserves_attribution_in_stru
 }
 
 #[tokio::test]
+async fn ambiance_places_conversation_cleanup_preserves_recipient_bound_content_until_revocation() {
+    let f = places_fixture(200, source_response(), false).await;
+    f.allow_places().await;
+    let RuntimeResult::Proposed(action) = f.request(f.stamp(1)).await.unwrap() else {
+        panic!("Places card")
+    };
+    let SemanticIntent::PlaceAddressCard { content } = &action.intent else {
+        panic!("structured content reference")
+    };
+    assert_eq!(content.audience, Some(action.surface_id));
+    assert_eq!(f.runtime.visual.bindings()[0].2.audience, None);
+    super::super::retire_visual_content(&f.runtime.store, &f.runtime.visual).await;
+    assert!(f.runtime.visual_card(f.principal(), &action).is_some());
+    let delivered = f.poll().await;
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].id, action.id);
+    assert_eq!(delivered[0].status, ActionStatus::Dispatched);
+    super::super::retire_visual_content(&f.runtime.store, &f.runtime.visual).await;
+    assert!(f.runtime.visual_card(f.principal(), &delivered[0]).is_some());
+    f.approve(LookupService::Places, f.browser.surface_id, 1, None)
+        .await;
+    super::super::retire_visual_content(&f.runtime.store, &f.runtime.visual).await;
+    assert!(f.runtime.visual_card(f.principal(), &action).is_none());
+    assert_eq!(f.calls.load(Ordering::SeqCst), 1);
+    f.assert_content_free_state().await;
+}
+
+#[tokio::test]
+async fn ambiance_places_conversation_repair_rebinds_content_to_the_logged_fallback() {
+    let f = places_fixture(200, source_response(), false).await;
+    let pin = crate::surface_registry::pin_surface_id(f.principal(), "abcd");
+    f.approve(LookupService::Places, pin, 0, Some(f.provider.clone()))
+        .await;
+    let second = BrowserProof {
+        surface_id: Uuid::new_v4(),
+        incarnation: Uuid::new_v4(),
+        token_hash: hash(b"places-fallback-browser"),
+    };
+    for mutation in [
+        Mutation::Approve {
+            token_hash: second.token_hash.clone(),
+            incarnation: second.incarnation,
+        },
+        Mutation::State {
+            token_hash: second.token_hash.clone(),
+            incarnation: second.incarnation,
+            sequence: 1,
+            visible: true,
+        },
+    ] {
+        f.store
+            .mutate_surface(f.principal(), second.surface_id, mutation)
+            .await
+            .unwrap();
+    }
+    f.store
+        .runtime(
+            f.principal(),
+            RuntimeOperation::OpenBrowser {
+                connection: second.clone(),
+                epoch: Uuid::new_v4(),
+            },
+        )
+        .await
+        .unwrap();
+    let RuntimeResult::Proposed(first) = f.runtime.stock_text(&f.auth, PROMPT.into()).await.unwrap()
+    else {
+        panic!("Places card from Pin")
+    };
+    let (lead, fallback) = if first.surface_id == f.browser.surface_id {
+        (&f.browser, &second)
+    } else {
+        (&second, &f.browser)
+    };
+    assert_eq!(first.surface_id, lead.surface_id);
+    assert!(first.fallbacks.contains(&fallback.surface_id));
+    f.store
+        .runtime(
+            f.principal(),
+            RuntimeOperation::Poll {
+                connection: RoomProof::Browser(lead.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    f.store
+        .mutate_surface(
+            f.principal(),
+            lead.surface_id,
+            Mutation::State {
+                token_hash: lead.token_hash.clone(),
+                incarnation: lead.incarnation,
+                sequence: 2,
+                visible: false,
+            },
+        )
+        .await
+        .unwrap();
+    let RuntimeResult::Pending(actions) = f
+        .store
+        .runtime(
+            f.principal(),
+            RuntimeOperation::Poll {
+                connection: RoomProof::Browser(fallback.clone()),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("fallback poll")
+    };
+    let repaired = actions.iter().find(|a| a.root_id == first.root_id).unwrap();
+    assert_ne!(repaired.id, first.id);
+    assert_eq!(repaired.surface_id, fallback.surface_id);
+    assert_eq!(repaired.content_digest, first.content_digest);
+    assert_eq!(repaired.display_expires_at_ms, first.display_expires_at_ms);
+    let SemanticIntent::PlaceAddressCard { content } = &repaired.intent else {
+        panic!("repaired Places reference")
+    };
+    assert_eq!(content.audience, Some(fallback.surface_id));
+    super::super::retire_visual_content(&f.runtime.store, &f.runtime.visual).await;
+    f.store
+        .runtime(
+            f.principal(),
+            RuntimeOperation::CheckDelivery {
+                connection: RoomProof::Browser(fallback.clone()),
+                action_id: repaired.id,
+                generation: repaired.generation,
+            },
+        )
+        .await
+        .unwrap();
+    let card = f.runtime.visual_card(f.principal(), repaired).unwrap();
+    let command = crate::browser_runtime_api::command(repaired, Some(&card)).unwrap();
+    assert_eq!(command["content"], card.value());
+    assert_eq!(command["surfaceId"], fallback.surface_id.to_string());
+    let mut wrong_audience = repaired.clone();
+    wrong_audience.surface_id = lead.surface_id;
+    assert!(f.runtime.visual_card(f.principal(), &wrong_audience).is_none());
+    assert!(
+        f.store
+            .runtime(
+                f.principal(),
+                RuntimeOperation::CheckDelivery {
+                    connection: RoomProof::Browser(lead.clone()),
+                    action_id: first.id,
+                    generation: first.generation,
+                },
+            )
+            .await
+            .is_err()
+    );
+    let ledger = f.store.ambiance_ledger_events(f.principal()).await;
+    assert!(ledger.iter().any(|event| matches!(event,
+        LedgerEvent::Runtime(event) if matches!(event.data,
+            RuntimeData::Repair { previous_action, action_id, surface_id, .. }
+                if previous_action == first.id && action_id == repaired.id
+                    && surface_id == fallback.surface_id))));
+    f.store
+        .runtime(
+            f.principal(),
+            RuntimeOperation::Ack {
+                connection: RoomProof::Browser(fallback.clone()),
+                action_id: repaired.id,
+                turn_id: repaired.turn_id,
+                generation: repaired.generation,
+                channel: repaired.channel,
+                content_digest: repaired.content_digest.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    super::super::retire_visual_content(&f.runtime.store, &f.runtime.visual).await;
+    assert!(f.runtime.visual_card(f.principal(), repaired).is_some());
+    f.approve(LookupService::Places, pin, 1, None).await;
+    super::super::retire_visual_content(&f.runtime.store, &f.runtime.visual).await;
+    assert!(f.runtime.visual_card(f.principal(), repaired).is_none());
+    assert_eq!(f.calls.load(Ordering::SeqCst), 1);
+    f.assert_content_free_state().await;
+}
+
+#[tokio::test]
 async fn ambiance_places_conversation_owner_revocation_retires_cached_content_without_browser_poll()
 {
     let f = places_fixture(200, source_response(), false).await;

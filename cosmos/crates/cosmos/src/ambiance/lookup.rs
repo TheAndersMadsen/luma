@@ -2687,7 +2687,12 @@ mod tests {
             .clone();
         assert_eq!(replacement.root_id, action.root_id);
         assert_eq!(replacement.content_digest, visual.digest);
-        assert_eq!(replacement.intent, action.intent);
+        assert_eq!(
+            replacement.intent,
+            SemanticIntent::PlaceAddressCard {
+                content: visual.for_audience(replacement.surface_id),
+            }
+        );
         assert_eq!(replacement.deadline_ms, 130);
         assert_eq!(replacement.display_expires_at_ms, 130);
         f.apply(

@@ -1999,7 +1999,8 @@ async fn retire_visual_content(store: &SharedStore, visual: &super::visual::Cach
                 .await;
             let keep = match observed {
                 Ok(RuntimeResult::Observed(actions)) => actions.iter().any(|action| {
-                    matches!(&action.intent, SemanticIntent::PlaceAddressCard { content } if content == &reference)
+                    matches!(&action.intent, SemanticIntent::PlaceAddressCard { content }
+                        if reference.same_content(content) && content.audience == Some(action.surface_id))
                         && action.content_digest == reference.digest
                         && matches!(action.status, super::ActionStatus::Proposed | super::ActionStatus::Dispatched | super::ActionStatus::Acknowledged)
                 }),

@@ -2093,6 +2093,9 @@ impl RuntimeState {
                 let mut action = previous.clone();
                 action.id = Uuid::new_v4();
                 action.surface_id = selected.surface_id;
+                if let SemanticIntent::PlaceAddressCard { content } = &mut action.intent {
+                    *content = content.for_audience(selected.surface_id);
+                }
                 action.incarnation = self
                     .presence(&records[&selected.surface_id], now)
                     .incarnation;
