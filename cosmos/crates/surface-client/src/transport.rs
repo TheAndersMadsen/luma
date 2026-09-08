@@ -176,6 +176,36 @@ pub(crate) struct Outputs {
 }
 
 impl Outputs {
+    /// Raw document bytes must expire even if no further packet arrives and
+    /// the platform never polls status. Recheck the current task after waiting
+    /// so an old timer cannot retire a newer document.
+    async fn expire_document(&self) {
+        let expires = self
+            .task
+            .borrow()
+            .as_ref()
+            .filter(|task| task.document.is_some())
+            .map(|task| task.expires_at_ms);
+        let Some(expires) = expires else {
+            return std::future::pending().await;
+        };
+        let now = crate::now_ms().unwrap_or(i64::MAX);
+        tokio::time::sleep(Duration::from_millis(
+            expires.saturating_sub(now).max(0) as u64
+        ))
+        .await;
+        let now = crate::now_ms().unwrap_or(i64::MAX);
+        self.task.send_if_modified(|current| {
+            let expired = current
+                .as_ref()
+                .is_some_and(|task| task.document.is_some() && now >= task.expires_at_ms);
+            if expired {
+                *current = None;
+            }
+            expired
+        });
+    }
+
     fn retire(&self) {
         self.display.send_replace(None);
         self.speech.send_replace(None);
@@ -351,6 +381,7 @@ impl Connection {
                     break;
                 }
                 tokio::select! {
+                    _ = outputs.expire_document() => {}
                     changed = connected.changed() => {
                         if changed.is_err() { break; }
                     }
@@ -459,6 +490,59 @@ async fn bind_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn document_snapshot_bytes_expire_without_another_packet_or_status_poll() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/ambiance-document-snapshot-v1.json"
+        ))
+        .unwrap();
+        let (Incoming::Act(mut task), _) = display::parse_frame(
+            &fixture["frame"].to_string(),
+            Expected {
+                surface_id: Uuid::from_u128(3),
+                incarnation: Uuid::from_u128(5),
+                approval_revision: 4,
+            },
+            2001,
+        )
+        .unwrap() else {
+            panic!("task")
+        };
+        task.expires_at_ms = crate::now_ms().unwrap() + 20;
+        let outputs = Outputs {
+            display: watch::channel(None).0,
+            speech: watch::channel(None).0,
+            invitation: watch::channel(None).0,
+            status: watch::channel(None).0,
+            task: watch::channel(Some(task.clone())).0,
+            confirmation: watch::channel(None).0,
+            revoked: watch::channel(None).0,
+            policy: watch::channel(None).0,
+        };
+        let mut observer = outputs.task.subscribe();
+        assert!(observer.borrow().as_ref().unwrap().document.is_some());
+        outputs.expire_document().await;
+        observer.changed().await.unwrap();
+        assert!(observer.borrow().is_none());
+        // A timeout pending for one document cannot erase a replacement.
+        task.expires_at_ms = crate::now_ms().unwrap() + 100;
+        outputs.task.send_replace(Some(task.clone()));
+        let expiry = outputs.expire_document();
+        tokio::pin!(expiry);
+        tokio::select! { biased;
+            _ = &mut expiry => panic!("timer must yield before retiring"),
+            _ = tokio::task::yield_now() => {}
+        }
+        task.action_id = Uuid::new_v4();
+        task.expires_at_ms = crate::now_ms().unwrap() + 60_000;
+        outputs.task.send_replace(Some(task.clone()));
+        expiry.await;
+        assert_eq!(
+            outputs.task.borrow().as_ref().unwrap().action_id,
+            task.action_id
+        );
+    }
 
     fn synthetic_cleanup(
         scope: &CleanupScope,

@@ -77,9 +77,22 @@ pub enum Attestation {
     deny_unknown_fields
 )]
 pub enum Locator {
-    Https { url: String },
-    App { id: String },
-    File { root_id: String, relative: String },
+    Https {
+        url: String,
+    },
+    App {
+        id: String,
+    },
+    File {
+        root_id: String,
+        relative: String,
+    },
+    /// An immutable copy from the same approved logical root on another
+    /// installation. The destination reads no path and writes no file.
+    Snapshot {
+        root_id: String,
+        content: super::visual::Reference,
+    },
 }
 
 impl Locator {
@@ -106,6 +119,9 @@ impl Locator {
                         .split('/')
                         .all(|part| !part.is_empty() && part != "." && part != "..")
             }
+            Self::Snapshot { root_id, content } => {
+                token(root_id, MAX_ROOT_ID_BYTES) && content.valid()
+            }
         }
     }
 
@@ -114,22 +130,29 @@ impl Locator {
             Self::Https { .. } => "https",
             Self::App { .. } => "app",
             Self::File { .. } => "file",
+            Self::Snapshot { .. } => "snapshot",
         }
     }
 
     /// The digest's locator value: the URL, the application id, or the path
-    /// relative to its owner-declared root.
-    fn value(&self) -> &str {
+    /// relative to its owner-declared root, or a snapshot's immutable identity.
+    fn value(&self) -> String {
         match self {
-            Self::Https { url } => url,
-            Self::App { id } => id,
-            Self::File { relative, .. } => relative,
+            Self::Https { url } => url.clone(),
+            Self::App { id } => id.clone(),
+            Self::File { relative, .. } => relative.clone(),
+            Self::Snapshot { content, .. } => serde_json::json!([
+                content.id,
+                content.digest,
+                content.expires_at_ms.to_string(),
+            ])
+            .to_string(),
         }
     }
 
     fn root(&self) -> Option<&str> {
         match self {
-            Self::File { root_id, .. } => Some(root_id),
+            Self::File { root_id, .. } | Self::Snapshot { root_id, .. } => Some(root_id),
             Self::Https { .. } | Self::App { .. } => None,
         }
     }
@@ -345,6 +368,7 @@ impl Operation {
             } => {
                 locator.valid()
                     && version.as_deref().is_none_or(digest_text)
+                    && (!matches!(locator, Locator::Snapshot { .. }) || version.is_some())
                     && position.as_ref().is_none_or(Position::valid)
                     && text(label, MAX_LABEL_BYTES)
             }
@@ -1582,6 +1606,15 @@ impl super::RuntimeState {
                     Locator::File { root_id, .. } => {
                         open.roots.iter().any(|root| root.id == *root_id)
                     }
+                    // action.open also covers Android links and app intents.
+                    // Only these published native implementations have the
+                    // in-memory document renderer; a root grant alone cannot
+                    // make another platform a recipient of document bytes.
+                    Locator::Snapshot { root_id, .. } => {
+                        matches!(&record.binding, crate::surface_registry::Binding::Native { platform, .. }
+                            if matches!(platform.as_str(), "macos" | "linux"))
+                            && open.roots.iter().any(|root| root.id == *root_id)
+                    }
                 }),
             Operation::Route { .. } => policy.as_ref().is_some_and(|p| p.route.is_some()),
             Operation::Play { providers, .. } => policy
@@ -2528,6 +2561,212 @@ mod tests {
     }
 
     #[test]
+    fn ambiance_document_snapshot_requires_a_supported_renderer_and_approved_root() {
+        let (mut fixture, ids) = Fixture::new(&["macos", "linux", "android", "android_tv"]);
+        let operation = Operation::Open {
+            locator: Locator::Snapshot {
+                root_id: "repo".into(),
+                content: super::super::visual::Reference {
+                    id: Uuid::new_v4(),
+                    digest: "a".repeat(64),
+                    expires_at_ms: NOW + 20_000,
+                    audience: None,
+                },
+            },
+            version: Some("b".repeat(64)),
+            position: Some(Position::Line { line: 1 }),
+            label: "notes.txt".into(),
+        };
+        for (index, id) in ids.iter().enumerate() {
+            let _ = fixture.set_actions(*id, Some(open_policy()));
+            assert_eq!(
+                fixture
+                    .state
+                    .action_permits(&fixture.records, *id, &operation),
+                index < 2
+            );
+            fixture.set_actions(*id, None).unwrap();
+            assert!(
+                !fixture
+                    .state
+                    .action_permits(&fixture.records, *id, &operation)
+            );
+        }
+    }
+
+    /// Isolated retained-view state: today's native profiles cannot admit
+    /// private screen context. This exercises retention authority without
+    /// manufacturing that missing physical privacy evidence in production.
+    fn retained_document() -> (Fixture, Uuid, Uuid) {
+        let (mut fixture, ids) = Fixture::new(&["macos", "linux"]);
+        let (source, destination) = (ids[0], ids[1]);
+        for id in &ids {
+            fixture.set_actions(*id, Some(open_policy())).unwrap();
+        }
+        fixture
+            .apply(
+                RuntimeOperation::SetScreenContextPolicy {
+                    surface_id: source,
+                    approval_revision: fixture.records[&source].revision,
+                    expected_revision: 0,
+                    policy: Some(super::super::screen::Policy {
+                        maximum_class: PrivacyClass::Private,
+                    }),
+                },
+                NOW,
+            )
+            .unwrap();
+        let fence = fixture.begin_from(source);
+        let reference = super::super::visual::Reference {
+            id: Uuid::new_v4(),
+            digest: "a".repeat(64),
+            expires_at_ms: NOW + 20_000,
+            audience: None,
+        };
+        let handle = super::super::continuation::DocumentHandle {
+            app: "Text editor".into(),
+            locator: Locator::File {
+                root_id: "repo".into(),
+                relative: "notes.txt".into(),
+            },
+            version: Some("b".repeat(64)),
+            position: Some(Position::Line { line: 1 }),
+            label: "notes.txt".into(),
+        };
+        let turn = fixture.state.turn.as_mut().unwrap();
+        turn.finished = true;
+        turn.screen_context = Some(super::super::screen::Offered {
+            app_digest: hash(b"Text editor"),
+            bytes: 10,
+            document: Some(handle.clone()),
+            snapshot: Some(reference.clone()),
+        });
+        let intent = SemanticIntent::DeviceAction {
+            operation: Operation::Open {
+                locator: Locator::Snapshot {
+                    root_id: "repo".into(),
+                    content: reference.for_audience(destination),
+                },
+                version: handle.version.clone(),
+                position: handle.position,
+                label: handle.label,
+            },
+        };
+        let action = Action {
+            id: Uuid::new_v4(),
+            root_id: Uuid::new_v4(),
+            confirmation_root: None,
+            origin_surface: source,
+            expression: false,
+            turn_id: fence.turn_id,
+            generation: fence.generation,
+            worker: fence.worker,
+            surface_id: destination,
+            channel: Channel::ActionOpen,
+            incarnation: fixture.proofs[&destination].incarnation,
+            content_digest: intent.content_digest(),
+            intent,
+            privacy: PrivacyClass::Public,
+            status: ActionStatus::Completed,
+            deadline_ms: NOW + 10_000,
+            display_expires_at_ms: reference.expires_at_ms,
+            attempts: 1,
+            fallbacks: Vec::new(),
+            outcome: Some(ReportOutcome::Completed),
+            revoked: None,
+            progress: 0,
+            dispatched_at_ms: NOW + 2,
+        };
+        let id = action.id;
+        fixture.state.actions.insert(id, action);
+        (fixture, id, destination)
+    }
+
+    #[test]
+    fn ambiance_document_snapshot_completed_view_revalidates_source_destination_and_expiry() {
+        for change in [
+            "source_permission",
+            "source_root",
+            "destination_root",
+            "source_reapproval",
+            "hidden",
+            "expiry",
+            "cancel",
+        ] {
+            let (mut fixture, id, destination) = retained_document();
+            fixture.state.reconcile(&fixture.records, NOW + 5);
+            assert!(
+                fixture.action(id).revoked.is_none(),
+                "valid completed view stays available"
+            );
+            assert!(fixture.state.next_maintenance_ms(&fixture.records) <= NOW + 20_000);
+            let source = fixture.origin;
+            let mut now = NOW + 6;
+            match change {
+                "source_permission" => {
+                    fixture.state.screen_context_policies.remove(&source);
+                }
+                "source_root" => {
+                    fixture.state.device_action_policies.remove(&source);
+                }
+                "destination_root" => {
+                    fixture.state.device_action_policies.remove(&destination);
+                }
+                "source_reapproval" => {
+                    fixture.records.get_mut(&source).unwrap().revision += 1;
+                }
+                "hidden" => {
+                    fixture
+                        .state
+                        .native_connections
+                        .get_mut(&destination)
+                        .unwrap()
+                        .connection
+                        .as_mut()
+                        .unwrap()
+                        .visible = false;
+                }
+                "expiry" => {
+                    now = NOW + 20_000;
+                }
+                _ => {
+                    fixture.state.turn.as_mut().unwrap().cancelled = true;
+                }
+            }
+            let events = fixture.state.reconcile(&fixture.records, now);
+            let retained = fixture.action(id);
+            assert_eq!(retained.status, ActionStatus::Completed, "{change}");
+            assert_eq!(retained.outcome, Some(ReportOutcome::Completed), "{change}");
+            assert!(retained.revoked.is_some(), "{change}");
+            assert!(
+                fixture
+                    .state
+                    .revocations
+                    .iter()
+                    .any(|r| r.action_id == id && r.surface_id == destination),
+                "{change}"
+            );
+            assert_eq!(events.iter().filter(|event| matches!(event, RuntimeData::EffectRevoked { action_id, .. } if *action_id == id)).count(), 1, "{change}");
+            assert!(!fixture.state.reconcile(&fixture.records, now + 1).iter().any(|e| matches!(e, RuntimeData::EffectRevoked { action_id, .. } if *action_id == id)), "revocation is idempotent");
+        }
+    }
+
+    #[test]
+    fn ambiance_document_snapshot_new_turn_revokes_a_completed_view_before_clearing_it() {
+        let (mut fixture, id, destination) = retained_document();
+        fixture.begin();
+        assert!(!fixture.state.actions.contains_key(&id));
+        let revocation = fixture
+            .state
+            .revocations
+            .iter()
+            .find(|r| r.action_id == id)
+            .unwrap();
+        assert_eq!(revocation.surface_id, destination);
+        assert_eq!(revocation.reason, RevokeReason::Superseded);
+    }
+
+    #[test]
     fn ambiance_device_action_policy_requires_the_current_approval_revision() {
         let (mut fixture, ids) = Fixture::new(&["macos"]);
         let mac = ids[0];
@@ -3043,6 +3282,7 @@ mod tests {
                 app_digest: hash(b"Safari"),
                 bytes: 12,
                 document: None,
+                snapshot: None,
             });
         let offer = fixture.state.action_offer(
             &fixture.records,
@@ -3101,6 +3341,7 @@ mod tests {
                 app_digest: hash(b"Zed"),
                 bytes: 12,
                 document: Some(document.clone()),
+                snapshot: None,
             });
         let turn = fixture.state.turn.clone().unwrap();
         assert!(

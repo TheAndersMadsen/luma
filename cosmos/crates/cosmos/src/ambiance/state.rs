@@ -228,6 +228,12 @@ pub enum RuntimeOperation {
         operation: super::action::OperationKind,
         reference: String,
     },
+    /// Bind a process-local immutable snapshot to the current document
+    /// candidate. The reference is minted by the runtime, never cognition.
+    BindDocumentSnapshot {
+        fence: TurnFence,
+        content: super::visual::Reference,
+    },
     /// Bind a route the runtime minted from this turn's own completed places
     /// receipt, under the `then` the same cognition call already proposed.
     BindPlaceRoute {
@@ -1698,6 +1704,12 @@ impl RuntimeState {
             }
         }
         for action in self.actions.values() {
+            if action.status == ActionStatus::Completed
+                && action.intent.content_reference().is_some()
+                && action.revoked.is_none()
+            {
+                due = due.min(action.display_expires_at_ms);
+            }
             if action.status.terminal() {
                 if action.intent.has_payload() {
                     return 0;
@@ -1773,6 +1785,7 @@ impl RuntimeState {
         now: i64,
     ) -> bool {
         self.lookup_authority_valid(turn, records, now)
+            && self.screen_context_valid(records, turn)
             && records.get(&turn.fence.origin_surface).is_some_and(|r| {
                 !r.revoked
                     && match r.binding {
@@ -1946,7 +1959,7 @@ impl RuntimeState {
                     // masks it and the logged fallback receives it. An effect
                     // already begun continues, because launching a player or
                     // a map puts Cosmos itself in the background.
-                    && (action.channel != Channel::VisualCard
+                    && ((action.channel != Channel::VisualCard && action.intent.content_reference().is_none())
                         || action.status == ActionStatus::Proposed
                         || self.surface_visible(records, action.surface_id, now))
                     && records.get(&action.surface_id).is_some_and(|r| {
@@ -1972,6 +1985,21 @@ impl RuntimeState {
         let mut revoked = Vec::new();
         for action in self.actions.values_mut() {
             if action.status.terminal() {
+                // Completion proves the document was drawn, not that the
+                // receiving screen may retain it after its authority ends.
+                if action.status == ActionStatus::Completed
+                    && action.intent.content_reference().is_some()
+                    && action.revoked.is_none()
+                    && !validity[&action.id]
+                {
+                    action.revoked = Some(if now >= action.display_expires_at_ms {
+                        super::action::RevokeReason::Expired
+                    } else {
+                        super::action::RevokeReason::RevalidationFailed
+                    });
+                    revoked.push(action.clone());
+                    events.push(action_event(action));
+                }
                 continue;
             }
             let valid = validity[&action.id];
@@ -2093,9 +2121,7 @@ impl RuntimeState {
                 let mut action = previous.clone();
                 action.id = Uuid::new_v4();
                 action.surface_id = selected.surface_id;
-                if let SemanticIntent::PlaceAddressCard { content } = &mut action.intent {
-                    *content = content.for_audience(selected.surface_id);
-                }
+                action.intent.bind_audience(selected.surface_id);
                 action.incarnation = self
                     .presence(&records[&selected.surface_id], now)
                     .incarnation;
@@ -2184,6 +2210,16 @@ impl RuntimeState {
             return Vec::new();
         };
         if action.status.terminal() {
+            if action.status == ActionStatus::Completed
+                && action.intent.content_reference().is_some()
+                && action.revoked.is_none()
+            {
+                action.revoked = Some(reason);
+                let action = action.clone();
+                let mut events = vec![action_event(&action)];
+                events.extend(self.record_revocation(&action, now));
+                return events;
+            }
             return Vec::new();
         }
         let unknown = action.channel.is_action() && action.started();
@@ -2428,6 +2464,27 @@ impl RuntimeState {
             return Err(RuntimeError::InvalidRequest);
         }
         match &intent {
+            SemanticIntent::DeviceAction {
+                operation:
+                    super::action::Operation::Open {
+                        locator: super::action::Locator::Snapshot { root_id, content },
+                        version,
+                        position,
+                        label,
+                    },
+            } => {
+                let matching = turn.screen_context.as_ref().is_some_and(|offered| {
+                    offered.snapshot.as_ref() == Some(content)
+                        && now < content.expires_at_ms
+                        && offered.document.as_ref().is_some_and(|document| {
+                            matches!(&document.locator, super::action::Locator::File { root_id: source, .. } if source == root_id)
+                                && document.version == *version && document.position == *position && document.label == *label
+                        })
+                });
+                if !matching {
+                    return Err(RuntimeError::PolicyBlocked);
+                }
+            }
             SemanticIntent::PlaceAddressCard { content } => {
                 let matching = turn.lookup.as_ref().is_some_and(|lookup| {
                     lookup.request.provider.provider.service() == LookupService::Places
@@ -2531,12 +2588,8 @@ impl RuntimeState {
             let incarnation = presence.incarnation;
             // A content reference is authority for exactly the surface this
             // decision named; it is checked again when the content is fetched.
-            let intent = match intent {
-                SemanticIntent::PlaceAddressCard { content } => SemanticIntent::PlaceAddressCard {
-                    content: content.for_audience(surface_id),
-                },
-                other => other,
-            };
+            let mut intent = intent;
+            intent.bind_audience(surface_id);
             let content_digest = intent.content_digest();
             // A private card waits for its personal surface's unlocked
             // foreground; a shared card is renewed or repaired within a minute.
@@ -2552,10 +2605,10 @@ impl RuntimeState {
             let window = window.saturating_add(
                 bound_operation(&intent).map_or(0, super::action::Operation::report_budget_ms),
             );
-            let display_expires_at_ms = match &intent {
-                SemanticIntent::PlaceAddressCard { content } => content.expires_at_ms,
-                _ => now.checked_add(window).ok_or(RuntimeError::Unavailable)?,
-            };
+            let display_expires_at_ms = intent.content_reference().map_or_else(
+                || now.checked_add(window).ok_or(RuntimeError::Unavailable),
+                |content| Ok(content.expires_at_ms),
+            )?;
             let display_expires_at_ms = confirmation
                 .as_ref()
                 .map_or(display_expires_at_ms, |confirmation| {
@@ -2935,6 +2988,65 @@ impl RuntimeState {
                     contexts: offered,
                     actions,
                 }
+            }
+            RuntimeOperation::BindDocumentSnapshot { fence, content } => {
+                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
+                if turn.finished
+                    || turn.fence.origin_surface != fence.origin_surface
+                    || !self.origin_valid(turn, records, now)
+                    || !content.valid()
+                    || content.audience.is_some()
+                    || now >= content.expires_at_ms
+                    || content.expires_at_ms > now.saturating_add(60_000)
+                    || turn
+                        .screen_context
+                        .as_ref()
+                        .is_none_or(|offered| offered.snapshot.is_some())
+                {
+                    return Err(RuntimeError::Stale);
+                }
+                let (mut bound, candidate) = self.bind_device_action(
+                    records,
+                    turn,
+                    super::action::OperationKind::Open,
+                    "doc:1",
+                    now,
+                )?;
+                if !self.action_permits(records, fence.origin_surface, &bound) {
+                    return Err(RuntimeError::PolicyBlocked);
+                }
+                let super::action::Operation::Open {
+                    locator,
+                    version: Some(_),
+                    ..
+                } = &mut bound
+                else {
+                    return Err(RuntimeError::InvalidRequest);
+                };
+                let super::action::Locator::File { root_id, .. } = locator else {
+                    return Err(RuntimeError::InvalidRequest);
+                };
+                *locator = super::action::Locator::Snapshot {
+                    root_id: root_id.clone(),
+                    content: content.clone(),
+                };
+                self.turn
+                    .as_mut()
+                    .unwrap()
+                    .screen_context
+                    .as_mut()
+                    .unwrap()
+                    .snapshot = Some(content);
+                events.push(RuntimeData::ActionBound {
+                    fence,
+                    channel: bound.channel(),
+                    operation: bound.kind(),
+                    candidate,
+                    reference_digest: super::action::reference_digest("doc:1"),
+                    entry_digest: None,
+                    content_digest: bound.content_digest(),
+                });
+                RuntimeResult::DeviceActionBound(bound)
             }
             RuntimeOperation::BindDeviceAction {
                 fence,
@@ -3958,6 +4070,23 @@ impl RuntimeState {
                     .checked_add(1)
                     .ok_or(RuntimeError::Unavailable)?;
                 // Old terminal payloads are removed; the audit events remain.
+                let retained_documents: Vec<_> = self
+                    .actions
+                    .values()
+                    .filter(|action| {
+                        action.status == ActionStatus::Completed
+                            && action.intent.content_reference().is_some()
+                            && action.revoked.is_none()
+                    })
+                    .map(|action| action.id)
+                    .collect();
+                for id in retained_documents {
+                    events.extend(self.revoke_action(
+                        id,
+                        super::action::RevokeReason::Superseded,
+                        now,
+                    ));
+                }
                 self.actions.clear();
                 let fence = TurnFence {
                     turn_id,

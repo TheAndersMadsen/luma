@@ -212,6 +212,7 @@ public enum DeviceLocator: Equatable, Sendable {
     case https(url: String)
     case app(id: String)
     case file(rootID: String, relative: String)
+    case snapshot(rootID: String, content: DocumentReference)
 }
 
 /// Where in a document to land. Carried through to the opener untouched.
@@ -266,10 +267,12 @@ public struct DeviceTask: Equatable, Sendable {
     public let expiresAtMs: Int64
     public let reportByMs: Int64
     public let privacy: String
+    public let document: DocumentTransfer?
 
     public init(actionID: UUID, turnID: UUID, generation: UInt64, channel: String,
                 contentDigest: String, idempotencyKey: String, operation: DeviceOperation,
-                expiresAtMs: Int64, reportByMs: Int64, privacy: String) throws {
+                expiresAtMs: Int64, reportByMs: Int64, privacy: String,
+                document: DocumentTransfer? = nil) throws {
         guard actionID != DisplayCard.nilUUID, turnID != DisplayCard.nilUUID,
               generation > 0, generation <= 9_007_199_254_740_991,
               ["action.open", "action.route", "action.play", "action.run"].contains(channel),
@@ -289,6 +292,13 @@ public struct DeviceTask: Equatable, Sendable {
         self.expiresAtMs = expiresAtMs
         self.reportByMs = reportByMs
         self.privacy = privacy
+        self.document = document
+        if case .open(.snapshot, _, _, _) = operation {
+            guard let document, document.matches(operation: operation, turnID: turnID,
+                                                  revision: generation, expiresAtMs: expiresAtMs) else {
+                throw ClientFailure.invalidResponse
+            }
+        } else if document != nil { throw ClientFailure.invalidResponse }
     }
 }
 

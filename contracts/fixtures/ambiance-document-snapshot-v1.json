@@ -1,0 +1,80 @@
+{
+  "document": {
+    "kind": "document",
+    "text": "First line\r\nSecond 🚀 line\r\n<p>literal</p>",
+    "explanation": "This document has three lines.",
+    "version": "31c4317bf175ee0a0d6faf2b48c4f6d5c4e8584466ac12c7e6a7749db6d2fedf",
+    "taskId": "00000000-0000-0000-0000-000000000008",
+    "revision": 2
+  },
+  "operation": {
+    "kind": "open",
+    "locator": {
+      "scheme": "snapshot",
+      "rootId": "notes",
+      "content": {
+        "id": "00000000-0000-0000-0000-000000000007",
+        "digest": "dae6fa9bf73324372aad86fa073b7ca77447437dcb56d73e266a0ab9a19d5174",
+        "expiresAtMs": 20000,
+        "audience": "00000000-0000-0000-0000-000000000003"
+      }
+    },
+    "version": "31c4317bf175ee0a0d6faf2b48c4f6d5c4e8584466ac12c7e6a7749db6d2fedf",
+    "position": {
+      "kind": "line",
+      "line": 2
+    },
+    "label": "notes.txt"
+  },
+  "contentDigest": "ed7f9282e0b325d5bd608292a201219f658fc5006c5efcc4482d3c1c616ff84a",
+  "frame": {
+    "version": 1,
+    "kind": "act",
+    "stamp": {
+      "epoch": "00000000-0000-0000-0000-000000000009",
+      "sequence": 4,
+      "instanceId": "00000000-0000-0000-0000-000000000006"
+    },
+    "command": {
+      "version": 1,
+      "actionId": "00000000-0000-0000-0000-000000000006",
+      "turnId": "00000000-0000-0000-0000-000000000008",
+      "generation": 2,
+      "surfaceId": "00000000-0000-0000-0000-000000000003",
+      "incarnation": "00000000-0000-0000-0000-000000000005",
+      "channel": "action.open",
+      "contentDigest": "ed7f9282e0b325d5bd608292a201219f658fc5006c5efcc4482d3c1c616ff84a",
+      "idempotencyKey": "b35c86446ab5c9067008e839a739c013fb76769e635b3ae81d28daf88425a7bd",
+      "operation": {
+        "kind": "open",
+        "locator": {
+          "scheme": "snapshot",
+          "rootId": "notes",
+          "content": {
+            "id": "00000000-0000-0000-0000-000000000007",
+            "digest": "dae6fa9bf73324372aad86fa073b7ca77447437dcb56d73e266a0ab9a19d5174",
+            "expiresAtMs": 20000,
+            "audience": "00000000-0000-0000-0000-000000000003"
+          }
+        },
+        "version": "31c4317bf175ee0a0d6faf2b48c4f6d5c4e8584466ac12c7e6a7749db6d2fedf",
+        "position": {
+          "kind": "line",
+          "line": 2
+        },
+        "label": "notes.txt"
+      },
+      "document": {
+        "kind": "document",
+        "text": "First line\r\nSecond 🚀 line\r\n<p>literal</p>",
+        "explanation": "This document has three lines.",
+        "version": "31c4317bf175ee0a0d6faf2b48c4f6d5c4e8584466ac12c7e6a7749db6d2fedf",
+        "taskId": "00000000-0000-0000-0000-000000000008",
+        "revision": 2
+      },
+      "expiresAt": 20000,
+      "reportBy": 15000,
+      "privacy": "shared_room"
+    }
+  }
+}

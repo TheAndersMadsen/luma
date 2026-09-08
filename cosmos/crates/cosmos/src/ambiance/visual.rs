@@ -1,4 +1,4 @@
-//! Transient Places address cards. The durable runtime stores references only.
+//! Transient Places cards and document snapshots. Durable state stores references only.
 //! Cache membership is not delivery authorization; callers must CheckDelivery.
 
 use super::{Action, Channel, RuntimeError, SemanticIntent, TurnFence};
@@ -60,7 +60,7 @@ impl Reference {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Item {
+pub struct Item {
     place_id: String,
     name: String,
     address: String,
@@ -68,11 +68,17 @@ struct Item {
 }
 
 #[derive(Serialize)]
-pub struct Card {
-    kind: &'static str,
-    query: String,
-    items: Vec<Item>,
-    attributions: Vec<String>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Card {
+    Places {
+        query: String,
+        items: Vec<Item>,
+        attributions: Vec<String>,
+    },
+    Document {
+        #[serde(flatten)]
+        snapshot: super::document::Snapshot,
+    },
 }
 
 impl fmt::Debug for Card {
@@ -140,8 +146,7 @@ impl Card {
         {
             return Err(LookupError::Malformed);
         }
-        let card = Self {
-            kind: "places",
+        let card = Self::Places {
             query: query.to_owned(),
             items,
             attributions: evidence.html_attributions.clone(),
@@ -159,24 +164,29 @@ impl Card {
     pub fn value(&self) -> serde_json::Value {
         // This type contains only bounded strings, arrays and null: serialization
         // cannot fail and never includes coordinates or other provider fields.
-        serde_json::to_value(self).expect("bounded address card serializes")
+        serde_json::to_value(self).expect("bounded content serializes")
     }
 
     pub fn digest(&self) -> String {
-        let items: Vec<_> = self
-            .items
+        let Self::Places {
+            query,
+            items,
+            attributions,
+        } = self
+        else {
+            let Self::Document { snapshot } = self else {
+                unreachable!()
+            };
+            return snapshot.digest();
+        };
+        let items: Vec<_> = items
             .iter()
             .map(|item| {
                 serde_json::json!([item.place_id, item.name, item.address, item.source_url,])
             })
             .collect();
-        let canonical = serde_json::json!([
-            "cosmos.place-address-card",
-            1,
-            self.query,
-            items,
-            self.attributions,
-        ]);
+        let canonical =
+            serde_json::json!(["cosmos.place-address-card", 1, query, items, attributions,]);
         crate::surface_registry::hash(canonical.to_string().as_bytes())
     }
 }
@@ -266,13 +276,10 @@ impl Cache {
     /// A durable action can become deliverable before Pending::commit executes;
     /// staged exact matches remain readable to avoid that cross-thread race.
     pub fn get(&self, principal: &str, action: &Action, now: i64) -> Option<Arc<Card>> {
-        let SemanticIntent::PlaceAddressCard { content } = &action.intent else {
-            return None;
-        };
+        let content = action.intent.content_reference()?;
         if now < 0
             || !content.valid()
-            || action.channel != Channel::VisualCard
-            || action.content_digest != content.digest
+            || action.content_digest != action.intent.content_digest()
             || action.display_expires_at_ms != content.expires_at_ms
             || now >= content.expires_at_ms
         {
@@ -290,9 +297,29 @@ impl Cache {
             || entry.fence.generation != action.generation
             || entry.fence.worker != action.worker
             || entry.fence.origin_surface != action.origin_surface
-            || entry.card.digest() != action.content_digest
+            || entry.card.digest() != content.digest
         {
             return None;
+        }
+        match (entry.card.as_ref(), &action.intent) {
+            (Card::Places { .. }, SemanticIntent::PlaceAddressCard { .. })
+                if action.channel == Channel::VisualCard => {}
+            (
+                Card::Document { snapshot },
+                SemanticIntent::DeviceAction {
+                    operation:
+                        super::action::Operation::Open {
+                            version: Some(version),
+                            position,
+                            ..
+                        },
+                },
+            ) if action.channel == Channel::ActionOpen
+                && snapshot.version == *version
+                && snapshot.task_id == action.turn_id
+                && snapshot.revision == action.generation
+                && super::document::position_exists(&snapshot.text, position.as_ref()) => {}
+            _ => return None,
         }
         Some(entry.card.clone())
     }
@@ -512,6 +539,110 @@ mod tests {
             reference.for_audience(Uuid::new_v4()).digest,
             reference.digest
         );
+    }
+
+    #[test]
+    fn ambiance_document_snapshot_cache_checks_exact_fence_version_position_and_retires_bytes() {
+        use super::super::{
+            action::{Locator, Operation, Position},
+            document::Snapshot,
+        };
+        let cache = Arc::new(Cache::default());
+        let fence = fence();
+        let text = "First line\r\nSecond line";
+        let version = crate::surface_registry::hash(text.as_bytes());
+        let stage = || {
+            cache
+                .stage(
+                    "owner",
+                    &fence,
+                    Card::Document {
+                        snapshot: Snapshot {
+                            text: text.into(),
+                            explanation: "A literal explanation.".into(),
+                            version: version.clone(),
+                            task_id: fence.turn_id,
+                            revision: fence.generation,
+                        },
+                    },
+                    100,
+                )
+                .unwrap()
+        };
+        let pending = stage();
+        let mut action = action(&fence, pending.reference());
+        action.channel = Channel::ActionOpen;
+        action.intent = SemanticIntent::DeviceAction {
+            operation: Operation::Open {
+                locator: Locator::Snapshot {
+                    root_id: "notes".into(),
+                    content: pending.reference().for_audience(action.surface_id),
+                },
+                version: Some(version.clone()),
+                position: Some(Position::Line { line: 2 }),
+                label: "notes.txt".into(),
+            },
+        };
+        action.content_digest = action.intent.content_digest();
+        let durable = serde_json::to_string(&action).unwrap();
+        assert!(!durable.contains("Second line") && !durable.contains("literal explanation"));
+        assert!(
+            cache.get("owner", &action, 101).is_some(),
+            "exact staged content is readable across the commit race"
+        );
+        pending.commit();
+        assert_eq!(cache.bindings().len(), 1);
+        assert!(cache.get("another owner", &action, 101).is_none());
+        for field in [
+            "origin",
+            "worker",
+            "turn",
+            "generation",
+            "recipient",
+            "version",
+            "position",
+        ] {
+            let mut changed = action.clone();
+            match field {
+                "origin" => changed.origin_surface = Uuid::new_v4(),
+                "worker" => changed.worker = Uuid::new_v4(),
+                "turn" => changed.turn_id = Uuid::new_v4(),
+                "generation" => changed.generation += 1,
+                "recipient" => changed.surface_id = Uuid::new_v4(),
+                _ => {
+                    if let SemanticIntent::DeviceAction {
+                        operation:
+                            Operation::Open {
+                                version, position, ..
+                            },
+                    } = &mut changed.intent
+                    {
+                        if field == "version" {
+                            *version = Some("f".repeat(64));
+                        } else {
+                            *position = Some(Position::Line { line: 3 });
+                        }
+                    }
+                }
+            }
+            changed.content_digest = changed.intent.content_digest();
+            assert!(cache.get("owner", &changed, 101).is_none(), "{field}");
+        }
+        assert!(
+            cache.get("owner", &action, 102).is_some(),
+            "refusals do not destroy an authorized retry"
+        );
+        cache.discard_turn("owner", &fence);
+        assert!(cache.get("owner", &action, 103).is_none());
+        let pending = stage();
+        drop(pending);
+        assert!(
+            cache.bindings().is_empty(),
+            "an abandoned proposal drops its raw bytes"
+        );
+        stage().commit();
+        cache.prune_expired(60100);
+        assert!(cache.bindings().is_empty());
     }
 
     #[test]

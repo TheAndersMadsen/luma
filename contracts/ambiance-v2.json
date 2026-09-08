@@ -1254,6 +1254,62 @@
       "limitation": "Rendered component/server fixtures rather than a live owner session."
     },
     {
+      "id": "document-snapshot-source-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/document.rs",
+      "anchor": "fn ambiance_document_snapshot_binds_original_bytes_explanation_and_task_revision",
+      "scope": "Binds complete saved text, its original-byte version, optional explanation and task revision to an immutable digest. Partial selections, changed bytes, unsupported positions and oversized escaped JSON are refused.",
+      "limitation": "Bounded process-local construction. Current native profiles still refuse private context before cognition; no full-file capture or unsaved-buffer adapter is established."
+    },
+    {
+      "id": "document-snapshot-server-frame-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/browser_rooms_tests.rs",
+      "anchor": "fn browser_room_document_snapshot_emits_the_shared_client_wire_fixture",
+      "scope": "The production act-frame serializer reproduces the shared document fixture, preserves identical retry bytes and refuses missing content or another recipient. Snapshot delivery uses the transient content cache and carries no destination file path.",
+      "limitation": "Serializer and shared wire fixture, not an enrolled connection or private routing acceptance."
+    },
+    {
+      "id": "document-snapshot-client-frame-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/display.rs",
+      "anchor": "fn document_snapshot_server_frame_requires_exact_content_recipient_and_lifetime",
+      "scope": "The independent shared client parses the server's exact frame fixture and rejects missing, altered, misaddressed, expired or mismatched document/task data before exposing it to a native shell.",
+      "limitation": "Wire-boundary validation only. No physical renderer or positive private admission."
+    },
+    {
+      "id": "document-snapshot-retention-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_document_snapshot_completed_view_revalidates_source_destination_and_expiry",
+      "scope": "Retained completed views lose authority on source/root removal, recipient policy or visibility loss, source reapproval, expiry and cancellation. Revocation is idempotent and preserves the completed historical outcome. Companion tests restrict snapshots to the implemented desktop renderers and revoke completed views on a new turn.",
+      "limitation": "Synthetic retained state isolates lifetime behavior because current native profiles cannot admit the private document scenario. It does not manufacture or establish physical privacy evidence."
+    },
+    {
+      "id": "document-snapshot-client-expiry-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/transport.rs",
+      "anchor": "fn document_snapshot_bytes_expire_without_another_packet_or_status_poll",
+      "scope": "The room client's document timer removes raw bytes and notifies observers without another packet or status poll; a timer for a replaced task cannot erase the newer task.",
+      "limitation": "Local asynchronous transport-state test; physical lifecycle and zeroization of allocator memory are not established."
+    },
+    {
+      "id": "linux-document-transfer-render-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_render.py",
+      "anchor": "def test_a_transferred_document_frame_renders_without_a_destination_file",
+      "scope": "A received text/explanation snapshot reaches the real offscreen Qt renderer with no matching local file. The requested line's frame drives one report; revocation drops the view. Companion decoder/controller tests reject mutation, missing payload, wrong root and another recipient.",
+      "limitation": "Synthetic admitted task and software rendering with PySide6. No private-origin, physical Omarchy, compositor or enrolled-network acceptance."
+    },
+    {
+      "id": "macos-document-transfer-outcome-test-definition",
+      "kind": "test-definition",
+      "path": "clients/macos/Tests/CosmosMacTests/DocumentSnapshotTests.swift",
+      "anchor": "func testRevokingACompletedTransferredViewDropsContentWithoutRewritingItsOutcome",
+      "scope": "A transferred document with no destination file reports its exact version/line and waits for runtime report acceptance. Revoking the retained view drops content while preserving Completed. Companion tests verify the shared fixture and original-byte version with explanation/cursor handling.",
+      "limitation": "Synthetic bridge and admitted task; this does not establish live private context admission, cross-turn continuation or a physical Mac-to-Omarchy handoff."
+    },
+    {
       "id": "native-document-transport-test-definition",
       "kind": "test-definition",
       "path": "cosmos/crates/surface-client/src/tests.rs",
@@ -1290,7 +1346,7 @@
       "kind": "test-definition",
       "path": "clients/macos/Tests/CosmosMacTests/DocumentSnapshotTests.swift",
       "anchor": "func testOffscreenDocumentPaintWithSyntheticVisibility",
-      "scope": "An offscreen AppKit text view draws immutable text at the requested line and supplies the matching report through ClientModel. Synthetic occlusion blocks completion, and stale post-close callbacks cannot complete a document.",
+      "scope": "An offscreen AppKit text view draws transferred immutable text and its explanation with no destination file, positions the requested line and supplies the matching report through ClientModel. Synthetic occlusion blocks completion, and stale post-close callbacks cannot complete a document.",
       "limitation": "Real text layout/drawing with synthetic window availability. Live OS visibility was not established by this test. Native room transport, private actor/occupancy eligibility and cross-device file transfer remain separate gates."
     },
     {
@@ -2001,6 +2057,13 @@
         "screen-context-room-test-definition",
         "screen-context-owner-api-test-definition",
         "native-document-transport-test-definition",
+        "document-snapshot-source-test-definition",
+        "document-snapshot-server-frame-test-definition",
+        "document-snapshot-client-frame-test-definition",
+        "document-snapshot-retention-test-definition",
+        "document-snapshot-client-expiry-test-definition",
+        "linux-document-transfer-render-test-definition",
+        "macos-document-transfer-outcome-test-definition",
         "linux-document-destination-test-definition",
         "linux-document-render-test-definition",
         "macos-document-destination-test-definition",

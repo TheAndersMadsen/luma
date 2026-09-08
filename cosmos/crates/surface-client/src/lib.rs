@@ -3,6 +3,7 @@
 //! this crate owns admission, exact retries, frame checks and RTC fencing.
 pub mod action;
 pub mod display;
+pub mod document;
 mod http;
 pub mod speech;
 mod state;

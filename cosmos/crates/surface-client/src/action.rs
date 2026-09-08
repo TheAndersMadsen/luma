@@ -89,9 +89,20 @@ fn coordinate(value: &str, maximum: u32) -> bool {
     deny_unknown_fields
 )]
 pub enum Locator {
-    Https { url: String },
-    App { id: String },
-    File { root_id: String, relative: String },
+    Https {
+        url: String,
+    },
+    App {
+        id: String,
+    },
+    File {
+        root_id: String,
+        relative: String,
+    },
+    Snapshot {
+        root_id: String,
+        content: crate::document::Reference,
+    },
 }
 
 impl Locator {
@@ -118,6 +129,9 @@ impl Locator {
                         .split('/')
                         .all(|part| !part.is_empty() && part != "." && part != "..")
             }
+            Self::Snapshot { root_id, content } => {
+                token(root_id, MAX_ROOT_ID_BYTES) && content.valid()
+            }
         }
     }
 
@@ -126,20 +140,27 @@ impl Locator {
             Self::Https { .. } => "https",
             Self::App { .. } => "app",
             Self::File { .. } => "file",
+            Self::Snapshot { .. } => "snapshot",
         }
     }
 
-    fn value(&self) -> &str {
+    fn value(&self) -> String {
         match self {
-            Self::Https { url } => url,
-            Self::App { id } => id,
-            Self::File { relative, .. } => relative,
+            Self::Https { url } => url.clone(),
+            Self::App { id } => id.clone(),
+            Self::File { relative, .. } => relative.clone(),
+            Self::Snapshot { content, .. } => serde_json::json!([
+                content.id,
+                content.digest,
+                content.expires_at_ms.to_string(),
+            ])
+            .to_string(),
         }
     }
 
     fn root(&self) -> Option<&str> {
         match self {
-            Self::File { root_id, .. } => Some(root_id),
+            Self::File { root_id, .. } | Self::Snapshot { root_id, .. } => Some(root_id),
             Self::Https { .. } | Self::App { .. } => None,
         }
     }
@@ -278,6 +299,7 @@ impl Operation {
             } => {
                 locator.valid()
                     && version.as_deref().is_none_or(digest_text)
+                    && (!matches!(locator, Locator::Snapshot { .. }) || version.is_some())
                     && position.as_ref().is_none_or(Position::valid)
                     && text(label, MAX_LABEL_BYTES)
             }
@@ -410,6 +432,8 @@ pub struct Task {
     /// re-sends the existing report and never re-executes.
     pub idempotency_key: String,
     pub operation: Operation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<crate::document::Snapshot>,
     pub expires_at_ms: i64,
     /// When the platform must have said what happened.
     pub report_by_ms: i64,

@@ -678,7 +678,9 @@ class Controller:
         """One command, decided entirely here. Acknowledging says it is legal on
         this computer; only what this computer then observes may be reported."""
         self.close_document()
-        self._task = task
+        # Only the viewer retains transferred bytes. Task metadata and the
+        # outcome ledger must not keep another copy after the view is closed.
+        self._task = replace(task, document=None)
         self._task_action = task.action_id
         self._task_launch = None
         self._task_reported = False

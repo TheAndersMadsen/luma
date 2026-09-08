@@ -50,6 +50,14 @@ class OffscreenRenderTest(unittest.TestCase):
             cwd=CLIENT, env=environment, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_a_transferred_document_frame_renders_without_a_destination_file(self):
+        environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software",
+                       "QT_QUICK_CONTROLS_STYLE": "Basic", "PYTHONDONTWRITEBYTECODE": "1"}
+        result = subprocess.run(
+            [str(PYTHON), "-B", "-c", "from tests.test_render import document_scenario; document_scenario(transferred=True)"],
+            cwd=CLIENT, env=environment, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def render(self, kind: str, output: Path, extra_env: dict = None) -> str:
         environment = {
             **os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software",
@@ -81,7 +89,7 @@ class OffscreenRenderTest(unittest.TestCase):
             self.assertEqual(noise, "")
 
 
-def document_scenario():
+def document_scenario(transferred=False):
     """Actual QML layout/frame-swap against a synthetic admitted command.
 
     Exercises the renderer/bridge/controller together, with no enrolled device
@@ -99,10 +107,16 @@ def document_scenario():
     harness = HandoffTest()
     harness.setUp()
     try:
-        harness.document.write_text("😀 Heading\n" + "\n".join(f"Line {line}" for line in range(2, 101)), encoding="utf-8")
+        source = "😀 Heading\n" + "\n".join(f"Line {line}" for line in range(2, 101))
+        if transferred:
+            harness.document.unlink()
+            task = harness.transferred_act(source, line=70)
+        else:
+            harness.document.write_text(source, encoding="utf-8")
+            task = harness.act(position={"kind": "line", "line": 70})
         harness.connected()
         harness.show()
-        harness.fold(task=harness.act(position={"kind": "line", "line": 70}))
+        harness.fold(task=task)
         harness.settle("acknowledge_task")
         expected = harness.state.document
         assert harness.commands("report") == []

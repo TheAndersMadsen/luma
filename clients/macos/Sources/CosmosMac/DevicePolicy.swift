@@ -384,13 +384,14 @@ public struct DevicePolicy: Equatable, Sendable {
     /// a refusal with its own reason. Only a command that passes all of this is
     /// ever acknowledged.
     public func plan(_ operation: DeviceOperation,
+                     document: DocumentTransfer? = nil,
                      filesystem: Filesystem = .real) -> Result<PlannedAction, ActionRefusal> {
         switch operation {
         case .unsupported:
             // macOS declares neither route nor play; nothing here can carry one out.
             return .failure(.noHandler)
         case .open(let locator, let version, let position, _):
-            return plan(locator, version: version, position: position, filesystem: filesystem)
+            return plan(locator, version: version, position: position, document: document, filesystem: filesystem)
         case .run(let entryID, _, let entryDigest, let argvDigest, _, _):
             guard let entry = entry(entryID) else { return .failure(.notPermitted) }
             // The argv is this file's, keyed by id. The digests only prove the
@@ -403,8 +404,15 @@ public struct DevicePolicy: Equatable, Sendable {
     }
 
     private func plan(_ locator: DeviceLocator, version: String?, position: DevicePosition?,
-                      filesystem: Filesystem) -> Result<PlannedAction, ActionRefusal> {
+                      document: DocumentTransfer?, filesystem: Filesystem) -> Result<PlannedAction, ActionRefusal> {
         switch locator {
+        case .snapshot(let rootID, let content):
+            guard root(rootID) != nil else { return .failure(.notPermitted) }
+            guard let document, let version, document.digest == content.digest else { return .failure(.versionChanged) }
+            do { return .success(.showDocument(try DocumentSnapshot(
+                bytes: Data(document.text.utf8), version: version, position: position, explanation: document.explanation))) }
+            catch let reason as ActionRefusal { return .failure(reason) }
+            catch { return .failure(.unresolvable) }
         case .https(let value):
             guard version == nil else { return .failure(.versionChanged) }
             guard let url = Self.webURL(value), let host = url.host?.lowercased() else {

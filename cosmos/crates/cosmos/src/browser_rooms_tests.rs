@@ -80,6 +80,52 @@ fn delivery_action(intent: crate::ambiance::SemanticIntent) -> crate::ambiance::
 }
 
 #[test]
+fn browser_room_document_snapshot_emits_the_shared_client_wire_fixture() {
+    use crate::ambiance::{SemanticIntent, document::Snapshot, visual::Card};
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/fixtures/ambiance-document-snapshot-v1.json"
+    ))
+    .unwrap();
+    let document = &fixture["document"];
+    let snapshot = Snapshot {
+        text: document["text"].as_str().unwrap().into(),
+        explanation: document["explanation"].as_str().unwrap().into(),
+        version: document["version"].as_str().unwrap().into(),
+        task_id: Uuid::from_u128(8),
+        revision: 2,
+    };
+    let mut action = delivery_action(SemanticIntent::DeviceAction {
+        operation: serde_json::from_value(fixture["operation"].clone()).unwrap(),
+    });
+    action.id = Uuid::from_u128(6);
+    action.surface_id = Uuid::from_u128(3);
+    action.incarnation = Uuid::from_u128(5);
+    action.turn_id = Uuid::from_u128(8);
+    action.generation = 2;
+    action.dispatched_at_ms = 2000;
+    action.display_expires_at_ms = 20000;
+    let stamp: InputStamp = serde_json::from_value(fixture["frame"]["stamp"].clone()).unwrap();
+    let card = Card::Document { snapshot };
+    let payload = act_payload(&action, &stamp, Some(&card)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&payload).unwrap(),
+        fixture["frame"]
+    );
+    assert!(payload.len() <= cosmos_rtc::MAX_PAYLOAD);
+    assert_eq!(
+        act_payload(&action, &stamp, Some(&card)).unwrap(),
+        payload,
+        "retry carries identical bytes"
+    );
+    assert!(
+        act_payload(&action, &stamp, None).is_none(),
+        "lost transient content is not a local-file command"
+    );
+    action.surface_id = Uuid::from_u128(4);
+    assert!(act_payload(&action, &stamp, Some(&card)).is_none());
+}
+
+#[test]
 fn browser_room_render_envelope_enforces_exact_wire_byte_limit_before_send() {
     use crate::ambiance::SemanticIntent;
     let runtime = AmbianceRuntime::new(

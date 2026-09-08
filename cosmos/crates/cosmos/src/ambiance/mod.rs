@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod changes;
 pub mod continuation;
 pub mod disclosure;
+pub mod document;
 pub mod echo;
 pub mod grant;
 pub mod ledger;

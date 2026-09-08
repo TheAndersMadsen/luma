@@ -2,3 +2,5 @@
 # These two fixture fields are not credentials; the test key uses public scalar 1.
 contracts/fixtures/ambiance-native-open-v1.json:generic-api-key:26
 contracts/fixtures/ambiance-native-open-v1.json:generic-api-key:52
+# Public document fixture: SHA-256 of the synthetic surface/incarnation/action UUID tuple.
+contracts/fixtures/ambiance-document-snapshot-v1.json:generic-api-key:47

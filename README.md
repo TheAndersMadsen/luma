@@ -205,8 +205,12 @@ acceptance work:
 - A document handle carries a locator, version and position. macOS and Linux
   now hold a verified local text snapshot for their own read-only viewers and
   report completion only after drawing that version at the requested line.
-  External launcher acceptance reports an unknown outcome. The handle still
-  does not transfer a file, unsaved edits or the current explanation/task.
+  The snapshot transport now carries bounded complete saved text and an optional
+  explanation bound to the same task revision, through the transient content
+  cache and existing action channel. The destination needs the same approved
+  logical root ID, with no matching local file. External launcher acceptance
+  reports an unknown outcome. Private context admission, full-file capture,
+  unsaved edits and cross-turn task continuation remain incomplete.
 - TV subtitles previously acknowledged the whole card even when they showed
   only a clipped prefix or a place-query title. Acknowledgment now requires a
   complete caption or every rendered page of the full answer. Physical Shield
@@ -800,19 +804,18 @@ and C boundary with the screen context. The pending journal retains the exact
 handle, destination and request identity across a retry or process reopen.
 Malformed, non-object, oversized or explicitly null handles are rejected rather
 than silently dropped; a null C pointer with nonzero length queues nothing.
-A missing handle preserves the existing context-only wire shape. This is
-transport for the declared locator/version/position, not a content-transfer or
-exact-document-rendering service.
+A missing handle preserves the existing context-only wire shape. This input
+path carries the declared locator/version/position; the separately verified
+snapshot path below carries the exact text to an authorized desktop.
 
 The Grok reconstruction was reviewed as source reference only. Its separate
 box/user-machine execution scopes, stale-target checks and shared adapter
 registry are useful implementation patterns. Its model classifier and direct
 GUI primitives are not Cosmos authority. ACP remains an optional coding-agent
 client protocol; MCP supplies approved tool/data adapters, and A2A supplies
-external specialist collaboration. None supplies the missing document transfer,
-origin-scoped grants or physical outcome evidence. The next document capability
-must transport an authorized immutable snapshot and task revision, then observe
-that exact content at the destination through the existing action pipeline.
+external specialist collaboration. These protocols do not establish origin-scoped
+grants, authorize document transfer or supply physical outcome evidence. Those
+remain responsibilities of the existing Cosmos action pipeline and native clients.
 
 The destination implementation on macOS and Linux now reads a versioned local
 file once, verifies those retained bytes, and presents them in a native read-only
@@ -832,10 +835,37 @@ Revocation, policy changes, disconnect, hiding and expiry
 drop the retained snapshot. Tests exercise the real Qt layout/frame-swap path
 and AppKit text drawing with synthetic window availability; live Mac visibility
 acceptance remains separate. These are destination tests, not a connected-device
-transfer demonstration. The source
-file must currently exist under an approved root on the receiving computer.
-Actual byte transfer, explanation/task continuation and an eligible private
-origin/output remain required for the Mac-to-Omarchy product scenario.
+transfer demonstration.
+
+For an explicitly supplied document handle, the runtime's `doc:1` open path now
+requires the entire attached text to match the saved document's SHA-256 version.
+A partial selection or changed file is refused. The snapshot contains that text,
+an optional explanation, and the exact task ID and generation. It stays in the
+existing transient content cache for at most 60 seconds; durable action state
+holds its reference, digest, expiry and selected recipient, plus the source
+handle. No transferred text or explanation is added to that durable state.
+The source text is at most 8,000 UTF-8 bytes, the explanation at most 2,000, and
+their encoded document at most 8,192. JSON escaping counts; nothing is truncated.
+
+The selected macOS or Linux client independently checks the content, original
+version, task, recipient and expiry, then shows the explanation and literal
+document text in its native viewer. Both source and recipient require an open
+permission for the same logical root ID. The destination neither reads nor writes
+a local file for this operation. Android link-opening permission cannot make the
+phone or TV eligible for this desktop-only renderer. Cache loss or restart makes
+the transfer unavailable. It cannot turn into a file open or a provider retry.
+The shared client drops expired document payloads without waiting for another
+packet. Source permission/root removal, destination policy or visibility loss,
+expiry, cancellation and supersession revoke retained views even after a render
+completed; the committed completed outcome remains in the history.
+
+This is a bounded transfer implementation, not completed Mac-to-Omarchy product
+acceptance. The existing "Use selection" capture is the available source path;
+there is no full-file picker/upload or unsaved-buffer adapter. Current profiles
+still lack physically eligible private output and refuse private screen text
+before cognition. Those admission gates remain unchanged. Larger documents,
+cross-turn explanation/task continuation and physical desktop acceptance are
+still required.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:

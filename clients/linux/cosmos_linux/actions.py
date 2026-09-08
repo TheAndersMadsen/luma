@@ -87,10 +87,14 @@ def content_digest(operation: dict) -> Optional[str]:
         scheme = locator.get("scheme")
         value = {"https": locator.get("url"), "app": locator.get("id"),
                  "file": locator.get("relative")}.get(scheme)
+        if scheme == "snapshot":
+            content = locator.get("content") or {}
+            value = json.dumps([content.get("id"), content.get("digest"), str(content.get("expiresAtMs"))],
+                               separators=(",", ":"), ensure_ascii=False)
         position = operation.get("position")
         canonical = [
             "cosmos.device-action.open", 1, scheme, value,
-            locator.get("rootId") if scheme == "file" else None,
+            locator.get("rootId") if scheme in ("file", "snapshot") else None,
             operation.get("version"),
             position.get("kind") if position else None,
             _position_value(position) if position else None,
@@ -203,6 +207,18 @@ def plan(task, policy: Optional[Policy], openers: Openers = NO_OPENERS,
     scheme = locator.get("scheme")
     position = operation.get("position")
     label = operation.get("label") or ""
+    if scheme == "snapshot":
+        if (policy.root(locator.get("rootId") or "") is None
+                or (locator.get("content") or {}).get("audience") != policy.surface_id):
+            return Plan(bound=False, refusal=NOT_PERMITTED)
+        if not document_module.transfer_matches(task.document, operation, task.turn_id, task.generation, task.expires_at_ms):
+            return Plan(bound=False, refusal=VERSION_CHANGED)
+        try:
+            value = task.document
+            return Plan(bound=True, document=document_module.from_bytes(
+                value["text"].encode("utf-8"), value["version"], position, value["explanation"]))
+        except document_module.Unavailable as error:
+            return Plan(bound=False, refusal=error.reason)
     if scheme == "https":
         return _plan_https(locator.get("url") or "", operation.get("version"), position, label, policy, which)
     if scheme == "app":

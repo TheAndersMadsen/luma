@@ -570,18 +570,7 @@ fn status(value: Option<&TurnStatus>) -> Value {
 /// the binding, then reports only what it actually observed.
 fn task(value: Option<&cosmos_surface_client::Task>) -> Value {
     value.map_or(Value::Null, |task| {
-        json!({
-            "actionId": task.action_id.to_string(),
-            "turnId": task.turn_id.to_string(),
-            "generation": task.generation,
-            "channel": task.channel,
-            "contentDigest": task.content_digest,
-            "idempotencyKey": task.idempotency_key,
-            "operation": task.operation,
-            "expiresAtMs": task.expires_at_ms,
-            "reportByMs": task.report_by_ms,
-            "privacy": task.privacy,
-        })
+        serde_json::to_value(task).expect("bounded task serializes")
     })
 }
 

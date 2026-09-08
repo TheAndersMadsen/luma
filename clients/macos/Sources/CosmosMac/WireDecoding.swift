@@ -109,7 +109,7 @@ extension DisplayCard: Decodable {
 }
 
 extension DeviceLocator: Decodable {
-    private enum Keys: String, CodingKey { case scheme, url, id, rootId, relative }
+    private enum Keys: String, CodingKey { case scheme, url, id, rootId, relative, content }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: Keys.self)
@@ -121,6 +121,9 @@ extension DeviceLocator: Decodable {
         case "file":
             self = .file(rootID: try container.decode(String.self, forKey: .rootId),
                          relative: try container.decode(String.self, forKey: .relative))
+        case "snapshot":
+            self = .snapshot(rootID: try container.decode(String.self, forKey: .rootId),
+                             content: try container.decode(DocumentReference.self, forKey: .content))
         default:
             throw ClientFailure.invalidResponse
         }
@@ -189,7 +192,7 @@ extension DeviceOperation: Decodable {
 extension DeviceTask: Decodable {
     private enum Keys: String, CodingKey {
         case actionId, turnId, generation, channel, contentDigest, idempotencyKey
-        case operation, expiresAtMs, reportByMs, privacy
+        case operation, expiresAtMs, reportByMs, privacy, document
     }
 
     public init(from decoder: Decoder) throws {
@@ -204,7 +207,8 @@ extension DeviceTask: Decodable {
             operation: container.decode(DeviceOperation.self, forKey: .operation),
             expiresAtMs: container.decode(Int64.self, forKey: .expiresAtMs),
             reportByMs: container.decode(Int64.self, forKey: .reportByMs),
-            privacy: container.decode(String.self, forKey: .privacy)
+            privacy: container.decode(String.self, forKey: .privacy),
+            document: container.decodeIfPresent(DocumentTransfer.self, forKey: .document)
         )
     }
 }

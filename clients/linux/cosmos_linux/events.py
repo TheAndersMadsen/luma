@@ -9,7 +9,7 @@ import json
 import re
 import unicodedata
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .native import MAX_POLICY_BYTES, MAX_SPEECH_BYTES, MAX_TEXT_BYTES
@@ -46,7 +46,7 @@ SURFACE_PLATFORMS = frozenset({"browser", "macos", "linux", "android", "android_
 # platform's manifest; the rest are decoded so they can be refused by name.
 ACTION_CHANNELS = frozenset({"action.open", "action.route", "action.play", "action.run"})
 OPERATION_KINDS = frozenset({"open", "route", "play", "run"})
-LOCATOR_SCHEMES = frozenset({"https", "app", "file"})
+LOCATOR_SCHEMES = frozenset({"https", "app", "file", "snapshot"})
 POSITION_KINDS = frozenset({"line", "page", "fragment"})
 INVITATION_KINDS = frozenset({"card", "task"})
 RISKS = frozenset({"low", "moderate", "high"})
@@ -179,6 +179,7 @@ class Task:
     expires_at_ms: int
     report_by_ms: int
     privacy: str
+    document: Optional[dict] = field(default=None, repr=False)
 
     @property
     def label(self) -> str:
@@ -507,12 +508,20 @@ def _locator(value) -> dict:
     scheme = _string(record, "scheme")
     if scheme not in LOCATOR_SCHEMES:
         raise InvalidEvent("unsupported locator scheme")
-    expected = {"https": {"scheme", "url"}, "app": {"scheme", "id"}, "file": {"scheme", "rootId", "relative"}}
+    expected = {"https": {"scheme", "url"}, "app": {"scheme", "id"}, "file": {"scheme", "rootId", "relative"},
+                "snapshot": {"scheme", "rootId", "content"}}
     if set(record) != expected[scheme]:
         raise InvalidEvent("locator with unexpected fields")
-    for key in expected[scheme] - {"scheme"}:
+    for key in expected[scheme] - {"scheme", "content"}:
         if not _string(record, key):
             raise InvalidEvent("empty locator field")
+    if scheme == "snapshot":
+        reference = _record(record.get("content"), "snapshot reference")
+        if set(reference) != {"id", "digest", "expiresAtMs", "audience"} or not HEX64.fullmatch(_string(reference, "digest")):
+            raise InvalidEvent("invalid snapshot reference")
+        _uuid(reference, "id")
+        _uuid(reference, "audience")
+        _integer(reference, "expiresAtMs")
     return dict(record)
 
 
@@ -573,9 +582,13 @@ def _task(value) -> Optional[Task]:
         content_digest=_string(record, "contentDigest"), idempotency_key=_string(record, "idempotencyKey"),
         operation=_operation(record.get("operation")), expires_at_ms=_integer(record, "expiresAtMs"),
         report_by_ms=_integer(record, "reportByMs"), privacy=privacy,
+        document=record.get("document"),
     )
     if not HEX64.match(task.content_digest) or not HEX64.match(task.idempotency_key):
         raise InvalidEvent("task digests are not lowercase hex")
+    from .document import transfer_matches
+    if not transfer_matches(task.document, task.operation, task.turn_id, task.generation, task.expires_at_ms):
+        raise InvalidEvent("document does not match its task")
     return task
 
 

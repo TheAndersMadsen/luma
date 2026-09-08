@@ -889,7 +889,8 @@ async fn deliver(
                 // its sequenced acknowledgment after its own commit, and for
                 // an action its own report after the platform observed it.
                 let payload = if action.channel.is_action() {
-                    act_payload(&action, &stamp)
+                    let card = runtime.visual_card(principal, &action);
+                    act_payload(&action, &stamp, card.as_deref())
                 } else {
                     render_payload(runtime, principal, &action, &stamp)
                 };
@@ -1170,8 +1171,21 @@ fn render_payload(
 /// carry it out. It answers with the same transport receipt a render does,
 /// which is transport evidence only: the device acknowledges the binding
 /// separately, and only its own report may claim an outcome.
-fn act_payload(action: &crate::ambiance::Action, stamp: &InputStamp) -> Option<String> {
-    let command = crate::browser_runtime_api::act_command(action)?;
+fn act_payload(
+    action: &crate::ambiance::Action,
+    stamp: &InputStamp,
+    card: Option<&crate::ambiance::visual::Card>,
+) -> Option<String> {
+    let mut command = crate::browser_runtime_api::act_command(action)?;
+    if let Some(reference) = action.intent.content_reference() {
+        let card @ crate::ambiance::visual::Card::Document { .. } = card? else {
+            return None;
+        };
+        if card.digest() != reference.digest || reference.audience != Some(action.surface_id) {
+            return None;
+        }
+        command["document"] = card.value();
+    }
     let payload =
         serde_json::json!({"version":1,"kind":"act","stamp":stamp,"command":command}).to_string();
     (payload.len() <= cosmos_rtc::MAX_PAYLOAD).then_some(payload)

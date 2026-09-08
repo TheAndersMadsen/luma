@@ -108,9 +108,34 @@ pub struct Offered {
     /// acknowledged: a memory write is itself policy-gated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document: Option<super::continuation::DocumentHandle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<super::visual::Reference>,
 }
 
 impl RuntimeState {
+    pub(super) fn screen_context_valid(
+        &self,
+        records: &BTreeMap<Uuid, Record>,
+        turn: &super::Turn,
+    ) -> bool {
+        turn.screen_context.as_ref().is_none_or(|offered| {
+            self.screen_context_permitted(records, turn.fence.origin_surface)
+                && (offered.snapshot.is_none()
+                    || offered.document.as_ref().is_some_and(|document| {
+                        self.action_permits(
+                            records,
+                            turn.fence.origin_surface,
+                            &super::action::Operation::Open {
+                                locator: document.locator.clone(),
+                                version: document.version.clone(),
+                                position: document.position.clone(),
+                                label: document.label.clone(),
+                            },
+                        )
+                    }))
+        })
+    }
+
     pub(super) fn screen_context_policy(
         &self,
         records: &BTreeMap<Uuid, Record>,
@@ -216,6 +241,7 @@ impl RuntimeState {
             app_digest: app_digest.clone(),
             bytes,
             document,
+            snapshot: None,
         });
         Ok(vec![RuntimeData::ScreenContextOffered {
             fence,

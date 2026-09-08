@@ -924,6 +924,9 @@ public final class ClientModel: ObservableObject {
         guard let revoked = snapshot.revoked, handledRevoke != revoked.actionID else { return }
         handledRevoke = revoked.actionID
         if presentedDocument?.task.actionID == revoked.actionID { closeDocument(cancelled: true) }
+        // A retained view can lose permission after its render report committed.
+        // Removing it does not undo the outcome already recorded by Cosmos.
+        if boundTask == revoked.actionID, case .completed = activity { return }
         guard let running, running.task.actionID == revoked.actionID else {
             // Nothing had started, so nothing has to stop; the owner still reads
             // why the task went away.
@@ -979,9 +982,14 @@ public final class ClientModel: ObservableObject {
         // that arrives with one still being read waits for it.
         await loadingPolicy?.value
         guard let policy else { await refuse(.notPermitted, for: task); return }
+        if case .open(.snapshot(_, let content), _, _, _) = task.operation,
+           content.audience != policyBinding?.surfaceID {
+            await refuse(.notPermitted, for: task)
+            return
+        }
         let heldPolicy = policySeen
         let planned: PlannedAction
-        switch policy.plan(task.operation) {
+        switch policy.plan(task.operation, document: task.document) {
         case .failure(let reason):
             await refuse(reason, for: task)
             return

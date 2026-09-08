@@ -157,6 +157,7 @@ fn ffi_snapshot_reports_task_and_confirmation() {
         content_digest: operation.content_digest(),
         idempotency_key: "a0".to_owned() + &"4".repeat(62),
         operation: operation.clone(),
+        document: None,
         expires_at_ms: 60_000,
         report_by_ms: 30_000,
         privacy: Privacy::SharedRoom,
@@ -168,7 +169,26 @@ fn ffi_snapshot_reports_task_and_confirmation() {
     assert_eq!(projected["reportByMs"], 30_000);
     assert_eq!(projected["operation"]["kind"], "open");
     assert_eq!(projected["operation"]["locator"]["scheme"], "https");
+    assert!(
+        projected.get("document").is_none(),
+        "ordinary actions keep their wire shape"
+    );
     assert!(task(None).is_null());
+
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/fixtures/ambiance-document-snapshot-v1.json"
+    ))
+    .unwrap();
+    let mut document_task = bound.clone();
+    document_task.operation = serde_json::from_value(fixture["operation"].clone()).unwrap();
+    document_task.document = Some(serde_json::from_value(fixture["document"].clone()).unwrap());
+    document_task.content_digest = document_task.operation.content_digest();
+    document_task.expires_at_ms = 20_000;
+    document_task.report_by_ms = 15_000;
+    let projected = task(Some(&document_task));
+    assert_eq!(projected["document"], fixture["document"]);
+    assert_eq!(projected["operation"], fixture["operation"]);
+    assert_eq!(projected["contentDigest"], fixture["contentDigest"]);
 
     let description = Description {
         kind: cosmos_surface_client::action::DescriptionKind::DeviceAction,

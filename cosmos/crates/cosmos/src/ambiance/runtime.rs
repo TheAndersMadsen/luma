@@ -829,20 +829,52 @@ impl AmbianceRuntime {
                 privacy,
                 ..
             } => {
-                let bound = self
-                    .store
-                    .runtime(
-                        principal,
+                let document = device_action.operation == super::action::OperationKind::Open
+                    && device_action.reference == "doc:1";
+                if device_action.explanation.is_some() && !document {
+                    return Err(Status::failed_precondition(
+                        "an explanation requires a document task",
+                    ));
+                }
+                let bind = if document {
+                    let context = offered_context.as_ref().ok_or_else(|| {
+                        Status::failed_precondition("document context is unavailable")
+                    })?;
+                    let snapshot = super::document::Snapshot::from_context(
+                        context, device_action.explanation.unwrap_or_default(), &fence,
+                    ).map_err(|_| Status::failed_precondition("document snapshot requires the complete bounded text of its saved version"))?;
+                    let privacy = privacy_floor
+                        .max(privacy)
+                        .max(input_privacy(&snapshot.explanation));
+                    let pending = self
+                        .visual
+                        .stage(
+                            principal,
+                            &fence,
+                            super::visual::Card::Document { snapshot },
+                            crate::surface_registry::now_ms(),
+                        )
+                        .map_err(runtime_error)?;
+                    let operation = RuntimeOperation::BindDocumentSnapshot {
+                        fence: fence.clone(),
+                        content: pending.reference().clone(),
+                    };
+                    pending_visual = Some(pending);
+                    (operation, privacy)
+                } else {
+                    (
                         RuntimeOperation::BindDeviceAction {
                             fence: fence.clone(),
                             operation: device_action.operation,
                             reference: device_action.reference,
                         },
+                        privacy,
                     )
-                    .await;
+                };
+                let bound = self.store.runtime(principal, bind.0).await;
                 match bound {
                     Ok(RuntimeResult::DeviceActionBound(operation)) => {
-                        (SemanticIntent::DeviceAction { operation }, privacy)
+                        (SemanticIntent::DeviceAction { operation }, bind.1)
                     }
                     // An unknown, expired, class-ineligible or context-forbidden
                     // reference is a parse failure, handled exactly like a
@@ -1129,8 +1161,13 @@ impl AmbianceRuntime {
                 .await
                 .map_err(runtime_error)?;
         }
-        if matches!(result, RuntimeResult::Proposed(_)) {
-            if let Some(pending) = pending_visual.take() {
+        if let RuntimeResult::Proposed(action) = &result {
+            if let Some(pending) = pending_visual.take()
+                && action
+                    .intent
+                    .content_reference()
+                    .is_some_and(|content| pending.reference().same_content(content))
+            {
                 pending.commit();
             }
         }
@@ -1999,12 +2036,22 @@ async fn retire_visual_content(store: &SharedStore, visual: &super::visual::Cach
                 .await;
             let keep = match observed {
                 Ok(RuntimeResult::Observed(actions)) => actions.iter().any(|action| {
-                    matches!(&action.intent, SemanticIntent::PlaceAddressCard { content }
-                        if reference.same_content(content) && content.audience == Some(action.surface_id))
-                        && action.content_digest == reference.digest
-                        && matches!(action.status, super::ActionStatus::Proposed | super::ActionStatus::Dispatched | super::ActionStatus::Acknowledged)
+                    action.intent.content_reference().is_some_and(|content| {
+                        reference.same_content(content)
+                            && content.audience == Some(action.surface_id)
+                    }) && action.content_digest == action.intent.content_digest()
+                        && matches!(
+                            action.status,
+                            super::ActionStatus::Proposed
+                                | super::ActionStatus::Dispatched
+                                | super::ActionStatus::Acknowledged
+                        )
                 }),
-                Err(super::RuntimeError::Stale | super::RuntimeError::NotFound | super::RuntimeError::InvalidOrigin) => false,
+                Err(
+                    super::RuntimeError::Stale
+                    | super::RuntimeError::NotFound
+                    | super::RuntimeError::InvalidOrigin,
+                ) => false,
                 _ => true,
             };
             if !keep {

@@ -7,6 +7,8 @@ reported, exactly once, about the action it names, and a repeat opens nothing a
 second time. A revoke stops what can be stopped and reports cancelled.
 """
 import os
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,7 +22,7 @@ from cosmos_linux.controller import RECONNECT_DELAYS, Controller, Failure, Phase
 from cosmos_linux.native import Features
 
 from .fixtures import (
-    APPROVAL_REVISION, BOOT_EPOCH, SURFACE_ID, TASK_ID, FakeIdentity, FakeJournal, FakeLauncher, FakePlayer,
+    APPROVAL_REVISION, BOOT_EPOCH, SURFACE_ID, TASK_ID, TURN_ID, FakeIdentity, FakeJournal, FakeLauncher, FakePlayer,
     FakeScheduler, FakeSurface, confirmation, open_task, policy_document, policy_record, revoked, snapshot,
 )
 
@@ -310,6 +312,38 @@ class HandoffTest(DeviceActionHarness):
         self.controller.drain()
         self.settle("set_visible")
         self.fold(visible=True)
+
+    def transferred_act(self, text="First line\r\nSecond 🚀 line\r\n<p>literal</p>", line=2):
+        explanation = "This explanation travels with the document."
+        version = hashlib.sha256(text.encode()).hexdigest()
+        document = {"kind": "document", "text": text, "explanation": explanation,
+                    "version": version, "taskId": TURN_ID, "revision": 3}
+        digest = hashlib.sha256(json.dumps(["cosmos.document-snapshot", 1, text, explanation, version,
+                                           TURN_ID, "3"], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        operation = {"kind": "open", "locator": {"scheme": "snapshot", "rootId": "repo", "content": {
+            "id": TASK_ID, "digest": digest, "expiresAtMs": self.now_ms + 60_000, "audience": SURFACE_ID}},
+                     "version": version, "position": {"kind": "line", "line": line}, "label": "notes.txt"}
+        return {**open_task(operation, privacy="shared_room"), "document": document,
+                "expiresAtMs": self.now_ms + 60_000, "reportByMs": self.now_ms + 10_000}
+
+    def test_transferred_document_is_drawn_without_a_file_and_revoked_after_completion(self):
+        self.document.unlink()
+        self.connected()
+        self.show()
+        task = self.transferred_act()
+        self.fold(task=task)
+        self.settle("acknowledge_task")
+        self.assertEqual(self.launcher.started, [])
+        self.assertTrue(self.state.document.text.startswith(task["document"]["explanation"] + "\n\n"))
+        self.assertTrue(self.paint())
+        self.controller.drain()
+        self.settle("report")
+        self.assertEqual(self.state.task.phase, viewstate.TASK_DONE)
+        self.fold(revoked=revoked())
+        self.assertIsNone(self.state.document)
+        self.assertEqual(self.state.task.phase, viewstate.TASK_DONE, "revoking a view does not undo its observed history")
+        self.assertIsNone(self.controller._task.document)
+        self.assertEqual(len(self.commands("report")), 1)
 
     def paint(self, **overrides):
         values = dict(action_id=TASK_ID, digest=self.state.document.digest, line=self.state.document.line)

@@ -39,6 +39,7 @@ impl DocumentHandle {
     pub fn valid(&self) -> bool {
         text(&self.app, MAX_APP_BYTES)
             && self.locator.valid()
+            && !matches!(self.locator, Locator::Snapshot { .. })
             && self.version.as_deref().is_none_or(digest_text)
             && self.position.as_ref().is_none_or(Position::valid)
             && text(&self.label, MAX_LABEL_BYTES)

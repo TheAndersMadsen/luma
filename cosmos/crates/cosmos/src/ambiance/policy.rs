@@ -122,6 +122,34 @@ pub enum SemanticIntent {
     },
 }
 impl SemanticIntent {
+    pub fn content_reference(&self) -> Option<&super::visual::Reference> {
+        match self {
+            Self::PlaceAddressCard { content }
+            | Self::DeviceAction {
+                operation:
+                    super::action::Operation::Open {
+                        locator: super::action::Locator::Snapshot { content, .. },
+                        ..
+                    },
+            } => Some(content),
+            _ => None,
+        }
+    }
+
+    pub fn bind_audience(&mut self, surface: Uuid) {
+        match self {
+            Self::PlaceAddressCard { content }
+            | Self::DeviceAction {
+                operation:
+                    super::action::Operation::Open {
+                        locator: super::action::Locator::Snapshot { content, .. },
+                        ..
+                    },
+            } => *content = content.for_audience(surface),
+            _ => {}
+        }
+    }
+
     pub fn text(&self) -> &str {
         match self {
             Self::InformationalSpeech { text } | Self::VisualTextCard { text } => text,

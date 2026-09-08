@@ -11,7 +11,48 @@ private final class DocumentTestWindow: NSWindow {
     override var occlusionState: NSWindow.OcclusionState { canObserve ? .visible : [] }
 }
 
+private func transferredDocumentWire() throws -> [String: Any] {
+    var root = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 { root.deleteLastPathComponent() }
+    let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf:
+        root.appendingPathComponent("contracts/fixtures/ambiance-document-snapshot-v1.json"))) as? [String: Any])
+    let frame = try XCTUnwrap(fixture["frame"] as? [String: Any])
+    var command = try XCTUnwrap(frame["command"] as? [String: Any])
+    command["expiresAtMs"] = command.removeValue(forKey: "expiresAt")
+    command["reportByMs"] = command.removeValue(forKey: "reportBy")
+    return command
+}
+
 final class DocumentSnapshotTests: XCTestCase {
+    func testTransferredDocumentNeedsNoDestinationFileAndChecksItsBoundTask() throws {
+        let wire = try transferredDocumentWire()
+        func decode(_ wire: [String: Any]) throws -> DeviceTask {
+            try JSONDecoder().decode(DeviceTask.self, from: JSONSerialization.data(withJSONObject: wire))
+        }
+        let task = try decode(wire)
+        let policy = DevicePolicy(roots: [DeviceRoot(id: "notes", label: "Notes", path: "/no/destination/files")])
+        guard case .success(.showDocument(let content)) = policy.plan(task.operation, document: task.document) else {
+            return XCTFail("the transferred text needs no file on this Mac")
+        }
+        XCTAssertEqual(content.text, "This document has three lines.\n\nFirst line\nSecond 🚀 line\n<p>literal</p>")
+        XCTAssertEqual(content.cursor, "This document has three lines.\n\nFirst line\n".utf16.count)
+        XCTAssertEqual(content.line, 2)
+        XCTAssertEqual(content.digest, task.document?.version)
+        XCTAssertEqual(task.document?.digest, "dae6fa9bf73324372aad86fa073b7ca77447437dcb56d73e266a0ab9a19d5174")
+        XCTAssertEqual(DevicePolicy().plan(task.operation, document: task.document), .failure(.notPermitted))
+        XCTAssertEqual(policy.plan(task.operation), .failure(.versionChanged))
+        for key in ["text", "explanation", "version", "taskId", "revision"] {
+            var changed = wire
+            var document = try XCTUnwrap(wire["document"] as? [String: Any])
+            document[key] = key == "revision" ? 3 : "changed"
+            changed["document"] = document
+            XCTAssertThrowsError(try decode(changed), key)
+        }
+        var missing = wire
+        missing.removeValue(forKey: "document")
+        XCTAssertThrowsError(try decode(missing))
+    }
+
     func testOriginalBytesAndUTF16LinePositionArePreserved() throws {
         let bytes = Data("😀 First line\r\nNext line\r\n".utf8)
         let value = try DocumentSnapshot(bytes: bytes, version: CanonicalJSON.hexDigest(bytes), position: .line(2))
@@ -59,13 +100,13 @@ final class DocumentSnapshotTests: XCTestCase {
 
 @MainActor
 final class DocumentDestinationTests: XCTestCase {
-    private func ready() async throws -> (ClientModel, MockClientBridge, DeviceTask, URL) {
+    private func ready(transferred: Bool = false) async throws -> (ClientModel, MockClientBridge, DeviceTask, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("cosmos-viewer-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("notes.txt")
         let bytes = Data("First line\nKeep this version\n".utf8)
-        try bytes.write(to: file)
+        if !transferred { try bytes.write(to: file) }
         let client = try MockClientBridge()
         client.deliver(try fixturePolicy(actions: fixtureActions(
             roots: [DeviceRoot(id: "notes", label: "Notes", path: root.path)])))
@@ -78,11 +119,26 @@ final class DocumentDestinationTests: XCTestCase {
         try await until { model.snapshot.visible }
         let operation = DeviceOperation.open(locator: .file(rootID: "notes", relative: "notes.txt"),
                                                version: CanonicalJSON.hexDigest(bytes), position: .line(2), label: "Notes")
-        let task = try DeviceTask(actionID: UUID(), turnID: UUID(), generation: 1, channel: "action.open",
+        var task = try DeviceTask(actionID: UUID(), turnID: UUID(), generation: 1, channel: "action.open",
                                   contentDigest: String(repeating: "b", count: 64),
                                   idempotencyKey: String(repeating: "a", count: 64), operation: operation,
                                   expiresAtMs: ClientModel.nowMs() + 60_000,
                                   reportByMs: ClientModel.nowMs() + 10_000, privacy: "shared_room")
+        if transferred {
+            var wire = try transferredDocumentWire()
+            let expires = ClientModel.nowMs() + 60_000
+            wire["expiresAtMs"] = expires
+            wire["reportByMs"] = ClientModel.nowMs() + 10_000
+            var operation = try XCTUnwrap(wire["operation"] as? [String: Any])
+            var locator = try XCTUnwrap(operation["locator"] as? [String: Any])
+            var content = try XCTUnwrap(locator["content"] as? [String: Any])
+            content["expiresAtMs"] = expires
+            content["audience"] = fixtureSurface.uuidString.lowercased()
+            locator["content"] = content
+            operation["locator"] = locator
+            wire["operation"] = operation
+            task = try JSONDecoder().decode(DeviceTask.self, from: JSONSerialization.data(withJSONObject: wire))
+        }
         client.publish(ClientSnapshot(phase: .connected, visible: true, task: task))
         try await until { model.presentedDocument != nil }
         return (model, client, task, file)
@@ -120,6 +176,19 @@ final class DocumentDestinationTests: XCTestCase {
         XCTAssertNotEqual(model.taskCard?.state, Words.completed)
     }
 
+    func testRevokingACompletedTransferredViewDropsContentWithoutRewritingItsOutcome() async throws {
+        let (model, client, task, file) = try await ready(transferred: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        let content = try XCTUnwrap(model.presentedDocument?.content)
+        XCTAssertTrue(model.documentCommitted(actionID: task.actionID, digest: content.digest, line: content.line))
+        try await until { model.taskCard?.state == Words.completed }
+        client.publish(ClientSnapshot(phase: .connected, visible: true, task: task,
+                                      revoked: RevokedTask(actionID: task.actionID, reason: .expired)))
+        XCTAssertNil(model.presentedDocument)
+        XCTAssertEqual(model.taskCard?.state, Words.completed)
+        XCTAssertEqual(client.reports.count, 1)
+    }
+
     func testVisibilityPermissionAndCancellationReleaseBytesAndInvalidateLateFrames() async throws {
         for transition in ["hide", "cancel", "disconnect", "policy", "revoke"] {
             let (model, client, task, _) = try await ready()
@@ -144,7 +213,8 @@ final class DocumentDestinationTests: XCTestCase {
     }
 
     func testOffscreenDocumentPaintWithSyntheticVisibility() async throws {
-        let (model, client, task, _) = try await ready()
+        let (model, client, task, file) = try await ready(transferred: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
         defer { model.closeDocument() }
         _ = NSApplication.shared
         let presentation = try XCTUnwrap(model.presentedDocument)
@@ -165,6 +235,7 @@ final class DocumentDestinationTests: XCTestCase {
         let text = try XCTUnwrap(textView(in: view))
         let frame = try XCTUnwrap(text.bitmapImageRepForCachingDisplay(in: text.bounds))
         XCTAssertEqual(text.string, presentation.content.text)
+        XCTAssertTrue(text.string.hasPrefix("This document has three lines.\n\n"))
         XCTAssertEqual(text.selectedRange().location, presentation.content.cursor)
         text.cacheDisplay(in: text.bounds, to: frame)
         await Task.yield()

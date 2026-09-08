@@ -302,9 +302,17 @@ struct ActCommand {
     content_digest: String,
     idempotency_key: String,
     operation: crate::action::Operation,
+    #[serde(default, deserialize_with = "task_document")]
+    document: Option<crate::document::Snapshot>,
     expires_at: i64,
     report_by: i64,
     privacy: Privacy,
+}
+
+fn task_document<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::document::Snapshot>, D::Error> {
+    crate::document::Snapshot::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -817,6 +825,29 @@ pub(crate) fn parse_frame(
                 || command.report_by <= now_ms
                 || command.report_by > command.expires_at
                 || !command.operation.valid()
+                || match (&command.operation, &command.document) {
+                    (
+                        crate::action::Operation::Open {
+                            locator: crate::action::Locator::Snapshot { .. },
+                            ..
+                        },
+                        Some(document),
+                    ) => !document.matches(
+                        &command.operation,
+                        command.surface_id,
+                        command.turn_id,
+                        command.generation,
+                        command.expires_at,
+                    ),
+                    (
+                        crate::action::Operation::Open {
+                            locator: crate::action::Locator::Snapshot { .. },
+                            ..
+                        },
+                        None,
+                    ) => true,
+                    (_, document) => document.is_some(),
+                }
                 || command.content_digest != command.operation.content_digest()
                 || !crate::action::digest_text(&command.idempotency_key)
                 || command.privacy == Privacy::Sensitive
@@ -832,6 +863,7 @@ pub(crate) fn parse_frame(
                     content_digest: command.content_digest,
                     idempotency_key: command.idempotency_key,
                     operation: command.operation,
+                    document: command.document,
                     expires_at_ms: command.expires_at,
                     report_by_ms: command.report_by,
                     privacy: command.privacy,
@@ -1224,6 +1256,74 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    #[test]
+    fn document_snapshot_server_frame_requires_exact_content_recipient_and_lifetime() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/fixtures/ambiance-document-snapshot-v1.json"
+        ))
+        .unwrap();
+        let frame = &fixture["frame"];
+        let recipient = || Expected {
+            surface_id: Uuid::from_u128(3),
+            ..expected()
+        };
+        let (incoming, reply) = parse_frame(&frame.to_string(), recipient(), 2001).unwrap();
+        let Incoming::Act(task) = incoming else {
+            panic!("document task")
+        };
+        assert_eq!(
+            serde_json::to_value(task.document.as_ref().unwrap()).unwrap(),
+            fixture["document"]
+        );
+        assert!(!format!("{task:?}").contains("Second 🚀 line"));
+        assert_eq!(
+            parse_frame(&frame.to_string(), recipient(), 2002)
+                .unwrap()
+                .1,
+            reply
+        );
+        assert!(parse_frame(&frame.to_string(), expected(), 2001).is_err());
+        assert!(parse_frame(&frame.to_string(), recipient(), 15000).is_err());
+        for (path, replacement) in [
+            ("/command/document", serde_json::Value::Null),
+            ("/command/document/text", serde_json::json!("changed")),
+            (
+                "/command/document/explanation",
+                serde_json::json!("changed"),
+            ),
+            (
+                "/command/document/version",
+                serde_json::json!("f".repeat(64)),
+            ),
+            (
+                "/command/document/taskId",
+                serde_json::json!(Uuid::from_u128(99)),
+            ),
+            ("/command/document/revision", serde_json::json!(3)),
+            (
+                "/command/operation/locator/content/audience",
+                serde_json::json!(Uuid::from_u128(4)),
+            ),
+            ("/command/expiresAt", serde_json::json!(20001)),
+        ] {
+            let mut changed = frame.clone();
+            *changed.pointer_mut(path).unwrap() = replacement;
+            assert!(
+                parse_frame(&changed.to_string(), recipient(), 2001).is_err(),
+                "{path}"
+            );
+        }
+        let mut missing = frame.clone();
+        missing["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("document");
+        assert!(parse_frame(&missing.to_string(), recipient(), 2001).is_err());
+        let mut unknown = frame.clone();
+        unknown["command"]["document"]["path"] = serde_json::json!("/not/a/local/file");
+        assert!(parse_frame(&unknown.to_string(), recipient(), 2001).is_err());
     }
 
     /// A command is carried out only when this client can reproduce the

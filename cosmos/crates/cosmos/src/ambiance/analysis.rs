@@ -141,6 +141,23 @@ pub struct DeviceActionRequest {
     pub reference: String,
     #[serde(default)]
     pub reason: Option<String>,
+    /// A document explanation travels with that exact snapshot and task. It
+    /// is ordinary untrusted output text, never an action argument.
+    #[serde(default, deserialize_with = "document_explanation")]
+    pub explanation: Option<String>,
+}
+
+fn document_explanation<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    if text.trim().is_empty()
+        || text.len() > super::document::MAX_EXPLANATION_BYTES
+        || !super::document::plain_text(&text)
+    {
+        return Err(serde::de::Error::custom("invalid document explanation"));
+    }
+    Ok(Some(text))
 }
 
 fn action_reference<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -326,7 +343,9 @@ pub fn proposal_tool() -> ToolDef {
     let device_action = json!({"type":"object","additionalProperties":false,"required":["operation","reference"],"properties":{
         "operation":{"type":"string","enum":["open","route","play","run"]},
         "reference":{"type":"string","minLength":1,"maxLength":super::action::MAX_REFERENCE_BYTES},
-        "reason":{"type":"string","minLength":1,"maxLength":200}
+        "reason":{"type":"string","minLength":1,"maxLength":200},
+        "explanation":{"type":"string","minLength":1,"maxLength":2000,
+            "description":"Only for open with doc:1: explain the supplied document when asked, without claiming it was delivered or opened. This text travels with the immutable document snapshot."}
     }});
     let remember = json!({"type":"object","additionalProperties":false,"required":["text"],"properties":{
         "text":{"type":"string","minLength":1,"maxLength":super::note::MAX_TEXT_BYTES},
