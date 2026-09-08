@@ -117,7 +117,7 @@
       "content": "{kind:\"choices\",title:\"1-120 UTF-8 bytes\",items:[{id:\"1\"..\"8\" in order,title:\"1-80 UTF-8 bytes\",detail:\"0-200 UTF-8 bytes\"}]} with two to eight items and no control characters; a render frame carries it like text or places, and clients reject anything else.",
       "digest": "SHA-256 of the compact JSON of [\"cosmos.choice-list\",1,title,[[id,title,detail],...]] with items in order, byte-for-byte the runtime's binding.",
       "proposal": "Cognition proposes choice_list:{title,items:[{title,detail}]} as its own branch of propose_information (strict XOR with intent, analysis, web_lookup and place_lookup); the runtime numbers the items and rejects any bound violation before the proposal exists.",
-      "memory": "When a choice list at or below shared_room is acknowledged, the runtime remembers \"title: 1. first; 2. second\" as recent context of kind choices for ten minutes (ledger recent_context_remembered) and offers the next turn one sentence naming the numbered items, so \"play trailer for number two\" resolves into a web_lookup for \"<title> trailer\" or an informational answer. No media playback exists yet; a private list is never remembered."
+      "memory": "An acknowledged list at or below shared_room is remembered for ten minutes with its exact content digest. One runtime transaction offers the next turn both its numbered text and content-bound action references. Replacing the list invalidates its earlier references. A choice can bind a player title search, but that is not a grounded trailer identity and its playback outcome remains unknown. A private list is never remembered."
     },
     "lifecycle": "A fresh heartbeat extends only the 45-second lease, capped by the one-hour absolute expiry. Input and controls share one durable high-water cursor. Exact retries do not renew or invoke cognition again. Expired connections cannot revive. Disconnect closes only the exact native connection and its pending turn, preserving owner approval and the same-boot cursor."
   },
@@ -652,16 +652,16 @@
       "branch": "device_action",
       "shape": {
         "operation": "open|route|play|run",
-        "reference": "a runtime-minted candidate identifier, 1-64 bytes",
+        "reference": "a runtime-minted candidate identifier, 1-72 bytes",
         "reason": "one short sentence for the owner's record, at most 200 bytes"
       },
       "binding": "Cognition names a runtime-minted reference, never an argument. Locators, argv, coordinates, package names, place ids and file paths are minted by the runtime from state it committed under a permission of its own.",
       "candidates": {
-        "choice:N": "One item of an acknowledged choice list, bound to that list's content digest, for 600 s at the list's class (never above shared_room). Offered with its title. Binds action.play.",
+        "choice:<item-digest>": "One item of an acknowledged choice list, identified by the SHA-256 digest of that list's content digest and the item's ordinal. Offered with its title for 600 s at the list's class (never above shared_room). Replacing the list invalidates every old reference, including the old choice:N alias. Binds action.play.",
         "place:1": "One item of this turn's completed place lookup receipt. Minted by the runtime under the same call's then=\"route\"; never offered to cognition. Binds action.route.",
         "doc:1": "The structured document handle the origin attached with its screen context, this turn. Offered with its identifier and kind only. Binds action.open.",
-        "cont:1": "A stored continuation, for 600 s at its own class. Offered with its identifier and kind only. Binds action.open.",
-        "cmd:<entry-id>": "One entry of approve-device-command-v1 on a currently eligible installation. Offered with the owner's own label. Binds action.run."
+        "cont:<continuation-id>": "One exact stored continuation UUID, for 600 s at its own class. Offered with its identifier and kind only. Replacing it does not rebind an earlier reference. Binds action.open.",
+        "cmd:<entry-digest>": "One exact entry of approve-device-command-v1 on a currently eligible installation, identified by its SHA-256 entry digest. Offered with the owner's own label. Editing that entry invalidates the reference before command binding. Binds action.run."
       },
       "withheld": "doc:* and cont:* are offered only on a turn already at private or above whose origin holds approve-screen-context-v1. cmd:* is offered on no turn that carries screen context, so a page the owner is reading cannot name a process.",
       "failure": "An unknown, expired, class-ineligible or context-forbidden reference, or an operation that disagrees with its reference's kind, is a parse failure: the turn is cancelled exactly as for a malformed proposal. A device_action combined with any other branch is rejected before any runtime work; it is never silently reduced to the action.",
@@ -787,7 +787,7 @@
             "providers": "1-4 sorted provider ids"
           }
         },
-        "caps": "An operation the installation's approved manifest does not declare is invalid_request. maximumClass is capped by that installation's approve-private-display-v1 ceiling at the same approval revision, and by shared_room without it; it is never raised past it. The permission is dropped on revocation or reapproval with the approval revision. The committed policy must also fit the delivery bound: the runtime serializes the whole document this permission and approve-device-command-v1 would produce together and refuses the write with invalid_request when it exceeds policyDocument bytes, because a policy the installation could never be told about is not a permission."
+        "caps": "An operation the installation's approved manifest does not declare is invalid_request. maximumClass is capped by the actual channel ceiling, currently shared_room for every profile; a private-display preference cannot raise it. The permission is dropped on revocation or reapproval with the approval revision. The committed policy must also fit the delivery bound: the runtime serializes the whole document this permission and approve-device-command-v1 would produce together and refuses the write with invalid_request when it exceeds policyDocument bytes."
       },
       "approve-device-command-v1": {
         "routes": {
@@ -853,12 +853,13 @@
       "grant": "Sequenced, with stamp.instanceId equal to grantId: {kind:\"grant\",grantId,actionId,granted:bool,attestation?:\"foreground_tap|device_owner_auth\",descriptionDigest}. An answer weaker than the ceremony required is stale, and dismissing the panel answers nothing: the ceremony expires, which denies."
     },
     "evidence": {
+      "binding": "The runtime and shared client check evidence against the bound operation as well as action, generation, channel and content digest: entryId for a command, provider and itemDigest for playback, explicit application identity for an app open, and the exact documentDigest before completing a versioned open. Missing version evidence may report unknown. A current title-search playback operation has no provider media identity and cannot report completed even if a same-title session is playing.",
       "open": "{kind:\"open\",resolvedApp?,opened:bool,documentDigest?:HEX64}",
       "route": "{kind:\"route\",resolvedApp?,launched:bool,navigating:bool}",
       "playback": "{kind:\"playback\",provider,state:\"playing|buffering|launched\",positionMs,itemDigest:HEX64}",
       "command": "{kind:\"command\",entryId,exitCode?,durationMs,outputBytes,truncated:bool}",
       "declined": "{kind:\"declined\",reason:\"no_handler|locked|not_permitted|unresolvable|version_changed|entry_changed|no_attestation\"}",
-      "output": "A terminal command report may carry at most 6144 bytes of the command's own output. It joins to at least private, so it can only land on a personal surface, and the ledger keeps its digest, byte count and exit code and never the bytes."
+      "output": "A terminal command report may carry at most 6144 bytes of the command's own output. It joins to at least private and is suppressed on every current profile under the unknown-occupancy rule. The ledger keeps its digest, byte count and exit code and never the bytes."
     },
     "grant": {
       "venue": "The executing installation. The person who confirms is standing at the machine that will act, so no authority is conferred by position and no fifth permission is invented. android_tv declares no confirm.tap and can never be a venue.",

@@ -349,10 +349,10 @@ it("says once that these apply to this device only, and offers only the operatio
   cosmos(); render(<DeviceCard {...props} row={tv} />); await settled(); manage();
   expect(toggle("Let this device act")).toBeInTheDocument();
   expect(screen.queryByRole("switch", { name: "Tasks on this device" })).not.toBeInTheDocument();
-  // The prerequisite lives where the providers are chosen, not buried.
+  // A permission grant cannot supply the missing media identity.
   fireEvent.click(toggle("Let this device act"));
-  expect(screen.getByText(/Settings → Device Preferences → Apps → Special app access → Notification access → Cosmos/u)).toBeVisible();
-  expect(screen.getByText(/the honest report is\s+“Cannot confirm”/u)).toBeVisible();
+  expect(screen.getByText(/This build cannot verify the exact film or trailer/u)).toBeVisible();
+  expect(screen.getByText(/the result remains “Cannot confirm” even when the player starts/u)).toBeVisible();
   expect(screen.queryByLabelText("Website")).not.toBeInTheDocument();
   cleanup();
   // An approval from before device actions existed can hold neither.

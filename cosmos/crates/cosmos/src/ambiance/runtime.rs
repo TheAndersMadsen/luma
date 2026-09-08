@@ -1231,7 +1231,7 @@ impl AmbianceRuntime {
     /// simply offers nothing. Stripping the whole note must leave a safe
     /// decision: it perturbs what the model proposes, never what is eligible.
     async fn recent_context_note(&self, principal: &str, fence: &TurnFence) -> String {
-        let contexts = match self
+        let (contexts, actions) = match self
             .store
             .runtime(
                 principal,
@@ -1241,8 +1241,8 @@ impl AmbianceRuntime {
             )
             .await
         {
-            Ok(RuntimeResult::RecentContext(contexts)) => contexts,
-            _ => Vec::new(),
+            Ok(RuntimeResult::RecentContext { contexts, actions }) => (contexts, actions),
+            _ => return String::new(),
         };
         let mut note = String::new();
         for context in &contexts {
@@ -1269,11 +1269,11 @@ impl AmbianceRuntime {
                 // A continuation names its identifier and its kind and
                 // nothing else: no title, application, path or line number.
                 super::RecentContextKind::Continuation => note.push_str(
-                    " Recent context: a document from an earlier turn on one of the owner's own screens is still available as the candidate cont:1.",
+                    " Recent context: a document from an earlier turn on one of the owner's own screens is still available. Use only its exact continuation candidate below.",
                 ),
             }
         }
-        note.push_str(&self.action_note(principal, fence).await);
+        note.push_str(&Self::action_note(actions));
         note
     }
 
@@ -1325,19 +1325,7 @@ impl AmbianceRuntime {
     /// Which kinds of operation are possible this turn, and the candidate
     /// identifiers. Never a surface identity, a count of devices or a
     /// platform name.
-    async fn action_note(&self, principal: &str, fence: &TurnFence) -> String {
-        let Ok(RuntimeResult::ActionCandidates(offer)) = self
-            .store
-            .runtime(
-                principal,
-                RuntimeOperation::ActionCandidates {
-                    fence: fence.clone(),
-                },
-            )
-            .await
-        else {
-            return String::new();
-        };
+    fn action_note(offer: super::action::ActionOffer) -> String {
         if offer.is_empty() {
             return String::new();
         }

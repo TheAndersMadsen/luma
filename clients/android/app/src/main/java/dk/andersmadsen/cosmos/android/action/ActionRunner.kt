@@ -77,11 +77,6 @@ class ActionRunner(private val application: Context, val platform: String) {
         }
     }
 
-    /** The provider application this device would actually ask, if it is installed. */
-    fun playPackage(provider: String): String? = MediaProviders.packages(provider).firstOrNull { name ->
-        runCatching { application.packageManager.getLaunchIntentForPackage(name) != null }.getOrDefault(false)
-    }
-
     /**
      * Whether the owner has given this installation the notification-listener
      * access that makes playback observable at all. Without it this device
@@ -99,7 +94,7 @@ class ActionRunner(private val application: Context, val platform: String) {
      * answer to this command.
      */
     fun playback(preferred: String?): ActionOutcome.Playback? {
-        if (!listenerGranted()) return null
+        if (preferred.isNullOrEmpty() || !listenerGranted()) return null
         val sessions = runCatching {
             application.getSystemService(MediaSessionManager::class.java)
                 .getActiveSessions(ComponentName(application, PlaybackListenerService::class.java))
@@ -107,20 +102,19 @@ class ActionRunner(private val application: Context, val platform: String) {
             Log.w(TAG, "media sessions could not be read", error)
             return null
         }
-        val ordered = sessions.sortedByDescending { it.packageName == preferred }
-        return ordered.firstNotNullOfOrNull { controller ->
-            val state = controller.playbackState ?: return@firstNotNullOfOrNull null
-            val title = controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
-                ?: controller.metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
-                ?: return@firstNotNullOfOrNull null
-            val playback = when (state.state) {
-                PlaybackState.STATE_PLAYING -> dk.andersmadsen.cosmos.android.action.PlaybackState.PLAYING
-                PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING ->
-                    dk.andersmadsen.cosmos.android.action.PlaybackState.BUFFERING
-                else -> return@firstNotNullOfOrNull null
-            }
-            ActionOutcome.Playback(title, playback, state.position.coerceAtLeast(0))
+        val controller = ActionOutcome.uniqueSession(sessions, preferred) { it.packageName }
+            ?: return null
+        val state = controller.playbackState ?: return null
+        val title = controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?: controller.metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+            ?: return null
+        val playback = when (state.state) {
+            PlaybackState.STATE_PLAYING -> dk.andersmadsen.cosmos.android.action.PlaybackState.PLAYING
+            PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING ->
+                dk.andersmadsen.cosmos.android.action.PlaybackState.BUFFERING
+            else -> return null
         }
+        return ActionOutcome.Playback(title, playback, state.position.coerceAtLeast(0))
     }
 
     companion object { private const val TAG = "Cosmos" }

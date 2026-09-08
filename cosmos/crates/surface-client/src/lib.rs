@@ -1025,7 +1025,11 @@ impl Client {
         if self.task().as_ref() != Some(task) {
             return Err(Error::NoPending);
         }
-        if !report.valid(&task.channel) {
+        if !report.valid(&task.channel)
+            || !report
+                .evidence
+                .matches_operation(&task.operation, report.outcome)
+        {
             return Err(Error::InvalidInput);
         }
         let stamp = self.stamp(task.action_id)?;

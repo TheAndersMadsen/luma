@@ -649,9 +649,61 @@ impl Evidence {
         match self {
             Self::Open { opened, .. } => *opened,
             Self::Route { navigating, .. } => *navigating,
-            Self::Playback { state, .. } => *state == PlaybackState::Playing,
+            // A query and recommendation digest do not identify provider
+            // media. A playing session cannot prove this requested item.
+            Self::Playback { .. } => false,
             Self::Command { .. } => true,
             Self::Declined { .. } => false,
+        }
+    }
+
+    /// Bind platform evidence to the command held by this installation.
+    pub fn matches_operation(&self, operation: &Operation, outcome: ReportOutcome) -> bool {
+        match (self, operation) {
+            (
+                Self::Open {
+                    resolved_app,
+                    document_digest,
+                    ..
+                },
+                Operation::Open {
+                    locator, version, ..
+                },
+            ) => {
+                let document_matches = match document_digest {
+                    Some(digest) => version.as_ref().is_none_or(|expected| expected == digest),
+                    None => outcome != ReportOutcome::Completed || version.is_none(),
+                };
+                let app_matches = match locator {
+                    Locator::App { id } => match resolved_app {
+                        Some(app) => app == id,
+                        None => outcome != ReportOutcome::Completed,
+                    },
+                    _ => true,
+                };
+                document_matches && app_matches
+            }
+            (Self::Route { .. }, Operation::Route { .. }) => true,
+            (
+                Self::Playback {
+                    provider,
+                    item_digest,
+                    ..
+                },
+                Operation::Play {
+                    providers,
+                    item_digest: expected,
+                    ..
+                },
+            ) => providers.contains(provider) && item_digest == expected,
+            (
+                Self::Command { entry_id, .. },
+                Operation::Run {
+                    entry_id: expected, ..
+                },
+            ) => entry_id == expected,
+            (Self::Declined { .. }, _) => true,
+            _ => false,
         }
     }
 }

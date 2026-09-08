@@ -1514,7 +1514,7 @@ mod tests {
             output: None,
         };
         assert!(!completed(launched.clone()).valid("action.play"));
-        assert!(completed(playing.clone()).valid("action.play"));
+        assert!(!completed(playing.clone()).valid("action.play"));
         assert!(!completed(playing).valid("action.open"));
         assert!(
             Report {
@@ -1565,6 +1565,106 @@ mod tests {
             .valid("action.run")
         );
         assert!(Report::parse(b"{\"outcome\":\"completed\"}").is_err());
+    }
+
+    #[test]
+    fn client_report_evidence_matches_the_exact_bound_operation() {
+        use crate::action::{Evidence, Locator, Operation, PlaybackState, ReportOutcome};
+        let version = "d".repeat(64);
+        let document = Operation::Open {
+            locator: Locator::Https {
+                url: "https://github.com/owner/project".into(),
+            },
+            version: Some(version.clone()),
+            position: None,
+            label: "Document".into(),
+        };
+        for (digest, completed) in [
+            (None, false),
+            (Some("e".repeat(64)), false),
+            (Some(version), true),
+        ] {
+            let evidence = Evidence::Open {
+                resolved_app: None,
+                opened: true,
+                document_digest: digest,
+            };
+            assert_eq!(
+                evidence.matches_operation(&document, ReportOutcome::Completed),
+                completed
+            );
+        }
+        assert!(
+            Evidence::Open {
+                resolved_app: None,
+                opened: false,
+                document_digest: None
+            }
+            .matches_operation(&document, ReportOutcome::Unknown)
+        );
+        let app = Operation::Open {
+            locator: Locator::App {
+                id: "com.example.viewer".into(),
+            },
+            version: None,
+            position: None,
+            label: "Viewer".into(),
+        };
+        for resolved_app in [None, Some("com.example.other".into())] {
+            assert!(
+                !Evidence::Open {
+                    resolved_app,
+                    opened: true,
+                    document_digest: None
+                }
+                .matches_operation(&app, ReportOutcome::Completed)
+            );
+        }
+        let item_digest = "c".repeat(64);
+        let play = Operation::Play {
+            title: "A trailer".into(),
+            query: "A trailer".into(),
+            providers: vec!["youtube".into()],
+            item_digest: item_digest.clone(),
+        };
+        for (provider, digest, matches) in [
+            ("youtube", item_digest.clone(), true),
+            ("netflix", item_digest.clone(), false),
+            ("youtube", "e".repeat(64), false),
+        ] {
+            let evidence = Evidence::Playback {
+                provider: provider.into(),
+                state: PlaybackState::Playing,
+                position_ms: 4200,
+                item_digest: digest,
+            };
+            assert_eq!(
+                evidence.matches_operation(&play, ReportOutcome::Unknown),
+                matches
+            );
+            assert!(!evidence.proves_completion());
+        }
+        let run = Operation::Run {
+            entry_id: "project-tests".into(),
+            label: "Project tests".into(),
+            entry_digest: "a".repeat(64),
+            argv_digest: "b".repeat(64),
+            budget_ms: 1000,
+            mutates: false,
+        };
+        for (entry_id, matches) in [("project-tests", true), ("other-task", false)] {
+            let evidence = Evidence::Command {
+                entry_id: entry_id.into(),
+                exit_code: Some(0),
+                duration_ms: 100,
+                output_bytes: 0,
+                truncated: false,
+            };
+            assert_eq!(
+                evidence.matches_operation(&run, ReportOutcome::Completed),
+                matches
+            );
+        }
     }
 
     #[test]

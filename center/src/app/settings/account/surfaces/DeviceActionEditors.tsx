@@ -267,10 +267,10 @@ export function DeviceActsEditor({ row, state, ceiling, personal, onRefreshDevic
               onClick={() => { change({ ...draft, play: { providers: sorted([...(draft.play?.providers ?? []), provider]) } }); setProvider(""); }}>Add provider</button>
           </div>
           <span className={styles.switchState}>
-            Before playback can ever be confirmed, allow Cosmos to read media sessions on the TV itself:
-            {" "}<strong>Settings → Device Preferences → Apps → Special app access → Notification access → Cosmos</strong>.
-            Cosmos cannot open that screen for you; this firmware publishes no way in. Without it the honest report is
-            “Cannot confirm”, because a launched player is not playback.
+            Cosmos can ask an installed player to search for a title. This build cannot verify the exact film or trailer,
+            so the result remains “Cannot confirm” even when the player starts.
+            If your TV offers notification access, allowing Cosmos to read media sessions can supply playback status.
+            A matching title still cannot identify the requested video.
           </span>
         </> : null}
         <div className={styles.actions}>

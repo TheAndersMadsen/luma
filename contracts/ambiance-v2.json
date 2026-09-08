@@ -898,8 +898,8 @@
       "kind": "implementation",
       "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
       "anchor": "pub const OWNER_APPROVAL: &str = \"approve-device-actions-v1\";",
-      "scope": "Two owner permissions bound to the installation's approval revision and dropped with it: what it may be asked to do, and the commands the owner authored for it. An operation its manifest does not declare cannot be written, the class is capped by that installation's private-display ceiling, argv is a fixed array with no shell string or parameter, and a label the runtime would classify above private is refused when it is written.",
-      "limitation": "Permission storage and validation only. Nothing consumes these permissions to dispatch, and the confirmation every command entry requires does not exist yet."
+      "scope": "Two owner permissions bound to the installation's approval revision and dropped with it: what it may be asked to do, and the commands the owner authored for it. Undeclared operations are refused, the class is capped by the actual channel ceiling, argv is a fixed array with no model-supplied argument, and sensitive task labels are refused. Binding, dispatch and native execution recheck the applicable policy.",
+      "limitation": "This entry identifies permission storage and validation. Dispatch and confirmation have separate evidence below; current profiles cannot execute private-class actions or establish physical acceptance."
     },
     {
       "id": "device-action-candidate-binding-test-definition",
@@ -907,7 +907,31 @@
       "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
       "anchor": "fn ambiance_action_candidate_unknown_expired_or_ineligible_reference_is_a_parse_failure",
       "scope": "Cognition names a runtime-minted identifier and never an argument. An unknown, expired, class-ineligible reference, or an operation that disagrees with its reference's kind, resolves to nothing, and a resolved one is logged content-free with its candidate kind and digests.",
-      "limitation": "Resolution and logging only. A bound command is proposed and routed; it is never dispatched, so no argument the runtime minted has reached a device."
+      "limitation": "This test covers resolution and logging in memory. Dispatch, native execution and physical outcomes require their own evidence."
+    },
+    {
+      "id": "device-action-context-snapshot-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_action_candidate_choice_two_resolves_only_against_the_acknowledged_list_digest",
+      "scope": "One runtime transition returns recent context and its derived action offer and logs both. Choice references bind the full list-and-item digest. Replacing the list rejects its old reference and the positional alias; a fresh reference binds the new item and expires with the context.",
+      "limitation": "Synthetic acknowledged-list state. The digest identifies a recommendation item, not a provider media item or trailer, and does not establish playback."
+    },
+    {
+      "id": "device-action-command-edit-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_action_candidates_reject_command_edits_after_the_context_offer",
+      "scope": "Editing an approved task while cognition is outstanding invalidates its old content-bound reference and task-name alias. The full fresh digest parses through the actual proposal schema and binds only the revised entry.",
+      "limitation": "Runtime state and proposal parsing only; no process is executed."
+    },
+    {
+      "id": "device-action-command-device-identity-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_action_candidates_distinguish_same_named_tasks_on_different_devices",
+      "scope": "Same-named tasks with different working directories on two approved devices produce distinct candidates. The bound operation is permitted only at the device whose full entry matches.",
+      "limitation": "Two synthetic macOS profiles; native installation and execution are separate acceptance gates."
     },
     {
       "id": "device-action-untrusted-content-test-definition",
@@ -915,7 +939,7 @@
       "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
       "anchor": "fn ambiance_action_candidate_cmd_is_never_offered_on_a_screen_context_turn",
       "scope": "Untrusted content and command execution never meet: a turn carrying a delimited block from the owner's screen is offered no command candidate and cannot resolve one, and a private document is named to cognition only on a turn already at that class whose origin holds the screen-context permission, by identifier and kind alone.",
-      "limitation": "Offer and resolution only, over the runtime's own state. It does not cover command output, which no code path produces yet."
+      "limitation": "Offer and resolution only, over the runtime's own state. Command output is handled by a separate report path and is not established by this test."
     },
     {
       "id": "device-action-proposal-exclusivity-test-definition",
@@ -970,8 +994,40 @@
       "kind": "test-definition",
       "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
       "anchor": "fn ambiance_exit_code_one_is_completed_and_its_output_is_routed_as_private_content",
-      "scope": "A command with exit code one commits its completed outcome. Its private output is withheld while the destination has unknown occupancy, including after a personal-display preference is saved.",
+      "scope": "A report naming another command entry is refused without committing an outcome or output. The matching command with exit code one commits completion. Its private output is withheld while the destination has unknown occupancy, including after a personal-display preference is saved.",
       "limitation": "Synthetic output through the ordinary card path. No command was executed and no client rendered the result."
+    },
+    {
+      "id": "device-action-playback-identity-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_playback_report_binds_the_provider_and_item_without_completing_a_search",
+      "scope": "A dispatched title-search action rejects completed playback claims even with a playing report. Reports for another provider or recommendation digest also fail without setting an outcome; a matching unknown report is accepted.",
+      "limitation": "Synthetic provider evidence only. Exact provider media identity, trailer resolution and physical playback remain unimplemented acceptance gates."
+    },
+    {
+      "id": "device-action-document-version-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_document_report_requires_the_bound_version_before_completing",
+      "scope": "A dispatched public document open refuses completed reports with missing or wrong version digests and leaves its outcome unset. Matching version evidence can complete the action.",
+      "limitation": "Validates a synthetic device statement; it does not transfer document bytes or observe destination rendering or position."
+    },
+    {
+      "id": "device-action-client-evidence-binding-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/surface-client/src/display.rs",
+      "anchor": "fn client_report_evidence_matches_the_exact_bound_operation",
+      "scope": "The shared client independently checks document version, application identity, command entry and playback provider/item binding. Playback diagnostics cannot complete the current search-based operation.",
+      "limitation": "Pure client report predicates; no physical device or network report is exercised."
+    },
+    {
+      "id": "android-playback-observation-test-definition",
+      "kind": "test-definition",
+      "path": "clients/android/app/src/test/java/dk/andersmadsen/cosmos/android/ActionOutcomeTest.kt",
+      "anchor": "fun sessionsBelongOnlyToTheExactResolvedPackageAndAmbiguityStaysUnknown",
+      "scope": "The session selector requires exactly one session from the resolved package and refuses absent, unrelated and ambiguous sessions. Adjacent regressions show that same-title films, sequels, ads and commentary all retain unknown outcomes.",
+      "limitation": "Synthetic session descriptors and metadata. The installed Shield firmware, provider applications and notification-access behavior remain unverified."
     },
     {
       "id": "device-action-grant-test-definition",
@@ -1404,6 +1460,10 @@
         "origin-status-room-test-definition",
         "device-action-outcome-test-definition",
         "device-action-exit-code-test-definition",
+        "device-action-playback-identity-test-definition",
+        "device-action-document-version-test-definition",
+        "device-action-client-evidence-binding-test-definition",
+        "android-playback-observation-test-definition",
         "device-action-shared-expression-test-definition",
         "device-action-client-report-test-definition",
         "tv-caption-delivery-test-definition",
@@ -1548,6 +1608,9 @@
         "choice-list-proposal-test-definition",
         "screen-context-room-test-definition",
         "device-action-candidate-binding-test-definition",
+        "device-action-context-snapshot-test-definition",
+        "device-action-command-edit-test-definition",
+        "device-action-command-device-identity-test-definition",
         "device-action-proposal-exclusivity-test-definition",
         "device-action-hint-ablation-test-definition",
         "device-action-dispatch-test-definition",
@@ -1860,6 +1923,9 @@
         "choice-list-memory-test-definition",
         "choice-list-room-test-definition",
         "native-client-choices-test-definition",
+        "device-action-context-snapshot-test-definition",
+        "device-action-playback-identity-test-definition",
+        "android-playback-observation-test-definition",
         "device-action-dispatch-test-definition",
         "device-action-outcome-test-definition",
         "device-action-client-frame-test-definition",
@@ -1885,6 +1951,8 @@
         "screen-context-room-test-definition",
         "screen-context-owner-api-test-definition",
         "native-document-transport-test-definition",
+        "device-action-document-version-test-definition",
+        "device-action-client-evidence-binding-test-definition",
         "device-action-dispatch-test-definition",
         "device-action-outcome-test-definition",
         "device-action-client-frame-test-definition",

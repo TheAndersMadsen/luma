@@ -59,9 +59,9 @@ class ActionOutcomeTest {
     }
 
     @Test
-    fun onlyAPlayingSessionOfTheBoundItemIsACompletion() {
+    fun aPlayingTitleMatchCannotCompleteASearchBasedRequest() {
         val playing = playback(observed = ActionOutcome.Playback("The Zone of Interest | Official Trailer (2025)", PlaybackState.PLAYING, 4200))
-        assertEquals(ReportOutcome.COMPLETED, playing.outcome)
+        assertEquals(ReportOutcome.UNKNOWN, playing.outcome)
         assertEquals(Evidence.Playback("youtube", PlaybackState.PLAYING, 4200, digest), playing.evidence)
         // Buffering is not playing.
         val buffering = playback(observed = ActionOutcome.Playback("The Zone of Interest", PlaybackState.BUFFERING, 0))
@@ -72,6 +72,40 @@ class ActionOutcomeTest {
         assertEquals(ReportOutcome.UNKNOWN, other.outcome)
         assertEquals(Evidence.Playback("youtube", PlaybackState.LAUNCHED, 0, digest), other.evidence)
         assertEquals(ReportOutcome.REFUSED, playback(launched = false).outcome)
+    }
+
+    @Test
+    fun aTitleMatchCanBeASequelAnAdOrCommentaryAndNeverProvesPlayback() {
+        for (title in listOf(
+            "The Zone of Interest", "The Zone of Interest 2", "The Zone of Interest explained",
+            "The Zone of Interest Official Trailer reaction", "Advert: The Zone of Interest",
+        )) {
+            assertTrue(ActionOutcome.titleMatches(title, "The Zone of Interest"))
+            assertEquals(ReportOutcome.UNKNOWN,
+                playback(observed = ActionOutcome.Playback(title, PlaybackState.PLAYING, 4200)).outcome)
+        }
+    }
+
+    @Test
+    fun sessionsBelongOnlyToTheExactResolvedPackageAndAmbiguityStaysUnknown() {
+        data class Session(val app: String, val title: String)
+        val youtube = Session("com.google.android.youtube.tv", "Trailer")
+        val netflix = Session("com.netflix.ninja", "Trailer")
+        assertEquals(youtube, ActionOutcome.uniqueSession(listOf(netflix, youtube), youtube.app) { it.app })
+        assertEquals(null, ActionOutcome.uniqueSession(listOf(netflix), youtube.app) { it.app })
+        assertEquals(null, ActionOutcome.uniqueSession(listOf(youtube, youtube.copy(title = "Another tab")), youtube.app) { it.app })
+        assertEquals(null, ActionOutcome.uniqueSession(listOf(youtube), null) { it.app })
+    }
+
+    @Test
+    fun playerPositionsRemainInsideTheWireBoundInEveryState() {
+        for (state in listOf(PlaybackState.PLAYING, PlaybackState.BUFFERING)) {
+            for ((position, expected) in listOf(Long.MIN_VALUE to 0L, Long.MAX_VALUE to 86_400_000L)) {
+                val report = playback(observed = ActionOutcome.Playback("The Zone of Interest", state, position))
+                assertEquals(Evidence.Playback("youtube", state, expected, digest), report.evidence)
+                assertEquals(ReportOutcome.UNKNOWN, report.outcome)
+            }
+        }
     }
 
     @Test
@@ -119,7 +153,7 @@ class ActionOutcomeTest {
             ActionOutcome.route("com.google.android.apps.maps", launched = true, navigating = false).json(),
         )
         assertEquals(
-            """{"outcome":"completed","evidence":{"kind":"playback","provider":"youtube","state":"playing","positionMs":4200,"itemDigest":"$digest"}}""",
+            """{"outcome":"unknown","evidence":{"kind":"playback","provider":"youtube","state":"playing","positionMs":4200,"itemDigest":"$digest"}}""",
             playback(observed = ActionOutcome.Playback("The Zone of Interest", PlaybackState.PLAYING, 4200)).json(),
         )
     }

@@ -48,7 +48,8 @@ class TaskCardTest {
             "youtube", "c".repeat(64), "The Zone of Interest", launched = true, listenerGranted = true,
             observed = ActionOutcome.Playback("The Zone of Interest | Trailer", PlaybackState.PLAYING, 4200),
         ))
-        assertEquals("Playing on this TV.", TaskCards.card(playing, "this TV", explain = false)?.sentence)
+        assertEquals("Cannot confirm", TaskCards.card(playing, "this TV", explain = false)?.state)
+        assertEquals(null, TaskCards.card(playing, "this TV", explain = false)?.sentence)
     }
 
     @Test

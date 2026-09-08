@@ -221,10 +221,6 @@ pub enum RuntimeOperation {
         /// card the way any other reply to that origin would be.
         screen_only: bool,
     },
-    /// Offer this turn's runtime-minted action candidates to cognition.
-    ActionCandidates {
-        fence: TurnFence,
-    },
     /// Resolve one proposed candidate reference into a bound command. The
     /// runtime mints every argument; cognition supplied only the identifier.
     BindDeviceAction {
@@ -527,8 +523,10 @@ pub enum RuntimeResult {
     LookupStarted(super::lookup::Lookup),
     LookupCurrent,
     LookupCompleted(super::lookup::Receipt),
-    RecentContext(Vec<RecentContext>),
-    ActionCandidates(super::action::ActionOffer),
+    RecentContext {
+        contexts: Vec<RecentContext>,
+        actions: super::action::ActionOffer,
+    },
     DeviceActionBound(super::action::Operation),
     PrivatePolicy(Option<super::personal::Approval>),
     DeviceActionPolicy(Option<super::action::Approval>),
@@ -2901,6 +2899,10 @@ impl RuntimeState {
                     && turn.screen_context.is_some()
                     && self.screen_context_permitted(records, turn.fence.origin_surface);
                 let turn_privacy = turn.privacy;
+                // Read memory and the candidates derived from it in the same
+                // transaction. Two reads could mix one list's numbers with
+                // another list's action references while cognition starts.
+                let actions = self.action_offer(records, turn, now);
                 let offered: Vec<_> = self
                     .recent_context
                     .iter()
@@ -2919,22 +2921,17 @@ impl RuntimeState {
                         privacy: context.privacy,
                     });
                 }
-                RuntimeResult::RecentContext(offered)
-            }
-            RuntimeOperation::ActionCandidates { fence } => {
-                let turn = self.fence(fence.turn_id, fence.generation, fence.worker, now)?;
-                if turn.finished || turn.fence.origin_surface != fence.origin_surface {
-                    return Err(RuntimeError::Stale);
-                }
-                let offer = self.action_offer(records, turn, now);
-                if !offer.is_empty() {
+                if !actions.is_empty() {
                     events.push(RuntimeData::ActionCandidatesOffered {
                         fence,
-                        kinds: offer.kinds(),
-                        count: u32::try_from(offer.candidates.len()).unwrap_or(u32::MAX),
+                        kinds: actions.kinds(),
+                        count: u32::try_from(actions.candidates.len()).unwrap_or(u32::MAX),
                     });
                 }
-                RuntimeResult::ActionCandidates(offer)
+                RuntimeResult::RecentContext {
+                    contexts: offered,
+                    actions,
+                }
             }
             RuntimeOperation::BindDeviceAction {
                 fence,
@@ -4448,6 +4445,8 @@ impl RuntimeState {
                     || !action.started()
                     || !evidence.valid()
                     || !evidence.fits(channel)
+                    || !matches!(&action.intent, SemanticIntent::DeviceAction { operation }
+                        if evidence.matches_operation(operation, outcome))
                     // A launch a device could not observe further is unknown,
                     // never completed, and a refusal is exactly the evidence
                     // that says the device declined.

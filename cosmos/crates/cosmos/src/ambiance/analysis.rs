@@ -145,7 +145,7 @@ pub struct DeviceActionRequest {
 
 fn action_reference<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let reference = String::deserialize(deserializer)?;
-    let shaped = (1..=64).contains(&reference.len())
+    let shaped = (1..=super::action::MAX_REFERENCE_BYTES).contains(&reference.len())
         && reference.split_once(':').is_some_and(|(prefix, id)| {
             !prefix.is_empty()
                 && !id.is_empty()
@@ -325,7 +325,7 @@ pub fn proposal_tool() -> ToolDef {
     let place_lookup_request = json!({"type":"object","additionalProperties":false,"required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":512},"then":{"type":"string","enum":["route"]}}});
     let device_action = json!({"type":"object","additionalProperties":false,"required":["operation","reference"],"properties":{
         "operation":{"type":"string","enum":["open","route","play","run"]},
-        "reference":{"type":"string","minLength":1,"maxLength":64},
+        "reference":{"type":"string","minLength":1,"maxLength":super::action::MAX_REFERENCE_BYTES},
         "reason":{"type":"string","minLength":1,"maxLength":200}
     }});
     let remember = json!({"type":"object","additionalProperties":false,"required":["text"],"properties":{

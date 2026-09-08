@@ -3347,7 +3347,9 @@ mod tests {
         );
         // The current turn is offered the memory once per request; a stale
         // fence gets nothing, and expiry clears it for everyone.
-        let RuntimeResult::RecentContext(offered) = fixture
+        let RuntimeResult::RecentContext {
+            contexts: offered, ..
+        } = fixture
             .apply(
                 RuntimeOperation::RecentContext {
                     fence: fixture.fence.clone(),

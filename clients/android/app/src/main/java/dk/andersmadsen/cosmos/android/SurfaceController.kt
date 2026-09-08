@@ -562,11 +562,12 @@ class SurfaceController(context: Context) {
 
     /**
      * Playback on the television. Without the owner's notification-listener
-     * grant nothing here is observable and the report is unknown; with it, the
-     * session's own title must contain the bound one and it must be playing.
+     * grant nothing here is observable. A matching title in the exact resolved
+     * application's session remains diagnostic; a search query binds no media
+     * identity, so its playback outcome is still unknown.
      */
     private suspend fun play(task: DeviceTask, plan: PlannedAction.Play): Report {
-        val preferred = runner.playPackage(plan.provider)
+        val preferred = runner.resolve(plan)
         val started = runner.start(plan)
         if (started) launched = task.actionId
         val listener = runner.listenerGranted()
@@ -577,7 +578,7 @@ class SurfaceController(context: Context) {
             while (System.currentTimeMillis() - began < PLAYBACK_MS && stopped != task.actionId) {
                 delay(500)
                 val seen = runner.playback(preferred)
-                if (seen != null) observed = seen
+                observed = seen
                 if (seen != null && seen.state == PlaybackState.PLAYING &&
                     ActionOutcome.titleMatches(seen.title, plan.title)
                 ) break
@@ -590,7 +591,7 @@ class SurfaceController(context: Context) {
             }
         }
         if (stopped == task.actionId) return ActionOutcome.cancelled(task.operation, started)
-        return ActionOutcome.playback(plan.provider, plan.itemDigest, plan.title, started, listener, observed)
+        return ActionOutcome.playback(plan.provider, plan.itemDigest, plan.title, started, runner.listenerGranted(), observed)
     }
 
     /**

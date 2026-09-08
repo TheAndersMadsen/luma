@@ -383,10 +383,11 @@ changes files. A task label the runtime would classify as sensitive is refused
 when it is saved, with the message that names the fix, because a silently
 unrunnable task is indistinguishable from a missing capability. Both editors
 say once, above them, that they apply to that device only. The Shield's card
-carries its playback prerequisite where the providers are chosen rather than
-buried: without notification access on the TV, media sessions cannot be read
-and the honest report is always "Cannot confirm", because a launched player is
-not playback.
+carries its playback limit where the providers are chosen: Cosmos can ask an
+installed player to search for a title, but this build reports "Cannot confirm"
+even when a matching title is playing. Optional notification access supplies
+media-session diagnostics where the TV firmware supports it; it does not supply
+the missing exact media identity.
 
 Reapproval drops what a device already holds, so Devices reads those
 permissions *before* the owner clicks, lists them under the fingerprint, and
@@ -434,6 +435,17 @@ proposal branch is rejected rather than silently reduced to the action. A
 result exists, and a receipt with exactly one place becomes a route the runtime
 binds from its own evidence.
 
+The runtime reads recent context and its action candidates in one transaction,
+so cognition cannot receive the numbers from one list and references from
+another. Choice references bind the full list-and-item digest, command
+references bind the full entry digest (including arguments, working directory,
+label, mutation flag and budget), and continuations name their own immutable
+identifier. Replacing a list or editing a task invalidates an earlier offer;
+the old positional and task-name aliases do not resolve. Same-named tasks with
+different commands on different computers remain distinct. These checks bind
+what was offered, but a recommendation digest is still not a provider media
+identifier or evidence that its trailer played.
+
 A dispatched command reaches its device as an `act` frame carrying the bound
 operation, the key the device deduplicates on and how long it has to say what
 happened; the device answers with the same transport receipt a card does, which
@@ -449,6 +461,15 @@ command stays alive on its own unsequenced `progress` messages, which consume
 no ordered slot, claim nothing and renew both its deadline and the turn's
 worker lease, so a fifteen-minute task no longer needs the assistant to invent
 an effect timer.
+
+Reports also match the bound operation: the command entry, playback provider
+and recommendation item, explicit application identity, and document version.
+A versioned open requires the matching document digest before completion;
+missing version evidence may report an unknown outcome. This validates the
+device's statement, not that the destination actually rendered the document.
+Current playback operations carry a title query and recommendation digest, so
+neither Cosmos nor the shared client accepts a completed playback report for
+them. Exact provider media identity and observed playback remain required.
 
 Visibility is required to begin an effect and never to continue one. A command
 is eligible while the installation's signed connection is current, whatever its
@@ -658,17 +679,18 @@ policy — the same object Center holds — which the runtime now delivers rathe
 than a person writing it on each device. The phone opens an allowed `https` link and starts navigation
 to a place the runtime bound; opening Maps is not navigating, so a launch it
 cannot observe further is `unknown` with the launch recorded, never a
-completion. The television plays through an owner-approved provider and claims
-playback only from a media session whose own title contains the bound one, which
-needs the owner's notification-listener grant in the television's settings;
-without that grant every play is honestly `unknown`. Its confirmation sheet
+completion. The television asks an owner-approved provider to play from a title
+search. It observes only one unambiguous session belonging to the exact resolved
+application and never substitutes another player's session. A matching title
+is diagnostic only and the outcome remains `unknown`: titles cannot distinguish
+the film, its trailer, a sequel, commentary or an advertisement. Its confirmation sheet
 answers only to a deliberate tap, Back dismisses it and answers nothing, and the
 task card carries the state word, one sentence, the elapsed time and Cancel
 task, while Close only hides it and the command carries on. A television never
-explains a refusal at all. The macOS and Linux clients still have to verify a
-command against the delivered policy, carry it out without
-building anything from strings, obtain the actor attestation and report only
-what they observed. Center's Activity page reads the new ledger kinds — a requested and
+explains a refusal at all. macOS implements approved opens and fixed tasks;
+Linux implements approved opens. Both check the delivered policy, and physical
+execution, permissions and destination rendering still need acceptance on the
+owner's machines. Center's Activity page reads the new ledger kinds — a requested and
 resolved ceremony with the dwell time it took, a device's own report, a revoked
 effect, an exhausted action budget and a preempted turn — and says each in one
 plain sentence in the turn's Why disclosure; a kind it has never seen is still

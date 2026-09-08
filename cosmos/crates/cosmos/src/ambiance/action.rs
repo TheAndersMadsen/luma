@@ -726,9 +726,63 @@ impl Evidence {
         match self {
             Self::Open { opened, .. } => *opened,
             Self::Route { navigating, .. } => *navigating,
-            Self::Playback { state, .. } => *state == PlaybackState::Playing,
+            // Play currently binds a search query and recommendation digest,
+            // not a provider media identity. Even a playing session cannot
+            // prove that the requested item or trailer is playing.
+            Self::Playback { .. } => false,
             Self::Command { .. } => true,
             Self::Declined { .. } => false,
+        }
+    }
+
+    /// A valid report must describe the operation this action actually bound.
+    /// Channel equality alone cannot distinguish two commands or documents.
+    pub fn matches_operation(&self, operation: &Operation, outcome: ReportOutcome) -> bool {
+        match (self, operation) {
+            (
+                Self::Open {
+                    resolved_app,
+                    document_digest,
+                    ..
+                },
+                Operation::Open {
+                    locator, version, ..
+                },
+            ) => {
+                let document_matches = match document_digest {
+                    Some(digest) => version.as_ref().is_none_or(|expected| expected == digest),
+                    None => outcome != ReportOutcome::Completed || version.is_none(),
+                };
+                let app_matches = match locator {
+                    Locator::App { id } => match resolved_app {
+                        Some(app) => app == id,
+                        None => outcome != ReportOutcome::Completed,
+                    },
+                    _ => true,
+                };
+                document_matches && app_matches
+            }
+            (Self::Route { .. }, Operation::Route { .. }) => true,
+            (
+                Self::Playback {
+                    provider,
+                    item_digest,
+                    ..
+                },
+                Operation::Play {
+                    providers,
+                    item_digest: expected,
+                    ..
+                },
+            ) => providers.contains(provider) && item_digest == expected,
+            (
+                Self::Command { entry_id, .. },
+                Operation::Run {
+                    entry_id: expected, ..
+                },
+            ) => entry_id == expected,
+            (Self::Declined { .. }, _) => true,
+            _ => false,
         }
     }
 
@@ -788,6 +842,9 @@ impl ActionBudget {
         self.prune(now);
     }
 }
+
+/// Enough for a kind prefix and a full SHA-256 content identity.
+pub const MAX_REFERENCE_BYTES: usize = 72;
 
 /// Which runtime-minted candidate a bound action came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -1575,11 +1632,15 @@ impl super::RuntimeState {
             match context.kind {
                 super::RecentContextKind::Choices
                     if context.privacy <= PrivacyClass::SharedRoom
-                        && context.list_digest.is_some() =>
+                        && context.list_digest.as_deref().is_some_and(digest_text) =>
                 {
+                    let list_digest = context.list_digest.as_deref().unwrap();
                     for (index, title) in context.items.iter().enumerate() {
                         candidates.push(ActionCandidate {
-                            reference: format!("choice:{}", index + 1),
+                            reference: format!(
+                                "choice:{}",
+                                item_digest(list_digest, &(index + 1).to_string())
+                            ),
                             kind: CandidateKind::Choice,
                             label: title.clone(),
                             mutates: false,
@@ -1589,12 +1650,15 @@ impl super::RuntimeState {
                 super::RecentContextKind::Continuation
                     if personal && context.privacy <= turn.privacy =>
                 {
-                    candidates.push(ActionCandidate {
-                        reference: "cont:1".into(),
-                        kind: CandidateKind::Continuation,
-                        label: String::new(),
-                        mutates: false,
-                    });
+                    if let Some(continuation) = context.continuation.as_ref().filter(|c| c.valid())
+                    {
+                        candidates.push(ActionCandidate {
+                            reference: format!("cont:{}", continuation.id),
+                            kind: CandidateKind::Continuation,
+                            label: String::new(),
+                            mutates: false,
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -1626,7 +1690,7 @@ impl super::RuntimeState {
                         )
                     });
                 for entry in entries.iter().flat_map(|policy| policy.entries.iter()) {
-                    let reference = format!("cmd:{}", entry.id);
+                    let reference = format!("cmd:{}", entry.entry_digest());
                     if candidates.iter().any(|c| c.reference == reference) {
                         continue;
                     }
@@ -1696,25 +1760,18 @@ impl super::RuntimeState {
         }
         let operation = match candidate.kind {
             CandidateKind::Choice => {
-                let context = self
-                    .recent_context
-                    .iter()
-                    .find(|c| c.kind == super::RecentContextKind::Choices && now < c.expires_at_ms)
-                    .ok_or(super::RuntimeError::Stale)?;
-                let list_digest = context
-                    .list_digest
-                    .as_deref()
-                    .ok_or(super::RuntimeError::Stale)?;
-                let item_id = reference
-                    .split_once(':')
-                    .map(|(_, id)| id)
+                // Membership in the current offer above binds this digest to
+                // one item of the exact acknowledged list. A replaced list
+                // cannot reinterpret an earlier ordinal such as choice:2.
+                let item_digest = reference
+                    .strip_prefix("choice:")
                     .ok_or(super::RuntimeError::InvalidRequest)?;
                 let providers = self.play_providers(records, turn, now);
                 Operation::Play {
                     title: candidate.label.clone(),
                     query: candidate.label.clone(),
                     providers,
-                    item_digest: item_digest(list_digest, item_id),
+                    item_digest: item_digest.to_owned(),
                 }
             }
             CandidateKind::Document => {
@@ -1735,7 +1792,9 @@ impl super::RuntimeState {
                     .recent_context
                     .iter()
                     .filter(|c| now < c.expires_at_ms)
-                    .find_map(|c| c.continuation.clone())
+                    .filter_map(|c| c.continuation.as_ref())
+                    .find(|c| reference == format!("cont:{}", c.id))
+                    .cloned()
                     .ok_or(super::RuntimeError::Stale)?;
                 Operation::Open {
                     locator: continuation.document.locator,
@@ -1745,9 +1804,8 @@ impl super::RuntimeState {
                 }
             }
             CandidateKind::Command => {
-                let entry_id = reference
-                    .split_once(':')
-                    .map(|(_, id)| id)
+                let expected_digest = reference
+                    .strip_prefix("cmd:")
                     .ok_or(super::RuntimeError::InvalidRequest)?;
                 let entry = records
                     .values()
@@ -1757,7 +1815,12 @@ impl super::RuntimeState {
                             .ok()
                             .flatten()
                             .and_then(|approval| approval.policy)
-                            .and_then(|policy| policy.entry(entry_id).cloned())
+                            .and_then(|policy| {
+                                policy
+                                    .entries
+                                    .into_iter()
+                                    .find(|entry| entry.entry_digest() == expected_digest)
+                            })
                     })
                     .next()
                     .ok_or(super::RuntimeError::Stale)?;
@@ -2967,9 +3030,9 @@ mod tests {
             offer
                 .candidates
                 .iter()
-                .map(|c| c.reference.as_str())
+                .map(|c| c.reference.clone())
                 .collect::<Vec<_>>(),
-            ["cmd:project-tests"]
+            [format!("cmd:{}", entry().entry_digest())]
         );
         assert_eq!(offer.operations, vec![OperationKind::Run]);
         // Raise the turn and attach the origin's own screen text: the command
@@ -2992,7 +3055,7 @@ mod tests {
                 RuntimeOperation::BindDeviceAction {
                     fence,
                     operation: OperationKind::Run,
-                    reference: "cmd:project-tests".into(),
+                    reference: format!("cmd:{}", entry().entry_digest()),
                 },
                 NOW + 2
             ),
@@ -3108,7 +3171,7 @@ mod tests {
             RuntimeOperation::BindDeviceAction {
                 fence,
                 operation: OperationKind::Run,
-                reference: "cmd:project-tests".into(),
+                reference: format!("cmd:{}", entry().entry_digest()),
             },
             NOW + 2,
         );
@@ -3126,7 +3189,147 @@ mod tests {
             .expect("bound event");
         assert_eq!(bound.0, CandidateKind::Command);
         assert_eq!(bound.1.as_deref(), Some(entry().entry_digest().as_str()));
-        assert_eq!(bound.2, reference_digest("cmd:project-tests"));
+        assert_eq!(
+            bound.2,
+            reference_digest(&format!("cmd:{}", entry().entry_digest()))
+        );
+    }
+
+    #[test]
+    fn ambiance_action_candidates_reject_command_edits_after_the_context_offer() {
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_commands(mac, Some(command_policy())).unwrap();
+        let fence = fixture.begin();
+        let RuntimeResult::RecentContext { contexts, actions } = fixture
+            .apply(
+                RuntimeOperation::RecentContext {
+                    fence: fence.clone(),
+                },
+                NOW + 2,
+            )
+            .unwrap()
+        else {
+            panic!("context")
+        };
+        assert!(contexts.is_empty());
+        let original_reference = actions.candidates[0].reference.clone();
+        assert_eq!(
+            original_reference,
+            format!("cmd:{}", entry().entry_digest())
+        );
+
+        // The owner keeps the same task ID and label but changes what it runs
+        // while the model is deciding. That is a new candidate, not a new
+        // meaning for the identifier the earlier model call received.
+        let mut revised = command_policy();
+        revised.entries[0].argv.push("--verbose".into());
+        let revised_entry = revised.entries[0].clone();
+        fixture.set_commands(mac, Some(revised)).unwrap();
+        for reference in [original_reference, "cmd:project-tests".into()] {
+            assert!(matches!(
+                fixture.apply(
+                    RuntimeOperation::BindDeviceAction {
+                        fence: fence.clone(),
+                        operation: OperationKind::Run,
+                        reference,
+                    },
+                    NOW + 3
+                ),
+                Err(RuntimeError::InvalidRequest)
+            ));
+        }
+        assert!(fixture.state.actions.is_empty());
+        let RuntimeResult::RecentContext { actions, .. } = fixture
+            .apply(
+                RuntimeOperation::RecentContext {
+                    fence: fence.clone(),
+                },
+                NOW + 4,
+            )
+            .unwrap()
+        else {
+            panic!("context")
+        };
+        let reference = actions.candidates[0].reference.clone();
+        // The model's actual schema accepts the full digest, not a shortened
+        // alias that could resolve differently by the time it is used.
+        let proposal: crate::ambiance::analysis::Proposal =
+            serde_json::from_value(serde_json::json!({
+                "device_action": { "operation": "run", "reference": reference },
+                "privacy": "shared_room"
+            }))
+            .unwrap();
+        let crate::ambiance::analysis::Proposal::Action { device_action, .. } = proposal else {
+            panic!("action proposal")
+        };
+        let reference = device_action.reference;
+        let RuntimeResult::DeviceActionBound(Operation::Run { entry_digest, .. }) = fixture
+            .apply(
+                RuntimeOperation::BindDeviceAction {
+                    fence,
+                    operation: OperationKind::Run,
+                    reference,
+                },
+                NOW + 4,
+            )
+            .unwrap()
+        else {
+            panic!("bound command")
+        };
+        assert_eq!(entry_digest, revised_entry.entry_digest());
+    }
+
+    #[test]
+    fn ambiance_action_candidates_distinguish_same_named_tasks_on_different_devices() {
+        let (mut fixture, ids) = Fixture::new(&["macos", "macos"]);
+        let mut second = command_policy();
+        second.entries[0].cwd = "/Users/owner/another-project".into();
+        let expected = second.entries[0].entry_digest();
+        fixture
+            .set_commands(ids[0], Some(command_policy()))
+            .unwrap();
+        fixture.set_commands(ids[1], Some(second)).unwrap();
+        let fence = fixture.begin();
+        let RuntimeResult::RecentContext { actions, .. } = fixture
+            .apply(
+                RuntimeOperation::RecentContext {
+                    fence: fence.clone(),
+                },
+                NOW + 2,
+            )
+            .unwrap()
+        else {
+            panic!("context")
+        };
+        assert_eq!(actions.candidates.len(), 2);
+        assert_ne!(
+            actions.candidates[0].reference,
+            actions.candidates[1].reference
+        );
+        let RuntimeResult::DeviceActionBound(operation) = fixture
+            .apply(
+                RuntimeOperation::BindDeviceAction {
+                    fence,
+                    operation: OperationKind::Run,
+                    reference: format!("cmd:{expected}"),
+                },
+                NOW + 2,
+            )
+            .unwrap()
+        else {
+            panic!("command")
+        };
+        assert!(
+            !fixture
+                .state
+                .action_permits(&fixture.records, ids[0], &operation)
+        );
+        assert!(
+            fixture
+                .state
+                .action_permits(&fixture.records, ids[1], &operation)
+        );
     }
 
     /// "Number two" resolves against exactly the list the owner was shown, or
@@ -3162,14 +3365,53 @@ mod tests {
             continuation: None,
         });
         let turn = fixture.state.turn.clone().unwrap();
-        let offer = fixture.state.action_offer(&fixture.records, &turn, NOW + 2);
+        let (
+            RuntimeResult::RecentContext {
+                contexts,
+                actions: offer,
+            },
+            events,
+        ) = fixture
+            .state
+            .apply(
+                "U:owner",
+                &fixture.records,
+                RuntimeOperation::RecentContext {
+                    fence: turn.fence.clone(),
+                },
+                NOW + 2,
+            )
+            .unwrap()
+        else {
+            panic!("context")
+        };
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].list_digest.as_ref(), Some(&list_digest));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeData::RecentContextOffered { .. }))
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                RuntimeData::ActionCandidatesOffered { count: 2, .. }
+            ))
+        );
+        let reference = format!("choice:{}", item_digest(&list_digest, "2"));
         assert_eq!(
             offer
                 .candidates
                 .iter()
-                .map(|c| (c.reference.as_str(), c.label.as_str()))
+                .map(|c| (c.reference.clone(), c.label.as_str()))
                 .collect::<Vec<_>>(),
-            [("choice:1", "Arrival"), ("choice:2", "Heat")]
+            [
+                (
+                    format!("choice:{}", item_digest(&list_digest, "1")),
+                    "Arrival"
+                ),
+                (reference.clone(), "Heat")
+            ]
         );
         let (bound, kind) = fixture
             .state
@@ -3177,7 +3419,7 @@ mod tests {
                 &fixture.records,
                 &turn,
                 OperationKind::Play,
-                "choice:2",
+                &reference,
                 NOW + 2,
             )
             .unwrap();
@@ -3191,8 +3433,8 @@ mod tests {
                 item_digest: item_digest(&list_digest, "2"),
             }
         );
-        // A different list is a different digest, so the same reference binds
-        // a different item and never silently the old one.
+        // Replacing the list while cognition is outstanding must retire its
+        // old identifiers, not reinterpret "number two" against the new list.
         fixture.state.remember(crate::ambiance::RecentContext {
             kind: crate::ambiance::RecentContextKind::Choices,
             text: "Films for tonight".into(),
@@ -3204,13 +3446,29 @@ mod tests {
             list_digest: Some(format!("aaaa{}", "2".repeat(60))),
             continuation: None,
         });
+        for stale in [&reference, "choice:2"] {
+            assert!(matches!(
+                fixture.state.bind_device_action(
+                    &fixture.records,
+                    &turn,
+                    OperationKind::Play,
+                    stale,
+                    NOW + 2
+                ),
+                Err(RuntimeError::InvalidRequest)
+            ));
+        }
+        let next_reference = format!(
+            "choice:{}",
+            item_digest(&format!("aaaa{}", "2".repeat(60)), "2")
+        );
         let (rebound, _) = fixture
             .state
             .bind_device_action(
                 &fixture.records,
                 &turn,
                 OperationKind::Play,
-                "choice:2",
+                &next_reference,
                 NOW + 2,
             )
             .unwrap();
@@ -3221,7 +3479,7 @@ mod tests {
                 &fixture.records,
                 &turn,
                 OperationKind::Play,
-                "choice:2",
+                &next_reference,
                 NOW + crate::ambiance::RECENT_CONTEXT_MS + 1
             ),
             Err(RuntimeError::InvalidRequest)
@@ -3358,7 +3616,7 @@ mod tests {
                 &fixture.records,
                 &turn,
                 OperationKind::Play,
-                "choice:2",
+                &format!("choice:{}", item_digest(&"c".repeat(64), "2")),
                 NOW + 2,
             )
             .unwrap();
@@ -3770,6 +4028,116 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ambiance_playback_report_binds_the_provider_and_item_without_completing_a_search() {
+        let (mut fixture, ids) = Fixture::new(&["android_tv"]);
+        let tv = ids[0];
+        fixture.play_policy(tv);
+        let fence = fixture.begin();
+        let RuntimeResult::Proposed(action) =
+            fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        fixture.poll(tv, NOW + 3);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 4)
+            .unwrap();
+        let mut other_provider = playing();
+        if let Evidence::Playback { provider, .. } = &mut other_provider {
+            *provider = "netflix".into();
+        }
+        let mut other_item = playing();
+        if let Evidence::Playback { item_digest, .. } = &mut other_item {
+            *item_digest = "e".repeat(64);
+        }
+        for (outcome, evidence) in [
+            (ReportOutcome::Completed, playing()),
+            (ReportOutcome::Unknown, other_provider),
+            (ReportOutcome::Unknown, other_item),
+        ] {
+            assert_eq!(
+                fixture
+                    .report(&fixture.action(action.id), outcome, evidence, None, NOW + 5)
+                    .unwrap_err(),
+                RuntimeError::Stale
+            );
+            assert!(fixture.state.turn.as_ref().unwrap().outcome.is_none());
+            assert_eq!(fixture.action(action.id).status, ActionStatus::Acknowledged);
+        }
+        fixture
+            .report(
+                &fixture.action(action.id),
+                ReportOutcome::Unknown,
+                playing(),
+                None,
+                NOW + 6,
+            )
+            .unwrap();
+        assert_eq!(
+            fixture.action(action.id).status,
+            ActionStatus::OutcomeUnknown
+        );
+    }
+
+    #[test]
+    fn ambiance_document_report_requires_the_bound_version_before_completing() {
+        let (mut fixture, ids) = Fixture::new(&["macos"]);
+        let mac = ids[0];
+        fixture.set_actions(mac, Some(open_policy())).unwrap();
+        let fence = fixture.begin();
+        let version = "d".repeat(64);
+        let operation = Operation::Open {
+            locator: Locator::Https {
+                url: "https://github.com/owner/project".into(),
+            },
+            version: Some(version.clone()),
+            position: None,
+            label: "Public document".into(),
+        };
+        let RuntimeResult::Proposed(action) = fixture.propose(&fence, operation, NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        fixture.poll(mac, NOW + 3);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 4)
+            .unwrap();
+        for document_digest in [None, Some("e".repeat(64))] {
+            assert_eq!(
+                fixture
+                    .report(
+                        &fixture.action(action.id),
+                        ReportOutcome::Completed,
+                        Evidence::Open {
+                            resolved_app: None,
+                            opened: true,
+                            document_digest
+                        },
+                        None,
+                        NOW + 5
+                    )
+                    .unwrap_err(),
+                RuntimeError::Stale
+            );
+            assert!(fixture.state.turn.as_ref().unwrap().outcome.is_none());
+        }
+        fixture
+            .report(
+                &fixture.action(action.id),
+                ReportOutcome::Completed,
+                Evidence::Open {
+                    resolved_app: None,
+                    opened: true,
+                    document_digest: Some(version),
+                },
+                None,
+                NOW + 6,
+            )
+            .unwrap();
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Completed);
+    }
+
     /// Visibility is required to begin an effect and never to continue one:
     /// launching a player backgrounds Cosmos, and an effect must not be
     /// retired the instant it succeeds.
@@ -3808,13 +4176,16 @@ mod tests {
         fixture
             .report(
                 &fixture.action(action.id),
-                ReportOutcome::Completed,
+                ReportOutcome::Unknown,
                 playing(),
                 None,
                 NOW + 9,
             )
             .unwrap();
-        assert_eq!(fixture.action(action.id).status, ActionStatus::Completed);
+        assert_eq!(
+            fixture.action(action.id).status,
+            ActionStatus::OutcomeUnknown
+        );
     }
 
     /// An acknowledgment on an action channel means "bound and legal here" and
@@ -4107,7 +4478,7 @@ mod tests {
             fixture
                 .report(
                     &fixture.action(action.id),
-                    ReportOutcome::Completed,
+                    ReportOutcome::Unknown,
                     playing(),
                     None,
                     at,
@@ -4447,15 +4818,22 @@ mod tests {
     #[test]
     fn ambiance_every_non_completed_outcome_produces_the_byte_identical_shared_sentence() {
         let sentence = |outcome: Option<(ReportOutcome, Evidence)>| {
-            let (mut fixture, ids) = Fixture::new(&["android_tv", "macos"]);
-            let (tv, mac) = (ids[0], ids[1]);
-            fixture.play_policy(tv);
-            let _ = mac;
+            let (mut fixture, ids) = Fixture::new(&["macos"]);
+            let mac = ids[0];
+            fixture.set_actions(mac, Some(open_policy())).unwrap();
             let fence = fixture.begin_from_pin();
-            let proposed = fixture.propose(&fence, play("A trailer"), NOW + 2).unwrap();
+            let operation = Operation::Open {
+                locator: Locator::Https {
+                    url: "https://github.com/owner/project".into(),
+                },
+                version: None,
+                position: None,
+                label: "Project".into(),
+            };
+            let proposed = fixture.propose(&fence, operation, NOW + 2).unwrap();
             let action = match (proposed, outcome) {
                 (RuntimeResult::Proposed(action), Some((outcome, evidence))) => {
-                    fixture.poll(tv, NOW + 3);
+                    fixture.poll(mac, NOW + 3);
                     fixture
                         .acknowledge(&fixture.action(action.id), NOW + 4)
                         .unwrap();
@@ -4491,11 +4869,10 @@ mod tests {
         let declined = Evidence::Declined {
             reason: DeclineReason::NoHandler,
         };
-        let launched = Evidence::Playback {
-            provider: "youtube".into(),
-            state: PlaybackState::Launched,
-            position_ms: 0,
-            item_digest: format!("c1{}", "1".repeat(62)),
+        let launched = Evidence::Open {
+            resolved_app: None,
+            opened: false,
+            document_digest: None,
         };
         let handled = crate::ambiance::ACTION_HANDLED_EXPRESSION;
         for outcome in [
@@ -4508,7 +4885,14 @@ mod tests {
             assert_eq!(sentence(outcome), handled);
         }
         assert_eq!(
-            sentence(Some((ReportOutcome::Completed, playing()))),
+            sentence(Some((
+                ReportOutcome::Completed,
+                Evidence::Open {
+                    resolved_app: None,
+                    opened: true,
+                    document_digest: None,
+                }
+            ))),
             crate::ambiance::ACTION_COMPLETED_EXPRESSION
         );
         assert_ne!(handled, crate::ambiance::ACTION_COMPLETED_EXPRESSION);
@@ -4552,6 +4936,23 @@ mod tests {
             output_bytes: 18_422,
             truncated: true,
         };
+        let mut other_command = evidence.clone();
+        if let Evidence::Command { entry_id, .. } = &mut other_command {
+            *entry_id = "another-task".into();
+        }
+        assert_eq!(
+            fixture
+                .report(
+                    &fixture.action(action.id),
+                    ReportOutcome::Completed,
+                    other_command,
+                    Some("Output from another task".into()),
+                    NOW + 7
+                )
+                .unwrap_err(),
+            RuntimeError::Stale
+        );
+        assert!(fixture.state.turn.as_ref().unwrap().outcome.is_none());
         fixture
             .report(
                 &fixture.action(action.id),

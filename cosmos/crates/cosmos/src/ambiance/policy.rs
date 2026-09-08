@@ -1267,7 +1267,7 @@ mod tests {
         // and no term that a previous turn could have moved.
         assert!(first.iter().all(|c| c.preference == 0));
         assert!(first.iter().all(|c| c.score_version == SCORE_VERSION));
-        // Two identical screens differ in nothing the scorer can read, so the
+        // The two native desks and browser differ in nothing the scorer can read, so the
         // tie breaks on the identifier and the runner-up is the first
         // fallback — deterministic, and the same on every replay.
         let twin = Fleet {
@@ -1282,11 +1282,12 @@ mod tests {
             None,
             &all_present,
         );
-        let desks = [&twin.mac, &twin.pc];
-        assert_eq!(
-            decision.of(desks[0]).score(),
-            decision.of(desks[1]).score(),
-            "identical manifests score identically"
+        let desks = [&twin.mac, &twin.pc, &twin.display];
+        assert!(
+            desks
+                .iter()
+                .all(|desk| decision.of(desk).score() == decision.of(desks[0]).score()),
+            "all declared desk audiences score identically"
         );
         let mut expected: Vec<_> = desks.iter().map(|r| r.surface_id).collect();
         expected.sort();

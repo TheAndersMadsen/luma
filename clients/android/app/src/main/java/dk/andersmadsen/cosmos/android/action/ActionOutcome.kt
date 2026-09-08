@@ -41,9 +41,9 @@ object ActionOutcome {
     /**
      * Playback on the television. Without the notification-listener grant this
      * device cannot observe a media session at all, so the honest report is
-     * always `unknown` — a player launch is not playback. With the grant, the
-     * observed title must contain the bound one and the session must actually
-     * be playing: buffering is not playing.
+     * always `unknown` — a player launch is not playback. A title match in the
+     * exact provider's session is diagnostic only: this search-based command
+     * carries no media identity that could prove the selected item or trailer.
      */
     fun playback(
         provider: String,
@@ -55,16 +55,17 @@ object ActionOutcome {
     ): Report {
         if (!launched) return refused(DeclineReason.NO_HANDLER)
         val unknown = { state: PlaybackState, position: Long ->
-            Report(ReportOutcome.UNKNOWN, Evidence.Playback(provider, state, position, itemDigest))
+            Report(ReportOutcome.UNKNOWN, Evidence.Playback(provider, state, position.coerceIn(0, MAX_POSITION_MS), itemDigest))
         }
         if (!listenerGranted || observed == null) return unknown(PlaybackState.LAUNCHED, 0)
         if (!titleMatches(observed.title, boundTitle)) return unknown(PlaybackState.LAUNCHED, 0)
-        if (observed.state != PlaybackState.PLAYING) return unknown(observed.state, observed.positionMs.coerceAtLeast(0))
-        return Report(
-            ReportOutcome.COMPLETED,
-            Evidence.Playback(provider, PlaybackState.PLAYING, observed.positionMs.coerceIn(0, MAX_POSITION_MS), itemDigest),
-        )
+        return unknown(observed.state, observed.positionMs)
     }
+
+    /** Another app's session, or two from this app, cannot answer this command. */
+    fun <T> uniqueSession(sessions: List<T>, expectedPackage: String?, packageName: (T) -> String): T? =
+        if (expectedPackage.isNullOrEmpty()) null
+        else sessions.filter { packageName(it) == expectedPackage }.singleOrNull()
 
     /**
      * A revoke supersedes remaining work; it does not un-open an application.
@@ -96,8 +97,8 @@ object ActionOutcome {
      * Real player metadata reads "The Zone of Interest | Official Trailer
      * (2025)", so this is a normalised containment and never a digest
      * comparison: case, accents, punctuation and runs of whitespace are
-     * flattened on both sides, and the observed title must then contain the
-     * bound one. A different item does not match; a provider's own suffix does.
+     * flattened on both sides. This can also match sequels, commentary and
+     * advertisements, so it is never evidence of the requested media identity.
      */
     fun titleMatches(observed: String, bound: String): Boolean {
         val wanted = normalise(bound)
