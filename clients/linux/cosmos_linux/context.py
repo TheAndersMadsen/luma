@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 MAX_CONTEXT_BYTES = 8000  # COSMOS_SURFACE_MAX_CONTEXT_BYTES
@@ -34,6 +34,8 @@ class ScreenContext:
     text: str
     truncated: bool = False
     source: str = "selection"
+    document: Optional[bytes] = field(default=None, repr=False)
+    label: Optional[str] = None
 
 
 def bounded_text(value: str, maximum: int) -> tuple[str, bool]:

@@ -30,7 +30,7 @@ KNOWN_APPROVALS = (
 )
 PLATFORM = "linux"
 OPERATIONS = frozenset({
-    "prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "retry_pending", "cancel",
+    "prepare", "connect", "send_text", "send_text_to", "send_text_with_context", "send_text_with_document", "retry_pending", "cancel",
     "set_visible", "acknowledge", "acknowledge_speech", "acknowledge_task", "report", "progress", "grant",
     "display", "speech", "invitation", "status", "task", "confirmation", "policy", "disconnect",
     "heartbeat",

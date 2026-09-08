@@ -163,6 +163,16 @@ class OptionalSymbolTest(unittest.TestCase):
         self.assertEqual(len(handle.calls), before, "nothing reached the library")
         surface.destroy()
 
+    def test_a_document_never_falls_back_to_an_ordinary_context_call(self):
+        handle, library = self.load(("cosmos_surface_send_text_with_context",))
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        try:
+            self.assertEqual(surface.send_text_with_context("Explain", "Text file", "body", None, b'{}'),
+                             native.UNAVAILABLE)
+            self.assertEqual([name for name, _ in handle.calls], ["cosmos_surface_create"])
+        finally:
+            surface.destroy()
+
     def test_the_policy_document_is_copied_out_by_the_length_the_snapshot_named(self):
         handle, library = self.load(ACTION_SYMBOLS)
         surface = native.Surface(library, b'{"version":1}', NullBindings())
@@ -330,6 +340,7 @@ class NativeSmokeTest(unittest.TestCase):
                 time.sleep(0.05)
         finally:
             surface.destroy()
+
         self.assertTrue(first.journal)
         second = Bindings()
         second.journal = first.journal
@@ -355,6 +366,33 @@ class NativeSmokeTest(unittest.TestCase):
             self.assertIsNotNone(event)
             self.assertTrue(event.ok, event.error)
             self.assertEqual(event.descriptor.enrollment_id, str(enrollment_id))
+        finally:
+            surface.destroy()
+
+    def test_document_and_target_calls_report_the_exact_operation_the_controller_waits_for(self):
+        surface = native.Surface(self.library, self.config(uuid.uuid4()), Bindings())
+        try:
+            self.assertTrue(self.library.features.document)
+            document = json.dumps({"app": "Text file", "locator": {"scheme": "file", "rootId": "docs", "relative": "notes.txt"},
+                                   "label": "notes.txt", "version": "1" * 64}).encode()
+            for name, send in (
+                ("send_text_to", lambda: surface.send_text_to("Continue", "macos")),
+                ("send_text_with_context", lambda: surface.send_text_with_context("Explain", "Text file", "Saved text", None)),
+                ("send_text_with_document", lambda: surface.send_text_with_context("Explain", "Text file", "Saved text", "macos", document)),
+            ):
+                self.assertEqual(send(), native.OK)
+                deadline = time.monotonic() + 15
+                found = None
+                while time.monotonic() < deadline:
+                    raw = surface.poll()
+                    if raw is not None:
+                        event = decode(raw)
+                        if event.operation == name:
+                            found = event
+                            break
+                    time.sleep(0.01)
+                self.assertIsNotNone(found, name)
+                self.assertFalse(found.ok, "the fixture has not connected to any server")
         finally:
             surface.destroy()
 

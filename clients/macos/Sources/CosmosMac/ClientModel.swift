@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import Combine
 import Foundation
 
@@ -17,6 +18,9 @@ public final class ClientModel: ObservableObject {
     /// It travels with the context, is dropped with it, and the owner reads its
     /// name on the chip before they send anything.
     @Published public private(set) var document: DocumentHandle?
+    @Published public private(set) var fileAttaching = false
+    private var fileCapture: Task<Void, Never>?
+    private var contextGeneration: UInt64 = 0
     @Published public private(set) var snapshot: ClientSnapshot {
         didSet {
             // A reply that arrived on this Mac says more than the question does.
@@ -182,7 +186,7 @@ public final class ClientModel: ObservableObject {
     /// Everything a request needs except its text: one connected room, nothing in
     /// flight and no unresolved operation.
     public var canSubmit: Bool {
-        !busy && !snapshot.hasPending && !snapshot.pendingOpen && !snapshot.needsReconnect
+        !busy && !fileAttaching && !snapshot.hasPending && !snapshot.pendingOpen && !snapshot.needsReconnect
             && snapshot.phase == .connected
     }
     public var canSend: Bool { canSubmit && Self.validText(draft) }
@@ -509,6 +513,10 @@ public final class ClientModel: ObservableObject {
         // library call that carries it, the request is not sent at all.
         if destination.target != nil, !capabilities.targets { message = Self.targetsUnavailableMessage; return }
         if context != nil, !capabilities.context { message = Self.contextUnavailableMessage; return }
+        if document != nil, !capabilities.document {
+            message = "File attachments are not available in this build of Cosmos. The request was not sent."
+            return
+        }
         let request = TextRequest(text: draft, context: context, document: document,
                                   target: destination.target)
         let requested = destination
@@ -557,7 +565,7 @@ public final class ClientModel: ObservableObject {
     /// something the owner cannot see for themselves.
     nonisolated static func admittedMessage(context: ContextChip?, destination: Destination) -> String {
         if let context {
-            return "Cosmos has your request with your \(context.source.label.lowercased()) from \(context.app). The reply stays on this Mac."
+            return "Cosmos has your request with your \(context.source.label.lowercased()) from \(context.app)."
         }
         if destination.target != nil {
             return "Cosmos has your request, to continue on \(destination.label)."
@@ -581,16 +589,72 @@ public final class ClientModel: ObservableObject {
     /// explicit action reads another application, and only through Accessibility.
     public func useSelection() {
         guard capabilities.context else { message = Self.contextUnavailableMessage; return }
+        clearContext()
         attach(contextProvider.selectedText(), source: .selection)
     }
 
     /// Reads the pasteboard. Only this explicit action ever does.
     public func useClipboard() {
         guard capabilities.context else { message = Self.contextUnavailableMessage; return }
+        clearContext()
         attach(contextProvider.clipboardText(), source: .clipboard)
     }
 
-    public func clearContext() { context = nil; document = nil }
+    public func clearContext() {
+        contextGeneration &+= 1
+        fileCapture?.cancel()
+        fileCapture = nil
+        fileAttaching = false
+        context = nil
+        document = nil
+    }
+
+    public func chooseFile() {
+        guard capabilities.document, capabilities.context, snapshot.phase == .connected, policy?.roots.isEmpty == false else {
+            message = "Connect and allow a document folder for this Mac in Center first."
+            return
+        }
+        let picker = NSOpenPanel()
+        picker.title = "Attach a saved text file"
+        picker.canChooseDirectories = false
+        picker.allowsMultipleSelection = false
+        picker.begin { [weak self] response in
+            guard response == .OK, let url = picker.url else { return }
+            self?.attachFile(url)
+        }
+    }
+
+    /// The picker selects a file; a bounded worker reads it. A later capture,
+    /// cancellation or policy change cannot resurrect the result.
+    public func attachFile(_ url: URL) {
+        guard capabilities.document, capabilities.context, snapshot.phase == .connected, let policy else { return }
+        clearContext()
+        let generation = contextGeneration
+        let permission = policySeen
+        fileAttaching = true
+        message = "Reading the saved text file…"
+        fileCapture = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try SavedFileAttachment.read(url: url, policy: policy) }
+            }.value
+            guard let self, !Task.isCancelled, self.contextGeneration == generation else { return }
+            self.fileCapture = nil
+            self.fileAttaching = false
+            guard self.snapshot.phase == .connected, self.policySeen == permission, self.policy != nil else {
+                self.message = "The file permission changed. Attach it again."
+                return
+            }
+            switch result {
+            case .success(let attachment):
+                self.context = attachment.context
+                self.document = attachment.document
+                self.message = ""
+            case .failure(let error):
+                self.message = (error as? SavedFileAttachment.Failure)?.rawValue
+                    ?? SavedFileAttachment.Failure.unavailable.rawValue
+            }
+        }
+    }
 
     private func attach(_ capture: ContextCapture, source: ContextSource) {
         accessibilityBlocked = false
@@ -846,6 +910,7 @@ public final class ClientModel: ObservableObject {
         // This exact copy was already decided about; re-delivery changes nothing.
         guard policySeen != held else { return }
         closeDocument()
+        if context?.source == .file || fileAttaching { clearContext() }
         policySeen = held
         let binding = PolicyBinding(held)
         guard policyBinding == nil || policyBinding == binding else {
@@ -873,6 +938,7 @@ public final class ClientModel: ObservableObject {
     /// A refusal keeps what was seen, so the same bad copy is not read again; a
     /// connection that ends takes its copy and its binding with it.
     private func dropPolicy(refused: Bool) {
+        if context?.source == .file || fileAttaching { clearContext() }
         policy = nil
         closeDocument()
         // A named document rests on a root in that copy. Without the copy there

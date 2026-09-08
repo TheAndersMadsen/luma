@@ -598,8 +598,7 @@ public struct AssistantPanel: View {
         .padding(.bottom, 4)
     }
 
-    /// One small affordance for the two ways to attach text, so the ask bar
-    /// carries a control rather than two labels. Nothing is read until one of
+    /// One small affordance for the ways to attach text. Nothing is read until one of
     /// them is used, and ⇧⌘U still takes the selection without opening it.
     private var attachButton: some View {
         Button { attachShown.toggle() } label: {
@@ -621,6 +620,9 @@ public struct AssistantPanel: View {
             VStack(alignment: .leading, spacing: 2) {
                 attachChoice(Words.useSelection, symbol: "text.cursor") { model.useSelection() }
                 attachChoice(Words.useClipboard, symbol: "doc.on.clipboard") { model.useClipboard() }
+                if model.capabilities.document {
+                    attachChoice("Attach text file…", symbol: "doc") { model.chooseFile() }
+                }
             }
             .padding(6)
             .frame(width: 190)
@@ -653,7 +655,7 @@ public struct AssistantPanel: View {
         let document = model.document
         let named = document.map { Words.documentContinues($0.label, place: $0.position?.caption) }
         return HStack(spacing: 6) {
-            Image(systemName: chip.source == .selection ? "text.cursor" : "doc.on.clipboard")
+            Image(systemName: chip.source == .selection ? "text.cursor" : (chip.source == .file ? "doc" : "doc.on.clipboard"))
                 .font(.system(size: 10)).accessibilityHidden(true)
             Text(chip.caption + (document.map { Words.usingDocument($0.label) } ?? ""))
                 .font(.system(size: 11, weight: .medium))

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 // Quiet presence: the panel, the prompt, the destination and context chips.
 // Enter sends, Esc closes the window without touching the task, "Cancel task"
@@ -11,6 +12,30 @@ Item {
     property string sentText: ""
     property bool choicesShown: s.display != null && s.display.kind === "choices"
     property bool ceremonyShown: s.ceremony != null
+
+    FileDialog {
+        id: fileAttachment
+        objectName: "fileAttachment"
+        title: "Attach a saved text file"
+        fileMode: FileDialog.OpenFile
+        onAccepted: backend.attachFile(selectedFile.toString())
+    }
+    Menu {
+        id: attachments
+        MenuItem {
+            text: S.USE_SELECTION
+            visible: s.hasScreenContext
+            height: visible ? implicitHeight : 0
+            onTriggered: backend.useSelection()
+        }
+        MenuItem {
+            objectName: "attachFileChoice"
+            text: "Attach text file…"
+            visible: s.features.document
+            height: visible ? implicitHeight : 0
+            onTriggered: fileAttachment.open()
+        }
+    }
 
     function focusPrimary() { prompt.forceActiveFocus(); prompt.selectAll() }
 
@@ -80,10 +105,11 @@ Item {
             spacing: 8
             DestinationPicker { visible: s.features.targets; enabled: s.canSend }
             Chip {
-                visible: s.hasScreenContext && s.context == null
-                text: s.contextBusy ? S.CAPTURING_SELECTION : S.USE_SELECTION
+                objectName: "attachText"
+                visible: (s.features.document || s.hasScreenContext) && s.context == null
+                text: s.contextBusy ? "Attaching…" : "Attach"
                 enabled: s.canSend && !s.contextBusy
-                onClicked: backend.useSelection()
+                onClicked: attachments.popup()
             }
             Chip {
                 visible: s.context != null

@@ -214,9 +214,13 @@ class FakeSurface:
             return UNAVAILABLE
         return self._command("send_text_to", text, target)
 
-    def send_text_with_context(self, text: str, app: str, context: str, target) -> int:
+    def send_text_with_context(self, text: str, app: str, context: str, target, document=None) -> int:
         if not self.features.context:
             return UNAVAILABLE
+        if document is not None:
+            if not self.features.document:
+                return UNAVAILABLE
+            return self._command("send_text_with_document", text, app, context, target, document)
         return self._command("send_text_with_context", text, app, context, target)
 
     def retry_pending(self) -> int:

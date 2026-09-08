@@ -42,6 +42,14 @@ PYTHON = render_python()
 
 @unittest.skipUnless(PYTHON is not None, "no Python with PySide6 (set COSMOS_LINUX_PYTHON)")
 class OffscreenRenderTest(unittest.TestCase):
+    def test_file_picker_callback_attaches_literal_filename_and_sends_original_bytes(self):
+        environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software",
+                       "QT_QUICK_CONTROLS_STYLE": "Basic", "PYTHONDONTWRITEBYTECODE": "1"}
+        result = subprocess.run(
+            [str(PYTHON), "-B", "-c", "from tests.test_render import attachment_scenario; attachment_scenario()"],
+            cwd=CLIENT, env=environment, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_a_real_document_frame_completes_the_matching_task_once(self):
         environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software",
                        "QT_QUICK_CONTROLS_STYLE": "Basic", "PYTHONDONTWRITEBYTECODE": "1"}
@@ -87,6 +95,86 @@ class OffscreenRenderTest(unittest.TestCase):
             noise = self.render("connected", Path(temporary) / "light.png",
                                 {"COSMOS_THEME": "light", "COSMOS_REDUCED_MOTION": "1"})
             self.assertEqual(noise, "")
+
+
+def attachment_scenario():
+    """Exercise the actual dialog signal, queued file read, chip and request."""
+    import hashlib
+    import json
+    from PySide6.QtCore import QMetaObject, QObject, QTimer, QUrl
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtQml import QQmlApplicationEngine
+    from cosmos_linux import strings as S
+    from cosmos_linux.app import PACKAGE_DIR, make_backend_class, theme_tokens
+    from tests.test_attachment import AttachmentControllerTest
+    from tests.fixtures import policy_document
+
+    application = QGuiApplication([])
+    harness = AttachmentControllerTest()
+    harness.setUp()
+    try:
+        file = harness.root / "<b>draft.txt"
+        body = b"Original saved version\r\n"
+        file.write_bytes(body)
+        harness.connected()
+        harness.deliver(policy_document(roots=({'id': 'docs', 'label': 'Documents', 'path': str(harness.root)},)))
+        backend = make_backend_class()(harness.controller, "Synthetic test", True)
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty("backend", backend)
+        engine.rootContext().setContextProperty("theme", theme_tokens())
+        engine.rootContext().setContextProperty("S", S.as_map())
+        engine.load(QUrl.fromLocalFile(str(PACKAGE_DIR / "qml" / "Main.qml")))
+        window = engine.rootObjects()[0]
+        choice = window.findChild(QObject, "attachFileChoice")
+        picker = window.findChild(QObject, "fileAttachment")
+        attach = window.findChild(QObject, "attachText")
+        assert attach is not None and attach.property("enabled")
+        assert QMetaObject.invokeMethod(attach, "clicked")
+        application.processEvents()
+        assert choice is not None and choice.property("visible"), "the file choice is visible when Attach opens"
+        assert picker is not None and picker.setProperty("selectedFile", QUrl.fromLocalFile(str(file)))
+        assert QMetaObject.invokeMethod(picker, "accepted")
+        assert harness.state.context_busy and not harness.state.can_send
+        errors = []
+        finished = False
+
+        def check():
+            nonlocal finished
+            try:
+                if harness.state.context_busy:
+                    return
+                context = harness.state.context
+                assert context is not None, harness.state.message
+                assert not harness.commands("send_text_with_document"), "selection uploads nothing"
+                label = "Using: <b>draft.txt"
+                chips = [item for item in window.findChildren(QObject, "chipLabel") if item.property("text") == label]
+                assert len(chips) == 1
+                assert engine.newQObject(chips[0]).property("textFormat").toInt() == 0, "filenames must be literal text"
+                file.write_text("A newer version")
+                backend.setTarget("macos")
+                assert backend.send("Explain this on my Mac")
+                request = harness.commands("send_text_with_document")[-1]
+                assert request[3].encode() == body and request[4] == "macos"
+                assert json.loads(request[5])["version"] == hashlib.sha256(body).hexdigest()
+                finished = True
+                application.quit()
+            except Exception as error:
+                errors.append(error)
+                application.quit()
+
+        timer = QTimer()
+        timer.timeout.connect(check)
+        timer.start(30)
+        QTimer.singleShot(5000, application.quit)
+        application.exec()
+        timer.stop()
+        window.hide()
+        if errors:
+            raise errors[0]
+        assert finished, "the picker callback never completed the attachment"
+    finally:
+        harness.controller.shutdown()
+        harness.doCleanups()
 
 
 def document_scenario(transferred=False):

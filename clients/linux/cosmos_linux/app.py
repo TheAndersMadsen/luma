@@ -25,6 +25,7 @@ from typing import Callable, Optional
 from . import actions
 from . import document
 from . import context as screen_context
+from .attachment import AttachmentError, read_file
 from . import strings as S
 from . import viewstate
 from .controller import CONNECTED_MESSAGE, Controller, Failure, Phase, State
@@ -424,13 +425,14 @@ def make_backend_class():
                 "sentText": state.sent_text,
                 "sending": state.sending,
                 "turnOpen": state.turn_open,
-                "features": {"targets": state.features.targets, "context": state.features.context},
+                "features": {"targets": state.features.targets, "context": state.features.context,
+                             "document": state.features.document and state.features.context},
                 "target": state.target or "",
                 "destinationChip": destination.chip,
                 "destinations": [{"target": entry.target or "", "name": entry.name, "online": entry.online,
                                   "current": entry.target == state.target}
                                  for entry in viewstate.destinations()],
-                "context": ({"label": viewstate.context_label(context.app), "app": context.app,
+                "context": ({"label": "Using: " + context.label if context.source == "file" and context.label else viewstate.context_label(context.app), "app": context.app,
                              "truncated": context.truncated} if context is not None else None),
                 "contextBusy": state.context_busy,
                 "hasScreenContext": self._has_screen_context and state.features.context,
@@ -568,6 +570,7 @@ def make_backend_class():
                 return False
             capture = self._capture
             emit = self._captured.emit
+            token = controller.capture_token
 
             def work() -> None:
                 try:
@@ -575,16 +578,41 @@ def make_backend_class():
                 except Exception:
                     log.exception("selection capture failed")
                     result = None
-                emit(result)
+                emit((token, result, None))
 
             threading.Thread(target=work, name="cosmos-selection", daemon=True).start()
+            return True
+
+        @Slot(str, result=bool)
+        def attachFile(self, url: str) -> bool:
+            from PySide6.QtCore import QUrl
+            chosen = QUrl(url)
+            controller = self._live()
+            if (not chosen.isLocalFile() or controller is None
+                    or not controller.begin_context_capture(document=True)):
+                return False
+            token, policy, path = controller.capture_token, controller.policy, chosen.toLocalFile()
+            emit = self._captured.emit
+
+            def work() -> None:
+                try:
+                    result, error = read_file(path, policy), None
+                except AttachmentError as problem:
+                    result, error = None, str(problem)
+                except Exception:
+                    result, error = None, "The file could not be attached. Try another saved text file."
+                emit((token, result, error))
+
+            threading.Thread(target=work, name="cosmos-file", daemon=True).start()
             return True
 
         @Slot(object)
         def _on_captured(self, result: object) -> None:
             controller = self._live()
-            if controller is not None:
-                controller.context_captured(result if isinstance(result, screen_context.ScreenContext) else None)
+            if controller is not None and isinstance(result, tuple) and len(result) == 3:
+                token, context, error = result
+                controller.context_captured(context if isinstance(context, screen_context.ScreenContext) else None,
+                                            token, error)
 
         @Slot()
         def dropContext(self) -> None:

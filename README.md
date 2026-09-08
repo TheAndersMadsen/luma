@@ -888,13 +888,22 @@ packet. Source permission/root removal, destination policy or visibility loss,
 expiry, cancellation and supersession revoke retained views even after a render
 completed; the committed completed outcome remains in the history.
 
-This is a bounded transfer implementation, not completed Mac-to-Omarchy product
-acceptance. The existing "Use selection" capture is the available source path;
-there is no full-file picker/upload or unsaved-buffer adapter. Current profiles
-still lack physically eligible private output and refuse private screen text
-before cognition. Those admission gates remain unchanged. Larger documents,
-cross-turn explanation/task continuation and physical desktop acceptance are
-still required.
+On macOS and Linux, **Attach → Attach text file…** reads one explicitly selected
+saved UTF-8 file inside an owner-approved document folder. The client retains its
+complete original bytes and SHA-256 version locally until Send. Changing the
+file later cannot substitute another version into that request. The reader
+rejects empty, unsupported or oversized content, changes during the read, and
+files whose JSON encoding exceeds the existing snapshot bound. It never turns
+a large file into a partial attachment. Cancelling capture or losing/changing
+the delivered folder permission discards retained and pending file content.
+The existing selection and clipboard paths remain available on their supported
+platforms; a missing document transport cannot silently drop a file from Send.
+
+This is a bounded source-and-destination implementation. Current profiles still
+lack physically eligible private output and refuse private screen/file text
+before cognition, so the picker does not yet establish a working Mac-to-Omarchy
+explanation flow. Larger documents, unsaved application buffers, cross-turn
+explanation/task continuation and physical desktop acceptance remain required.
 
 The implementation plan keeps Cosmos as the runtime authority and thin clients
 responsible for local permissions, capture, rendering, and playback evidence:

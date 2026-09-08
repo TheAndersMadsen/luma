@@ -225,6 +225,57 @@ final class MockClientBridge: ClientBridge {
 
 final class ClientModelTests: XCTestCase {
     @MainActor
+    func testFileAttachmentKeepsTheSavedBytesAndCannotReturnAfterRemovalOrPolicyChange() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("notes.txt")
+        let original = "First line\r\nSecond line\r\n"
+        try Data(original.utf8).write(to: file)
+        let client = try MockClientBridge()
+        client.capabilities = ClientCapabilities(targets: true, context: true, document: true, actions: true)
+        let roots = [DeviceRoot(id: "docs", label: "Documents", path: root.path)]
+        client.deliver(try fixturePolicy(actions: fixtureActions(roots: roots)))
+        let model = await prepared(client)
+        model.connect()
+        await finished(model)
+        try await until { model.policy != nil }
+        model.attachFile(file)
+        XCTAssertTrue(model.fileAttaching)
+        XCTAssertFalse(model.canSubmit)
+        model.clearContext()
+        model.attachFile(file)
+        try await until { !model.fileAttaching }
+        XCTAssertEqual(model.context?.text, original)
+        XCTAssertEqual(model.document?.version, CanonicalJSON.hexDigest(Data(original.utf8)))
+        try Data("A later saved version".utf8).write(to: file)
+        XCTAssertEqual(model.context?.text, original, "the attachment does not reopen the path")
+        let expected = TextRequest(text: "Explain this on my desktop", context: model.context,
+                                   document: model.document, target: "linux")
+        model.destination = .linuxPC
+        model.draft = expected.text
+        XCTAssertTrue(client.sentRequests.isEmpty, "attaching reads locally without sending")
+        client.capabilities = ClientCapabilities(targets: true, context: true, actions: true)
+        model.send()
+        XCTAssertTrue(client.sentRequests.isEmpty, "missing document support cannot silently drop the file")
+        client.capabilities = ClientCapabilities(targets: true, context: true, document: true, actions: true)
+        model.send()
+        await finished(model)
+        XCTAssertEqual(client.sentRequests, [expected])
+        XCTAssertNil(model.context)
+        XCTAssertNil(model.document)
+        XCTAssertFalse(model.message.contains("stays on this Mac"))
+        model.attachFile(file)
+        try await until { !model.fileAttaching }
+        XCTAssertEqual(model.context?.text, "A later saved version")
+        client.deliver(try fixturePolicy(actions: fixtureActions(hosts: ["example.test"], revision: 3), actionsRevision: 3))
+        client.publish(ClientSnapshot(phase: .connected))
+        try await until { model.policy?.roots.isEmpty == true }
+        XCTAssertNil(model.context)
+        XCTAssertNil(model.document)
+    }
+
+    @MainActor
     private func finished(_ model: ClientModel, file: StaticString = #filePath, line: UInt = #line) async {
         if !model.busy { return }
         let done = expectation(description: "The current model operation finishes")

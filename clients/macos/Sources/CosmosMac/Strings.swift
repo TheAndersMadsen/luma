@@ -158,7 +158,7 @@ public enum Words {
     public static let useClipboard = "Use clipboard"
     public static func usingSelection(_ app: String) -> String { "Using: \(app) selection" }
     public static let usingClipboard = "Using: clipboard text"
-    public static let contextExplains = "Only this text is attached. The reply stays on this Mac."
+    public static let contextExplains = "Only this text is attached when you send. Cosmos checks where it may be used."
     /// What the chip adds once this Mac can say which document that screen is.
     /// The owner reads the name before they send anything; the name itself is
     /// never part of what Cosmos is asked.

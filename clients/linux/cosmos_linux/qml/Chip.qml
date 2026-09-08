@@ -28,7 +28,9 @@ AbstractButton {
     contentItem: Row {
         spacing: 6
         Text {
+            objectName: "chipLabel"
             text: chip.text
+            textFormat: Text.PlainText
             color: chip.enabled ? (chip.active ? theme.response : theme.primary) : theme.secondary
             font.pixelSize: 13
             height: chip.availableHeight

@@ -2,22 +2,21 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// Where attached text came from. Both are explicit owner actions; nothing is read
-/// from another application or the pasteboard without one.
+/// Where attached text came from. Every source requires an explicit owner action.
 public enum ContextSource: Equatable, Sendable {
-    case selection, clipboard
+    case selection, clipboard, file
 
     public var label: String {
         switch self {
         case .selection: "Selected text"
         case .clipboard: "Clipboard text"
+        case .file: "Saved text file"
         }
     }
 }
 
 /// Text the owner attached to the next request, bounded to what the wire accepts.
-/// Cosmos hears the application it came from; the reply carrying it stays private
-/// to this Mac.
+/// Cosmos receives its source and applies the origin and output privacy rules.
 public struct ContextChip: Equatable, Sendable {
     public static let maximumBytes = 8000
     public static let maximumAppBytes = 64
@@ -53,7 +52,11 @@ public struct ContextChip: Equatable, Sendable {
     /// What the chip says: "Using: Safari selection", "Using: clipboard text".
     /// It names where the text came from, never how much of it there is.
     public var caption: String {
-        source == .selection ? Words.usingSelection(app) : Words.usingClipboard
+        switch source {
+        case .selection: Words.usingSelection(app)
+        case .clipboard: Words.usingClipboard
+        case .file: "Using: saved text file"
+        }
     }
 
     /// Cuts to at most `limit` UTF-8 bytes without splitting a character.

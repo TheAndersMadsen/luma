@@ -1396,6 +1396,46 @@
       "anchor": "class ProcessTest",
       "scope": "Real host subprocess tests cover nonzero exits, bounded output, environment filtering, symlink containment, cancellation, time budget and children holding a pipe after their parent exits.",
       "limitation": "Host process evidence only. No enforced filesystem isolation, escaped process-group containment or physical Omarchy lifecycle acceptance."
+    },
+    {
+      "id": "linux-saved-file-source-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_attachment.py",
+      "anchor": "class FileCaptureTest",
+      "scope": "An explicitly selected file requires a delivered root permission and keeps complete original UTF-8 bytes, including CRLF, with their SHA-256 and logical root locator. Empty, unsupported, oversized, nonregular and outside-root files are refused.",
+      "limitation": "Local reader tests only; no private context admission, provider explanation or connected desktop transfer."
+    },
+    {
+      "id": "linux-saved-file-lifecycle-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_attachment.py",
+      "anchor": "class AttachmentControllerTest",
+      "scope": "Send waits for capture, preserves the document and chosen target, and settles on the exact document operation. Discarded captures, policy changes and disconnect cannot restore a pending attachment.",
+      "limitation": "Synthetic shared-client events; no real server admission or physical Omarchy acceptance."
+    },
+    {
+      "id": "linux-saved-file-picker-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_render.py",
+      "anchor": "def test_file_picker_callback_attaches_literal_filename_and_sends_original_bytes",
+      "scope": "The real QML menu and picker callback drive the queued file read and literal filename chip. No request is sent on attachment; Send carries the saved bytes and version even after the local path changes.",
+      "limitation": "PySide6 offscreen rendering and synthetic dialog acceptance/connection; no physical picker interaction or runtime privacy acceptance."
+    },
+    {
+      "id": "macos-saved-file-source-test-definition",
+      "kind": "test-definition",
+      "path": "clients/macos/Tests/CosmosMacTests/SavedFileAttachmentTests.swift",
+      "anchor": "final class SavedFileAttachmentTests",
+      "scope": "Complete saved UTF-8 text retains its original bytes and version under the most specific approved root. Missing permission, outside-root symlinks, nonregular files and unsupported/oversized content are refused.",
+      "limitation": "Local reader tests only; no unsaved editor state, native picker interaction or private context admission."
+    },
+    {
+      "id": "macos-saved-file-lifecycle-test-definition",
+      "kind": "test-definition",
+      "path": "clients/macos/Tests/CosmosMacTests/ClientModelTests.swift",
+      "anchor": "func testFileAttachmentKeepsTheSavedBytesAndCannotReturnAfterRemovalOrPolicyChange",
+      "scope": "File capture prevents Send until it settles, retains the saved bytes/version after a local edit, and sends the original context, handle and selected Linux target together. Missing document support sends nothing; changing permission clears the attachment.",
+      "limitation": "Synthetic bridge and real local file read; no runtime privacy acceptance, provider call or physical cross-device handoff."
     }
   ],
   "requirements": [
@@ -2085,6 +2125,11 @@
         "screen-context-room-test-definition",
         "screen-context-owner-api-test-definition",
         "native-document-transport-test-definition",
+        "linux-saved-file-source-test-definition",
+        "linux-saved-file-lifecycle-test-definition",
+        "linux-saved-file-picker-test-definition",
+        "macos-saved-file-source-test-definition",
+        "macos-saved-file-lifecycle-test-definition",
         "document-snapshot-source-test-definition",
         "document-snapshot-server-frame-test-definition",
         "document-snapshot-client-frame-test-definition",

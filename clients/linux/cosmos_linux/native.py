@@ -131,6 +131,7 @@ class Features:
     # action — so it refuses locally and says so.
     actions: bool = False
     commands: bool = False  # action calls plus bounded progress
+    document: bool = False  # complete context plus its document handle
 
 
 _BYTES = ctypes.POINTER(ctypes.c_uint8)
@@ -139,6 +140,8 @@ OPTIONAL_SIGNATURES = {
     "cosmos_surface_send_text_to": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
     "cosmos_surface_send_text_with_context": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t,
                                               _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
+    "cosmos_surface_send_text_with_document": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t,
+                                               _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
     "cosmos_surface_acknowledge_task": [ctypes.c_void_p],
     # A report names the action it is about: a task the runtime replaced
     # between this client's read and the worker's queue closes nothing.
@@ -187,6 +190,7 @@ class Library:
             context=self._bind_optional("cosmos_surface_send_text_with_context"),
             actions=all(actions),
             commands=self._bind_optional("cosmos_surface_progress") and all(actions),
+            document=self._bind_optional("cosmos_surface_send_text_with_document"),
         )
 
     def _bind_optional(self, name: str) -> bool:
@@ -364,11 +368,17 @@ class Surface:
         return self._library.cosmos_surface_send_text_to(handle, self._buffer(encoded), len(encoded),
                                                          target_buffer, len(destination))
 
-    def send_text_with_context(self, text: str, app: str, context: str, target: Optional[str]) -> int:
+    def send_text_with_context(self, text: str, app: str, context: str, target: Optional[str],
+                               document: Optional[bytes] = None) -> int:
         """Text with bounded screen text from this installation; needs the newer library call."""
         handle = self._require()
         if not self.features.context:
             return UNAVAILABLE
+        if document is not None:
+            if not self.features.document:
+                return UNAVAILABLE
+            if not isinstance(document, bytes) or not 0 < len(document) <= 3000:
+                return INVALID_ARGUMENT
         encoded = self._encoded(text, MAX_TEXT_BYTES)
         app_bytes = self._encoded(app, MAX_CONTEXT_APP_BYTES)
         context_bytes = self._encoded(context, MAX_CONTEXT_BYTES)
@@ -378,6 +388,11 @@ class Surface:
         if len(destination) > MAX_TARGET_BYTES:
             return INVALID_ARGUMENT
         target_buffer = self._buffer(destination) if destination else None
+        if document is not None:
+            return self._library.cosmos_surface_send_text_with_document(
+                handle, self._buffer(encoded), len(encoded), self._buffer(app_bytes), len(app_bytes),
+                self._buffer(context_bytes), len(context_bytes), self._buffer(document), len(document),
+                target_buffer, len(destination))
         return self._library.cosmos_surface_send_text_with_context(
             handle, self._buffer(encoded), len(encoded), self._buffer(app_bytes), len(app_bytes),
             self._buffer(context_bytes), len(context_bytes), target_buffer, len(destination))

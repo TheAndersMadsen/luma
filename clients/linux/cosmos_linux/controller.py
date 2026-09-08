@@ -213,7 +213,7 @@ class State:
 
     @property
     def can_send(self) -> bool:
-        return (not self.busy and not self.has_pending and not self.pending_open
+        return (not self.busy and not self.context_busy and not self.has_pending and not self.pending_open
                 and self.phase == Phase.CONNECTED)
 
     @property
@@ -335,6 +335,10 @@ class Controller:
         self._policy_binding: Optional[tuple] = None
         self._launcher = launcher if launcher is not None else actions.ProcessLauncher()
         self._runner = command_runner if command_runner is not None else CommandRunner()
+        self.capture_token = 0
+        self._capture_policy = None
+        self._capture_file = False
+        self._attached_policy = None
         self._command_action: Optional[str] = None
         self._run_confirmation: Optional[tuple] = None
         self._run_granted = False
@@ -491,19 +495,29 @@ class Controller:
         context = self._state.context if context is None else context
         features = self._state.features
         surface = self._surface
+        operation = "send_text"
         if context is not None:
             if not features.context:
                 self._update(failure=Failure.FEATURE_UNAVAILABLE, message=Failure.FEATURE_UNAVAILABLE.message)
                 return False
-            invoke = lambda: surface.send_text_with_context(text, context.app, context.text, target)
+            operation = "send_text_with_context"
+            if context.document is not None:
+                if not features.document or self._policy is None or self._attached_policy != self._policy_seen:
+                    self._update(message="The file attachment is no longer available. Attach it again.")
+                    return False
+                operation = "send_text_with_document"
+                invoke = lambda: surface.send_text_with_context(text, context.app, context.text, target, context.document)
+            else:
+                invoke = lambda: surface.send_text_with_context(text, context.app, context.text, target)
         elif target is not None:
             if not features.targets:
                 self._update(failure=Failure.FEATURE_UNAVAILABLE, message=Failure.FEATURE_UNAVAILABLE.message)
                 return False
             invoke = lambda: surface.send_text_to(text, target)
+            operation = "send_text_to"
         else:
             invoke = lambda: surface.send_text(text)
-        if not self._command("send_text", invoke, self._send_settled):
+        if not self._command(operation, invoke, self._send_settled):
             return False
         # Acknowledged at once: the Now line and "Working" appear before Cosmos answers.
         self._update(sent_text=text, sending=True, status=None, status_line=EMPTY_LINE, turn_open=False,
@@ -534,20 +548,35 @@ class Controller:
         self._update(target=target)
         return True
 
-    def begin_context_capture(self) -> bool:
+    def begin_context_capture(self, *, document: bool = False) -> bool:
         if self._state.context_busy or not self._state.features.context:
             return False
+        if document and (not self._state.features.document or self._state.phase != Phase.CONNECTED
+                         or self._policy is None or not self._policy.roots):
+            self._update(message="Connect and allow a document folder for this computer in Center first.")
+            return False
+        self.capture_token += 1
+        self._capture_file = document
+        self._capture_policy = self._policy_seen
         self._update(context_busy=True, message="")
         return True
 
-    def context_captured(self, context: Optional[ScreenContext]) -> None:
+    def context_captured(self, context: Optional[ScreenContext], token: Optional[int] = None,
+                         error: Optional[str] = None) -> None:
         """The host read the selection (or found none) off the UI thread."""
-        if not self._state.context_busy:
+        if not self._state.context_busy or token is not None and token != self.capture_token:
             return
+        if self._capture_file and (self._capture_policy != self._policy_seen or self._policy is None):
+            context, error = None, "The file permission changed. Attach it again."
+        self._attached_policy = self._capture_policy if context is not None and context.document is not None else None
+        self._capture_file = False
         self._update(context_busy=False, context=context,
-                     message=S.NO_SELECTION if context is None else self._state.message)
+                     message=error or (S.NO_SELECTION if context is None else self._state.message))
 
     def drop_context(self) -> None:
+        self.capture_token += 1
+        self._attached_policy = None
+        self._capture_file = False
         if self._state.context is not None or self._state.context_busy:
             self._update(context=None, context_busy=False)
 
@@ -642,6 +671,8 @@ class Controller:
             return
         self.close_document()
         self._stop_command()
+        if self._capture_file or self._state.context is not None and self._state.context.document is not None:
+            self.drop_context()
         self._policy_seen = seen
         binding = (record.surface_id, record.approval_revision)
         if self._policy_binding is not None and self._policy_binding != binding:
@@ -678,6 +709,8 @@ class Controller:
     def _drop_policy(self, refused: bool) -> None:
         """Holding nothing is an ordinary state: this computer then does nothing."""
         self._policy = None
+        if self._capture_file or self._state.context is not None and self._state.context.document is not None:
+            self.drop_context()
         self._stop_command()
         self.close_document()
         if not refused:
@@ -1069,9 +1102,9 @@ class Controller:
             log.warning("native %s refused with status %s", name, code)
             if code == QUEUE_FULL:
                 failure = Failure.BUSY
-            elif name == "send_text" and code == UNAVAILABLE:
+            elif name in ("send_text", "send_text_to", "send_text_with_context", "send_text_with_document") and code == UNAVAILABLE:
                 failure = Failure.FEATURE_UNAVAILABLE
-            elif name == "send_text" and code == INVALID_ARGUMENT:
+            elif name in ("send_text", "send_text_to", "send_text_with_context", "send_text_with_document") and code == INVALID_ARGUMENT:
                 failure = Failure.INVALID_TEXT
             else:
                 failure = Failure.CONNECTION_UNAVAILABLE
@@ -1182,7 +1215,7 @@ class Controller:
         has_pending = event.pending is not None or event.pending_open or storage_blocked
         if failure == Failure.CONNECTION_UNAVAILABLE and has_pending:
             failure = Failure.UNCERTAIN_REQUEST
-        if (failure == Failure.APPROVAL_REQUIRED and event.operation == "send_text" and event.connected
+        if (failure == Failure.APPROVAL_REQUIRED and event.operation in ("send_text", "send_text_with_context", "send_text_with_document") and event.connected
                 and previous.context is not None):
             # An approved installation refused only for its screen text: the permission is off.
             failure = Failure.SCREEN_CONTEXT_OFF
@@ -1247,7 +1280,7 @@ class Controller:
             return S.NOTICE_PREPARED
         if event.operation == "connect":
             return CONNECTED_MESSAGE
-        if event.operation == "send_text":
+        if event.operation in ("send_text", "send_text_to", "send_text_with_context", "send_text_with_document"):
             return S.NOTICE_SENT
         if event.operation == "cancel":
             return S.NOTICE_CANCELLED

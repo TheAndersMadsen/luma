@@ -359,7 +359,7 @@ final class RequestContextTests: XCTestCase {
         XCTAssertNil(model.context, "attached text belongs to the request it went with")
         XCTAssertEqual(model.draft, "")
         XCTAssertEqual(model.message,
-                       "Cosmos has your request with your selected text from Safari. The reply stays on this Mac.")
+                       "Cosmos has your request with your selected text from Safari.")
     }
 
     @MainActor
