@@ -130,6 +130,7 @@ class Features:
     # permission, and its `report` would be the older call that names no
     # action — so it refuses locally and says so.
     actions: bool = False
+    commands: bool = False  # action calls plus bounded progress
 
 
 _BYTES = ctypes.POINTER(ctypes.c_uint8)
@@ -143,6 +144,7 @@ OPTIONAL_SIGNATURES = {
     # between this client's read and the worker's queue closes nothing.
     "cosmos_surface_report": [ctypes.c_void_p, _BYTES, ctypes.c_size_t, _BYTES, ctypes.c_size_t],
     "cosmos_surface_grant": [ctypes.c_void_p, ctypes.c_int32, _BYTES, ctypes.c_size_t],
+    "cosmos_surface_progress": [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64],
     "cosmos_surface_device_policy": [ctypes.c_void_p, _BYTES, ctypes.c_size_t,
                                      ctypes.POINTER(ctypes.c_size_t)],
 }
@@ -184,6 +186,7 @@ class Library:
             targets=self._bind_optional("cosmos_surface_send_text_to"),
             context=self._bind_optional("cosmos_surface_send_text_with_context"),
             actions=all(actions),
+            commands=self._bind_optional("cosmos_surface_progress") and all(actions),
         )
 
     def _bind_optional(self, name: str) -> bool:
@@ -420,6 +423,14 @@ class Surface:
         encoded = bytes(report)
         return self._library.cosmos_surface_report(handle, self._buffer(action), len(action),
                                                    self._buffer(encoded), len(encoded))
+
+    def progress(self, sequence: int, elapsed_ms: int) -> int:
+        handle = self._require()
+        if not self.features.commands:
+            return UNAVAILABLE
+        if not 1 <= sequence <= 0xFFFFFFFF or not 0 <= elapsed_ms <= 900_000:
+            return INVALID_ARGUMENT
+        return self._library.cosmos_surface_progress(handle, sequence, elapsed_ms)
 
     def grant(self, granted: bool, attestation: Optional[str]) -> int:
         """Answer the ceremony. Granting needs the evidence the request asked

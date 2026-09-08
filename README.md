@@ -354,7 +354,8 @@ under the matching local policy and report what they observe. Compiled clients
 and synthetic reports do not establish physical device acceptance or support
 for every third-party application.
 
-The native approval profile is now `native-audience-v6` and it differs per
+The native approval profile is `native-audience-v6`, with `native-linux-tasks-v7`
+for Linux task execution, and it differs per
 platform, because what a device may be asked to do depends on what its
 operating system can honestly report, and because who its output reaches
 differs by what kind of screen it is. Each output channel carries an
@@ -363,8 +364,8 @@ phone, `room` for the Shield — and `native-voice-input-v5` joins the earlier
 rungs as a legacy profile that keeps everything it had and declares no
 audience until the owner reapproves. macOS declares `action.open`,
 `action.run` and a `confirm.tap` venue that can ask for device-owner
-authentication; the Omarchy PC declares `action.open` and a keyboard-first
-`confirm.tap`; the phone declares `action.open` and `action.route`; the Shield
+authentication; the Omarchy PC declares `action.open`, moderate-risk `action.run`
+and a keyboard-first `confirm.tap`; the phone declares `action.open` and `action.route`; the Shield
 declares `action.play` and no ceremony venue at all, because a television is
 bystander-perceivable by construction. Every current channel declares the
 shared-room ceiling; `approve-private-display-v1` saves a consent preference
@@ -385,7 +386,7 @@ place, and which media providers it may play; only the operations that
 installation's approved manifest declares are offered, and its class is capped
 by the actual shared-channel ceiling. A saved private-display preference cannot
 make a private action eligible. **Tasks on this device**
-(`approve-device-command-v1`, macOS only, route `…/device-commands`, 4096
+(`approve-device-command-v1`, macOS and newly approved Linux clients, route `…/device-commands`, 4096
 bytes, which the editor counts down as the list grows) is a list of at most
 eight commands the owner authored, each with a fixed `argv` array written one
 part per line — there is no shell string and no model-supplied parameter, at
@@ -511,6 +512,33 @@ same transaction that dispatches the command. Dismissing the panel answers
 nothing: the ceremony expires, which denies. A restart mints a fresh worker, so
 every unconsumed grant is void; unconfirmed is denied. A television declares no
 ceremony venue at all.
+
+Linux tasks require reapproval at `native-linux-tasks-v7`. Existing Linux
+`native-audience-v6` approvals keep their original manifest and gain no command
+permission; other platforms stay on their current profile. Center then offers
+**Tasks on this device** for that Linux installation. It accepts only entries
+the owner marks as changing no files. This is a classification for confirmation,
+not enforced read-only access: the process has the user's ordinary filesystem
+permissions. File-changing entries are refused at policy save because Linux
+does not yet supply device-owner authentication.
+
+The Linux shell independently checks the entry and argument digests, the exact
+task revision and deterministic confirmation text, the policy revision, visible
+foreground and expiry. It starts only after the local grant and the runtime's
+binding acknowledgment succeed. An absolute executable runs directly; a
+relative executable must resolve inside the approved working directory, including
+after symlink resolution. Commands inherit only HOME, LANG, TERM, NO_COLOR and a
+fixed PATH (`/usr/local/bin:/usr/bin:/bin`). Five-second progress messages keep
+the runtime informed without claiming completion. The worker supervises its
+process group, drains bounded output and stops it on cancellation, revocation,
+policy loss or its time budget; it cannot contain a process that escapes that
+group. The final report carries at most 6 KiB of sanitized output, exit evidence
+and truncation information. A nonzero exit is a completed invocation with that
+exit code, not a claim that its checks passed. Local completion is shown only
+after Cosmos accepts the report. Qt remains responsive while it runs or stops.
+These paths have deterministic controller tests and real host subprocess tests;
+the installed Omarchy client, compositor, lock/sleep and room connection still
+need physical acceptance.
 
 A shared-perceivable origin hears exactly two sentences and nothing else, and
 only once the report commits: **"Done on your approved device."** for a
@@ -699,7 +727,8 @@ answers only to a deliberate tap, Back dismisses it and answers nothing, and the
 task card carries the state word, one sentence, the elapsed time and Cancel
 task, while Close only hides it and the command carries on. A television never
 explains a refusal at all. macOS implements approved opens and fixed tasks;
-Linux implements approved opens. Both check the delivered policy, and physical
+Linux implements approved opens and fixed tasks marked as changing no files.
+Both check the delivered policy, and physical
 execution, permissions and destination rendering still need acceptance on the
 owner's machines. Center's Activity page reads the new ledger kinds — a requested and
 resolved ceremony with the dwell time it took, a device's own report, a revoked

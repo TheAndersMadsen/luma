@@ -165,6 +165,15 @@ pub fn pin_surface_id(principal: &str, device_id: &str) -> Uuid {
 }
 
 pub const NATIVE_APPROVAL: &str = "native-audience-v6";
+pub const NATIVE_LINUX_APPROVAL: &str = "native-linux-tasks-v7";
+
+pub fn current_native_approval(platform: &str) -> &'static str {
+    if platform == "linux" {
+        NATIVE_LINUX_APPROVAL
+    } else {
+        NATIVE_APPROVAL
+    }
+}
 pub const LEGACY_NATIVE_VOICE_APPROVAL: &str = "native-voice-input-v5";
 pub const LEGACY_NATIVE_ACTION_APPROVAL: &str = "native-device-action-v4";
 pub const LEGACY_NATIVE_SPEECH_APPROVAL: &str = "native-shared-speech-v3";
@@ -331,7 +340,7 @@ fn published_audience(platform: &str) -> &'static str {
 /// matching consumes, and until an installation is reapproved at this
 /// profile the runtime does not know what kind of screen it is and scores it
 /// at the floor of whatever shape is being routed.
-pub fn native_manifest(platform: &str) -> serde_json::Value {
+pub fn legacy_native_audience_manifest(platform: &str) -> serde_json::Value {
     let mut manifest = legacy_native_voice_manifest(platform);
     let audience = serde_json::json!(published_audience(platform));
     let Some(output) = manifest["capabilities"]["output"].as_object_mut() else {
@@ -342,6 +351,21 @@ pub fn native_manifest(platform: &str) -> serde_json::Value {
             continue;
         };
         channel.insert("audience".into(), audience.clone());
+    }
+    manifest
+}
+
+/// Linux adds only tasks its local confirmation can authorize. Existing
+/// audience approvals remain byte-identical and acquire no command channel.
+pub fn native_manifest(platform: &str) -> serde_json::Value {
+    let mut manifest = legacy_native_audience_manifest(platform);
+    if platform == "linux" {
+        manifest["capabilities"]["output"]["action.run"] = serde_json::json!({
+            "maxClass": "shared_room", "shared": true, "risk": "moderate",
+            "idempotent": false, "reportBudgetMs": 900000, "audience": "desk"
+        });
+        manifest["expression"]["action.run"] =
+            serde_json::json!(["thinking", "acknowledged", "degraded"]);
     }
     manifest
 }
@@ -369,6 +393,8 @@ pub fn native_approval(record: &Record) -> Option<&'static str> {
         return None;
     }
     if record.approved_manifest == native_manifest(platform) {
+        Some(current_native_approval(platform))
+    } else if record.approved_manifest == legacy_native_audience_manifest(platform) {
         Some(NATIVE_APPROVAL)
     } else if record.approved_manifest == legacy_native_voice_manifest(platform) {
         Some(LEGACY_NATIVE_VOICE_APPROVAL)
@@ -391,6 +417,7 @@ pub fn known_native_approval(approval: &str) -> bool {
     matches!(
         approval,
         NATIVE_APPROVAL
+            | NATIVE_LINUX_APPROVAL
             | LEGACY_NATIVE_VOICE_APPROVAL
             | LEGACY_NATIVE_ACTION_APPROVAL
             | LEGACY_NATIVE_SPEECH_APPROVAL
@@ -475,6 +502,8 @@ impl Surface {
             platform: platform.clone(),
             name: "Native device",
             approval: if self.manifest == native_manifest(platform) {
+                current_native_approval(platform)
+            } else if self.manifest == legacy_native_audience_manifest(platform) {
                 NATIVE_APPROVAL
             } else if self.manifest == legacy_native_voice_manifest(platform) {
                 LEGACY_NATIVE_VOICE_APPROVAL
@@ -1098,7 +1127,13 @@ mod tests {
         );
         assert_eq!(
             channels("linux"),
-            ["action.open", "audio.tts", "confirm.tap", "visual.card"]
+            [
+                "action.open",
+                "action.run",
+                "audio.tts",
+                "confirm.tap",
+                "visual.card"
+            ]
         );
         assert_eq!(
             channels("android"),
@@ -1176,7 +1211,10 @@ mod tests {
             )
             .unwrap()
             .0;
-            assert_eq!(native_approval(&record), Some(NATIVE_APPROVAL));
+            assert_eq!(
+                native_approval(&record),
+                Some(current_native_approval(platform))
+            );
             record.approved_manifest = legacy_native_speech_manifest();
             assert_eq!(
                 native_approval(&record),
@@ -1209,9 +1247,13 @@ mod tests {
         assert_eq!(contract["profile"], NATIVE_APPROVAL);
         assert_eq!(
             contract["descriptor"]["fields"]["approval"],
-            NATIVE_APPROVAL
+            "platformProfiles[platform]"
         );
         for platform in NATIVE_PLATFORMS {
+            assert_eq!(
+                contract["platformProfiles"][platform],
+                current_native_approval(platform)
+            );
             assert_eq!(
                 contract["deviceActions"]["manifests"][platform],
                 native_manifest(platform),
@@ -1257,7 +1299,7 @@ mod tests {
         );
         assert_eq!(
             contract["deviceActions"]["owner"]["approve-device-command-v1"]["platforms"],
-            serde_json::json!(["macos"])
+            serde_json::json!(["macos", "linux"])
         );
         // Every enumeration a client, Center or an owner reads is the exact
         // set this runtime mints. One drift refuses an action with no useful
@@ -1385,6 +1427,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn linux_task_profile_requires_reapproval_without_widening_prior_permissions() {
+        let id = Uuid::new_v4();
+        let mutation = Mutation::ApproveNative {
+            enrollment_id: Uuid::new_v4(),
+            public_key: NATIVE_KEY.into(),
+            platform: "linux".into(),
+            expected_revision: 0,
+        };
+        let mut record = transition(None, 0, id, &mutation, 100).unwrap().0;
+        record.approved_manifest = legacy_native_audience_manifest("linux");
+        assert_eq!(native_approval(&record), Some(NATIVE_APPROVAL));
+        assert!(native_declares(&record, "action.open"));
+        assert!(!native_declares(&record, "action.run"));
+        assert_eq!(
+            record.view(100).native_view().unwrap().approval,
+            NATIVE_APPROVAL
+        );
+        let Mutation::ApproveNative {
+            enrollment_id,
+            public_key,
+            platform,
+            ..
+        } = mutation
+        else {
+            unreachable!()
+        };
+        let revision = record.revision;
+        let upgraded = transition(
+            Some(&record),
+            1,
+            id,
+            &Mutation::ApproveNative {
+                enrollment_id,
+                public_key,
+                platform,
+                expected_revision: revision,
+            },
+            101,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(upgraded.revision, revision + 1);
+        assert_eq!(native_approval(&upgraded), Some(NATIVE_LINUX_APPROVAL));
+        assert_eq!(
+            upgraded.approved_manifest["capabilities"]["output"]["action.run"]["risk"],
+            "moderate"
+        );
+        assert!(!crate::ambiance::grant::venue_declares(
+            &upgraded,
+            crate::ambiance::action::Attestation::DeviceOwnerAuth
+        ));
+    }
+
     /// Every published platform declares the microphone, and every legacy
     /// profile declares none: an installation the owner has not reapproved
     /// cannot be spoken to, whatever else it may still do.
@@ -1405,7 +1501,10 @@ mod tests {
             )
             .unwrap()
             .0;
-            assert_eq!(native_approval(&record), Some(NATIVE_APPROVAL));
+            assert_eq!(
+                native_approval(&record),
+                Some(current_native_approval(platform))
+            );
             assert!(native_declares_input(&record, NATIVE_VOICE_INPUT));
             assert!(native_declares_input(&record, "text.public"));
             // The voice rung added one input channel and nothing else; this
@@ -1415,7 +1514,7 @@ mod tests {
                 legacy_native_voice_manifest(platform)["capabilities"]["output"],
                 legacy_native_action_manifest(platform)["capabilities"]["output"]
             );
-            let mut stripped = native_manifest(platform);
+            let mut stripped = legacy_native_audience_manifest(platform);
             for channel in stripped["capabilities"]["output"]
                 .as_object_mut()
                 .unwrap()

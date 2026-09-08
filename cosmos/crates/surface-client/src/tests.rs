@@ -455,6 +455,35 @@ fn descriptor_is_public_bounded_and_does_not_contain_connection_credentials() {
 }
 
 #[test]
+fn linux_descriptor_requests_tasks_without_changing_other_platforms() {
+    for platform in [
+        Platform::Macos,
+        Platform::Linux,
+        Platform::Android,
+        Platform::AndroidTv,
+    ] {
+        let mut config = config();
+        config.platform = platform;
+        let client = Client::new(
+            config,
+            Arc::new(TestSigner::new()),
+            Arc::new(TestStore::default()),
+        )
+        .unwrap();
+        assert_eq!(
+            client.descriptor().approval,
+            if platform == Platform::Linux {
+                "native-linux-tasks-v7"
+            } else {
+                "native-audience-v6"
+            }
+        );
+        assert!(wire::known_approval("native-audience-v6"));
+        assert!(wire::known_approval("native-linux-tasks-v7"));
+    }
+}
+
+#[test]
 fn invalid_or_unavailable_journal_never_becomes_a_fresh_installation() {
     let store = Arc::new(TestStore::default());
     *store.bytes.lock().unwrap() = Some(b"corrupt journal".to_vec());

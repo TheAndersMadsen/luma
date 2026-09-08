@@ -71,8 +71,7 @@ MAX_REVISION = 9_007_199_254_740_991
 # The privacy ladder, lowest first. ``maximumClass`` is a ceiling the owner
 # already spent; this copy can never raise it.
 CLASSES = ("public", "shared_room", "near_user", "private")
-# The only operation on this platform's manifest. A delivered document that
-# names any other section is one the runtime never sends here.
+# Navigation and playback are not implemented on this desktop.
 UNDECLARED_SECTIONS = ("route", "play")
 
 
@@ -196,6 +195,31 @@ class Root:
 
 
 @dataclass(frozen=True)
+class CommandEntry:
+    """Fixed owner-authored arguments. Neither a model nor output can amend them."""
+
+    id: str
+    label: str
+    argv: tuple
+    cwd: str
+    mutates: bool
+    budget_ms: int
+
+    @property
+    def argv_digest(self) -> str:
+        return _digest(["cosmos.device-command.argv", 1, self.argv, self.cwd])
+
+    @property
+    def entry_digest(self) -> str:
+        return _digest(["cosmos.device-command.entry", 1, self.id, self.label,
+                        self.argv_digest, self.mutates, self.budget_ms])
+
+
+def _digest(value: list) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
 class Policy:
     """The owner's own permission for this installation, as delivered.
 
@@ -207,11 +231,18 @@ class Policy:
 
     surface_id: str
     approval_revision: int
-    revision: int
-    maximum_class: str
+    revision: Optional[int] = None
+    maximum_class: Optional[str] = None
     hosts: frozenset = frozenset()
     apps: tuple = ()
     roots: tuple = ()
+    commands_revision: Optional[int] = None
+    commands_class: Optional[str] = None
+    offer_output_to_cognition: bool = False
+    commands: tuple = ()
+
+    def command(self, identifier: str) -> Optional[CommandEntry]:
+        return next((entry for entry in self.commands if entry.id == identifier), None)
 
     def app(self, identifier: str) -> Optional[App]:
         for entry in self.apps:
@@ -230,10 +261,11 @@ class Policy:
         host = host_of(url)
         return host is not None and host in self.hosts
 
-    def allows_class(self, privacy: str) -> bool:
+    def allows_class(self, privacy: str, *, run: bool = False) -> bool:
         """The ceiling the owner already spent. A command routed above it is not
         the permission that was given, whatever the runtime said."""
-        return privacy in CLASSES and CLASSES.index(privacy) <= CLASSES.index(self.maximum_class)
+        maximum = self.commands_class if run else self.maximum_class
+        return maximum in CLASSES and privacy in CLASSES and CLASSES.index(privacy) <= CLASSES.index(maximum)
 
 
 def _only(record: dict, allowed: set, label: str) -> None:
@@ -276,18 +308,22 @@ def parse_policy(raw: bytes, *, surface_id: str, approval_revision: int, digest:
     except (UnicodeDecodeError, ValueError) as error:
         raise InvalidPolicy("the delivered policy is not UTF-8 JSON") from error
     document = _object(document, "the delivered policy")
-    if document.get("version") != 1:
+    if type(document.get("version")) is not int or document["version"] != 1:
         raise InvalidPolicy("the delivered policy must be a version 1 object")
-    if "commands" in document:
-        # This platform's manifest declares no `action.run`, so the runtime
-        # never sends a command list here. One that arrives is not a document
-        # this client will act on any part of.
-        raise InvalidPolicy("the delivered policy carries commands, which this computer does not run")
-    _only(document, {"version", "surfaceId", "approvalRevision", "actions"}, "the delivered policy")
+    _only(document, {"version", "surfaceId", "approvalRevision", "actions", "commands"}, "the delivered policy")
     if document.get("surfaceId") != surface_id or _revision(document.get("approvalRevision"),
                                                             "approvalRevision") != approval_revision:
         raise InvalidPolicy("the delivered policy names another surface or another approval")
-    actions = _object(document.get("actions"), "'actions'")
+    values = _parse_actions(document["actions"]) if "actions" in document else {}
+    if "commands" in document:
+        values.update(_parse_commands(document["commands"]))
+    if not values:
+        raise InvalidPolicy("the delivered policy has no permission")
+    return Policy(surface_id=surface_id, approval_revision=approval_revision, **values)
+
+
+def _parse_actions(value: object) -> dict:
+    actions = _object(value, "'actions'")
     for section in UNDECLARED_SECTIONS:
         if section in actions:
             raise InvalidPolicy(f"'{section}' is not on this computer's manifest")
@@ -325,8 +361,42 @@ def parse_policy(raw: bytes, *, surface_id: str, approval_revision: int, digest:
         raise InvalidPolicy("application and folder ids are unique")
     if not hosts and not apps and not roots:
         raise InvalidPolicy("a delivered policy allows at least one host, application or folder")
-    return Policy(surface_id=surface_id, approval_revision=approval_revision, revision=revision,
-                  maximum_class=maximum, hosts=frozenset(hosts), apps=tuple(apps), roots=tuple(roots))
+    return dict(revision=revision, maximum_class=maximum, hosts=frozenset(hosts), apps=tuple(apps), roots=tuple(roots))
+
+
+def _parse_commands(value: object) -> dict:
+    section = _object(value, "'commands'")
+    _only(section, {"revision", "maximumClass", "offerOutputToCognition", "entries"}, "'commands'")
+    revision = _revision(section.get("revision"), "the commands revision")
+    maximum = section.get("maximumClass")
+    offer = section.get("offerOutputToCognition")
+    if maximum not in CLASSES or type(offer) is not bool:
+        raise InvalidPolicy("the command permission has an invalid ceiling or output choice")
+    commands = []
+    for value in _entries(section.get("entries"), 8, "commands"):
+        entry = _object(value, "a command entry")
+        _only(entry, {"id", "label", "argv", "cwd", "mutates", "budgetMs"}, "a command entry")
+        identifier = _plain(entry.get("id"), 48)
+        if any(not c.isascii() or not (c.islower() or c.isdigit() or c == "-") for c in identifier):
+            raise InvalidPolicy("a command id is lowercase letters, digits and dashes")
+        label = _plain(entry.get("label"), MAX_LABEL_BYTES)
+        arguments = _entries(entry.get("argv"), MAX_ARGV, "argv")
+        if not arguments or any(not isinstance(arg, str) or not arg or _control(arg)
+                                or len(arg.encode("utf-8")) > MAX_ARGUMENT_BYTES for arg in arguments):
+            raise InvalidPolicy("a command needs one to twelve bounded arguments")
+        cwd = _plain(entry.get("cwd"), MAX_PATH_BYTES)
+        if not cwd.startswith("/") or ".." in cwd.split("/") or ".." in arguments[0].split("/"):
+            raise InvalidPolicy("a command working directory must be absolute and cannot escape")
+        if entry.get("mutates") is not False:
+            raise InvalidPolicy("this computer cannot authenticate file-changing commands")
+        budget = _revision(entry.get("budgetMs"), "the command budget")
+        if budget > 900_000:
+            raise InvalidPolicy("a command budget exceeds fifteen minutes")
+        commands.append(CommandEntry(identifier, label, tuple(arguments), cwd, False, budget))
+    if not commands or len({entry.id for entry in commands}) != len(commands):
+        raise InvalidPolicy("a command permission needs unique nonempty entries")
+    return dict(commands_revision=revision, commands_class=maximum, offer_output_to_cognition=offer,
+                commands=tuple(commands))
 
 
 @dataclass(frozen=True)

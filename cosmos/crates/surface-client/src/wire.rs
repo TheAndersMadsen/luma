@@ -11,10 +11,12 @@ use uuid::Uuid;
 /// installation the owner approved earlier keeps its own, which the challenge
 /// carries, so publishing a new profile never stops it from connecting.
 pub(crate) const PROFILE: &str = "native-audience-v6";
+pub(crate) const LINUX_PROFILE: &str = "native-linux-tasks-v7";
 /// Every approval profile this build can still hold a connection under, newest
-/// first. A fresh enrolment asks for `PROFILE`; an installation the owner
+/// first. A fresh enrolment asks for its platform's profile; an installation the owner
 /// approved under an earlier rung keeps working until they approve it again.
-pub(crate) const KNOWN_APPROVALS: [&str; 5] = [
+pub(crate) const KNOWN_APPROVALS: [&str; 6] = [
+    LINUX_PROFILE,
     PROFILE,
     "native-voice-input-v5",
     "native-device-action-v4",

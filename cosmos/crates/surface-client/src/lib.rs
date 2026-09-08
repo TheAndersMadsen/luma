@@ -425,7 +425,11 @@ impl Client {
             platform: self.config.platform,
             // What a fresh enrollment asks the owner to approve. An
             // installation already approved at an earlier profile keeps it.
-            approval: wire::PROFILE,
+            approval: if self.config.platform == Platform::Linux {
+                wire::LINUX_PROFILE
+            } else {
+                wire::PROFILE
+            },
         }
     }
 

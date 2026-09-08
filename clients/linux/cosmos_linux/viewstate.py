@@ -94,7 +94,6 @@ REFUSALS = {
     "version_changed": (S.REFUSAL_VERSION_CHANGED, S.REFUSAL_VERSION_CHANGED_REMEDY),
 }
 UNSUPPORTED = {
-    "run": S.UNSUPPORTED_RUN,
     "route": S.UNSUPPORTED_ROUTE,
     "play": S.UNSUPPORTED_PLAY,
 }
@@ -112,6 +111,8 @@ class TaskView:
     elapsed: int = 0
     reason: Optional[str] = None
     unsupported: Optional[str] = None
+    kind: str = "open"
+    exit_code: Optional[int] = None
 
     @property
     def running(self) -> bool:
@@ -152,6 +153,20 @@ def task_card(task: Optional[TaskView]) -> Optional[TaskCard]:
         return None
     label = task.label
     duration = elapsed_text(task.elapsed)
+    if task.kind == "run":
+        if task.phase == TASK_WORKING:
+            return TaskCard(S.WORKING, f"Running {label}", elapsed=duration, cancellable=True, tone="working")
+        if task.phase == TASK_DONE:
+            return TaskCard(S.COMPLETED, f"{label} finished with exit code {task.exit_code}.", elapsed=duration, tone="done")
+        if task.phase == TASK_UNKNOWN:
+            return TaskCard(S.CANNOT_CONFIRM, "The task outcome is unknown. It was not run again.", elapsed=duration, tone="error")
+        if task.phase == TASK_FAILED:
+            return TaskCard(S.NOT_DONE, "The task ended without a normal exit.", elapsed=duration, tone="error")
+        if task.phase == TASK_REFUSED:
+            detail = {"no_attestation": "This task has no current local confirmation.",
+                      "entry_changed": "The approved task changed. Nothing was run.",
+                      "no_handler": "The approved executable or folder is unavailable."}.get(task.reason, "This task is not permitted here.")
+            return TaskCard(S.NOT_DONE, detail, "Review this computer's tasks in Center, then ask again.", tone="error")
     if task.phase == TASK_WORKING:
         return TaskCard(S.WORKING, S.TASK_OPENING.format(label=label), elapsed=duration,
                         cancellable=True, tone="working")

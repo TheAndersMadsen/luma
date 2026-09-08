@@ -398,7 +398,7 @@ async fn approve_native(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let principal = owner(&headers, &api)?;
     let request = body(request)?;
-    if request.approval != surface_registry::NATIVE_APPROVAL
+    if request.approval != surface_registry::current_native_approval(&request.platform)
         || request.expected_revision >= surface_registry::MAX_NATIVE_REVISION
         || request.enrollment_id.is_nil()
         || !surface_registry::native_platform(&request.platform)
@@ -1565,6 +1565,13 @@ mod tests {
         let mut changed = approval;
         changed["platform"] = "linux".into();
         changed["expectedRevision"] = 1.into();
+        assert_eq!(
+            call(&app, "POST", root, Some(&owner), None, changed.clone())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        changed["approval"] = surface_registry::NATIVE_LINUX_APPROVAL.into();
         assert_eq!(
             call(&app, "POST", root, Some(&owner), None, changed)
                 .await

@@ -104,10 +104,10 @@ class DigestTest(unittest.TestCase):
 
 
 class UnsupportedTest(unittest.TestCase):
-    """`run`, `route` and `play` are not on this platform's manifest."""
+    """`route` and `play` are not on this platform's manifest."""
 
     def test_each_unsupported_operation_is_refused_by_name(self):
-        for channel, kind, name in (("action.run", "run", "run"), ("action.route", "route", "route"),
+        for channel, kind, name in (("action.route", "route", "route"),
                                     ("action.play", "play", "play")):
             decision = A.plan(task({"kind": kind}, channel=channel, digest="a" * 64), delivered(),
                               which=which_all)

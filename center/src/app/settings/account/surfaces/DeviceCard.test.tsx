@@ -339,6 +339,24 @@ const tv: NativeSurface = { ...nativePosture("android_tv"), ...row, platform: "a
   actions: ["action.play"], confirms: false, audience: "room" };
 const add = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
+it("offers Linux tasks with foreground confirmation and refuses file-changing entries", async () => {
+  const linux: NativeSurface = { ...mac, ...nativePosture("linux"), platform: "linux" };
+  const mock = cosmos(); render(<DeviceCard {...props} row={linux} />); await settled(); manage();
+  fireEvent.click(toggle("Tasks on this device"));
+  expect(screen.getByLabelText("This task changes files")).toBeDisabled();
+  expect(screen.getByText(/This setting does not prevent a program from writing files/u)).toBeVisible();
+  add("What you call it", "Check project");
+  add("Short name", "check-project");
+  add("The command, one part per line", "/usr/bin/git\nstatus\n--short");
+  add("Folder it runs in", "/home/owner/project");
+  fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save these tasks" }));
+  await screen.findByText("Cosmos confirmed the tasks this device may run.");
+  expect(JSON.parse(String(posts(mock)[0][1]?.body)).policy.entries[0]).toMatchObject({
+    mutates: false, argv: ["/usr/bin/git", "status", "--short"], cwd: "/home/owner/project",
+  });
+});
+
 it("says once that these apply to this device only, and offers only the operations this device's manifest declares", async () => {
   cosmos(); render(<DeviceCard {...props} />); await settled(); manage();
   expect(screen.getAllByText("These two permissions apply to this device only. Nothing here changes what any other device may do.")).toHaveLength(1);
@@ -404,10 +422,10 @@ it("caps action content at the shared-room ceiling even with a private-display p
   expect(screen.getByText(/A private-display preference cannot verify room privacy/u)).toBeVisible();
 });
 
-it("Tasks on this device is macOS only, fixes argv one part per line, and stops at eight", async () => {
+it("Tasks on this device fixes argv one part per line and stops at eight", async () => {
   const mock = cosmos(); render(<DeviceCard {...props} row={mac} />); await settled(); manage();
   fireEvent.click(toggle("Tasks on this device"));
-  expect(screen.getByText(/Cosmos can ask this Mac to run one of them; it can never write a command/u)).toBeVisible();
+  expect(screen.getByText(/Cosmos can ask this computer to run one of them; it cannot write a command/u)).toBeVisible();
   const addTask = () => fireEvent.click(screen.getByRole("button", { name: "Add task" }));
   expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
   add("What you call it", "Project tests");

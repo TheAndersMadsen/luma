@@ -110,7 +110,7 @@ def policy_record(document: bytes, **overrides) -> dict:
     actions = parsed.get("actions") or {}
     record = {
         "surfaceId": parsed.get("surfaceId"), "approvalRevision": parsed.get("approvalRevision"),
-        "actionsRevision": actions.get("revision"), "commandsRevision": None,
+        "actionsRevision": actions.get("revision"), "commandsRevision": (parsed.get("commands") or {}).get("revision"),
         "digest": hashlib.sha256(document).hexdigest(), "byteLength": len(document),
     }
     record.update(overrides)
@@ -221,6 +221,9 @@ class FakeSurface:
 
     def retry_pending(self) -> int:
         return self._command("retry_pending")
+
+    def progress(self, sequence: int, elapsed_ms: int) -> int:
+        return self._command("progress", sequence, elapsed_ms)
 
     def cancel(self) -> int:
         return self._command("cancel")

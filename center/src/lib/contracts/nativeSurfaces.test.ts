@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import {
   NATIVE_APPROVAL,
+  NATIVE_LINUX_APPROVAL,
+  currentNativeApproval,
+  legacyAudiencePosture,
   NATIVE_DESCRIPTOR_BYTES,
   nativeManifest,
   nativePosture,
@@ -82,12 +85,14 @@ const MANIFESTS: Record<string, NativeManifest> = {
     capabilities: {
       input: ["text.public", "state.visibility", "context.screen", "action.report", VOICE_INPUT],
       output: { "visual.card": desk(CARD), "audio.tts": desk(CARD), "action.open": desk(OPEN),
+        "action.run": desk({ ...CARD, risk: "moderate", idempotent: false, reportBudgetMs: 900000 }),
         "confirm.tap": desk({ ...CARD, attestation: ["foreground_tap"] }) },
     },
     constraints: [...ACTION_CONSTRAINTS, "no_effect_isolation", ...VOICE_CONSTRAINTS],
     expression: {
       "visual.card": ACKNOWLEDGED, "audio.tts": ACKNOWLEDGED, "action.open": ACKNOWLEDGED,
       "confirm.tap": ["confirming", "awaiting_permission"],
+      "action.run": ["thinking", "acknowledged", "degraded"],
     },
     cognition: { declaredClass: 0, models: [] },
     authority: { mayOriginate: ["state.change", "user.request", "action.report"], reflexive: [] },
@@ -140,7 +145,11 @@ const withoutVoice = (manifest: NativeManifest): NativeManifest => ({ ...manifes
   capabilities: { ...manifest.capabilities, input: manifest.capabilities.input.filter(name => name !== VOICE_INPUT) },
   constraints: manifest.constraints.filter(name => !VOICE_CONSTRAINTS.includes(name)) });
 const VOICE_MANIFESTS: Record<string, NativeManifest> =
-  Object.fromEntries(Object.entries(MANIFESTS).map(([platform, manifest]) => [platform, withoutAudience(manifest)]));
+  Object.fromEntries(Object.entries(MANIFESTS).map(([platform, manifest]) => {
+    const old = structuredClone(manifest);
+    if (platform === "linux") { delete old.capabilities.output["action.run"]; delete old.expression["action.run"]; }
+    return [platform, withoutAudience(old)];
+  }));
 const ACTION_MANIFESTS: Record<string, NativeManifest> =
   Object.fromEntries(Object.entries(VOICE_MANIFESTS).map(([platform, manifest]) => [platform, withoutVoice(manifest)]));
 
@@ -200,12 +209,15 @@ const SURFACE = {
 it("accepts the four explicit native platforms and normalizes enrollment UUID case", () => {
   expect(NATIVE_APPROVAL).toBe("native-audience-v6");
   for (const platform of ["macos", "linux", "android", "android_tv"]) {
-    expect(parseNativeDescriptor({ ...DESCRIPTOR, enrollmentId: ENROLLMENT_ID.toUpperCase(), platform }))
-      .toEqual({ ...DESCRIPTOR, platform });
+    const approval = platform === "linux" ? NATIVE_LINUX_APPROVAL : NATIVE_APPROVAL;
+    expect(parseNativeDescriptor({ ...DESCRIPTOR, enrollmentId: ENROLLMENT_ID.toUpperCase(), platform, approval }))
+      .toEqual({ ...DESCRIPTOR, platform, approval });
   }
 });
 
 it("requires exactly the descriptor fields and rejects unsupported identity or approval claims", () => {
+  expect(() => parseNativeDescriptor({ ...DESCRIPTOR, platform: "linux" })).toThrow("invalid_native_descriptor");
+  expect(() => parseNativeDescriptor({ ...DESCRIPTOR, approval: NATIVE_LINUX_APPROVAL })).toThrow("invalid_native_descriptor");
   for (const key of Object.keys(DESCRIPTOR)) {
     const missing: Record<string, unknown> = { ...DESCRIPTOR };
     delete missing[key];
@@ -219,6 +231,14 @@ it("requires exactly the descriptor fields and rejects unsupported identity or a
     ...["pin", "ios", "MacOS", "constructor", "__proto__", null].map(platform => ({ ...DESCRIPTOR, platform }))]) {
     expect(() => parseNativeDescriptor(invalid)).toThrow();
   }
+});
+
+it("keeps earlier Linux approvals recognizable without giving them the task capability", () => {
+  const old = parseNativeSurface({ ...SURFACE, ...legacyAudiencePosture("linux"), platform: "linux" });
+  expect(old.approval).toBe("native-audience-v6");
+  expect(old.actions).toEqual(["action.open"]);
+  expect(old.audience).toBe("desk");
+  expect(() => parseNativeSurface({ ...old, approval: NATIVE_LINUX_APPROVAL })).toThrow("unsupported_native_posture");
 });
 
 it("bounds descriptor text by UTF-8 bytes and rejects malformed or non-object JSON", () => {
@@ -298,13 +318,13 @@ it("requires exact revision-bound mutation inputs and preserves room for the nex
 it("matches Cosmos per platform: exactly the channels that platform declares, and no other manifest is a known posture", () => {
   for (const [platform, manifest] of Object.entries(MANIFESTS)) {
     expect(nativeManifest(platform as "macos")).toEqual(manifest);
-    expect(nativePosture(platform as "macos")).toEqual({ ...POSTURE_FIELDS, approval: NATIVE_APPROVAL, manifest });
+    expect(nativePosture(platform as "macos")).toEqual({ ...POSTURE_FIELDS, approval: currentNativeApproval(platform as "macos"), manifest });
   }
-  // Only macOS may be asked to run a task, and only a device that is not a
-  // television may host a confirmation ceremony.
-  const surface = (platform: string) => parseNativeSurface({ ...SURFACE, platform, manifest: MANIFESTS[platform] });
+  // Desktop task capabilities follow their own approved manifests. A
+  // television cannot host a confirmation ceremony.
+  const surface = (platform: string) => parseNativeSurface({ ...SURFACE, platform, approval: currentNativeApproval(platform as "macos"), manifest: MANIFESTS[platform] });
   expect(surface("macos").actions).toEqual(["action.open", "action.run"]);
-  expect(surface("linux").actions).toEqual(["action.open"]);
+  expect(surface("linux").actions).toEqual(["action.open", "action.run"]);
   expect(surface("android").actions).toEqual(["action.open", "action.route"]);
   expect(surface("android_tv").actions).toEqual(["action.play"]);
   expect(surface("android_tv").confirms).toBe(false);

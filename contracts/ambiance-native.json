@@ -10,7 +10,7 @@
       "enrollmentId": "non-nil UUID",
       "publicKey": "canonical unpadded base64url of a valid 65-byte uncompressed SEC1 P-256 point",
       "platform": "macos|linux|android|android_tv",
-      "approval": "native-audience-v6"
+      "approval": "platformProfiles[platform]"
     },
     "additionalProperties": false
   },
@@ -49,7 +49,7 @@
         "enrollmentId": "non-nil UUID",
         "surfaceId": "non-nil UUID",
         "approvalRevision": "positive safe integer",
-        "approval": "the approval profile this installation's record holds: native-audience-v6, native-voice-input-v5, native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
+        "approval": "the approval profile this installation's record holds: native-linux-tasks-v7 (Linux), native-audience-v6, native-voice-input-v5, native-device-action-v4, native-shared-speech-v3 or native-shared-display-v2",
         "publicKeyFingerprint": "SHA256 lowercase hex of SEC1 public-key bytes",
         "challengeId": "non-nil UUID",
         "nonce": "canonical unpadded base64url of 32 random bytes",
@@ -280,7 +280,7 @@
     "shape": "The runtime binds one content shape per reply from the intent it validated: utterance, note, passage, roster, place, play, route, open or run, and scores every candidate against the published fit table over shape and audience. Cognition never writes or reads one."
   },
   "deviceActions": {
-    "scope": "Dispatch, ceremony, outcome and the shared client. The runtime binds, decides, confirms, dispatches and records device actions, and only a device's own final report may claim one happened. Platform execution on macOS, Linux, Android and Android TV is not in this increment: every client still has to carry the commands out and report what it observed.",
+    "scope": "The runtime binds, decides, confirms, dispatches and records device actions; only matching observed reports establish outcomes. macOS runs fixed owner-authored tasks; Linux adds tasks the owner classifies as changing no files, with local foreground confirmation. Other implemented native actions retain their own evidence limits. Physical device acceptance is pending.",
     "manifests": {
       "macos": {
         "class": "native",
@@ -415,6 +415,14 @@
                 "foreground_tap"
               ],
               "audience": "desk"
+            },
+            "action.run": {
+              "maxClass": "shared_room",
+              "shared": true,
+              "risk": "moderate",
+              "idempotent": false,
+              "reportBudgetMs": 900000,
+              "audience": "desk"
             }
           }
         },
@@ -447,6 +455,11 @@
           "confirm.tap": [
             "confirming",
             "awaiting_permission"
+          ],
+          "action.run": [
+            "thinking",
+            "acknowledged",
+            "degraded"
           ]
         },
         "cognition": {
@@ -795,14 +808,15 @@
         },
         "bodyBytes": 4096,
         "platforms": [
-          "macos"
+          "macos",
+          "linux"
         ],
         "policy": {
           "maximumClass": "public|shared_room|near_user|private",
           "offerOutputToCognition": "boolean",
           "entries": "1-8 {id,label,argv,cwd,mutates,budgetMs}"
         },
-        "caps": "argv is a fixed array of 1-12 elements of at most 256 bytes each, with no control characters and no '..' component in argv[0]; there is no shell string and no parameter. cwd is absolute. budgetMs is at most 900000. Every entry confirms; there is no never-confirm field. A label the runtime classifies above private is refused at policy-write time, because a silently sensitive label would make an owner-approved entry permanently unrunnable and indistinguishable from a capability miss. The command list is the half that grows, so the same delivery bound applies: a list that would push the combined policy document past policyDocument bytes is invalid_request where the owner writes it, never a truncated allowlist on the device."
+        "caps": "argv is a fixed array of 1-12 elements of at most 256 bytes each, with no control characters and no '..' component in argv[0]; there is no shell string and no parameter. cwd is absolute. budgetMs is at most 900000. Every entry confirms; there is no never-confirm field. A label the runtime classifies above private is refused at policy-write time, because a silently sensitive label would make an owner-approved entry permanently unrunnable and indistinguishable from a capability miss. The command list is the half that grows, so the same delivery bound applies: a list that would push the combined policy document past policyDocument bytes is invalid_request where the owner writes it, never a truncated allowlist on the device. The executing installation must declare the attestation required by each entry. Linux accepts only mutates=false entries because it has foreground_tap and cannot authenticate the device owner. This is an owner classification, not filesystem isolation."
       }
     },
     "ledger": {
@@ -819,8 +833,7 @@
       "turn_preempted": "turnId, generation, the surface whose request preempted it"
     },
     "notShipped": [
-      "Client execution on every platform: macOS, Linux, the phone and the TV must each carry the commands out, verify them against the delivered policy, obtain the actor attestation and report what they observed.",
-      "Center's Activity page does not yet parse the new ledger kinds, the budget row or the ceremony habituation counters.",
+      "Linux file-changing tasks and OS owner authentication; complete third-party application and agentic GUI control. Declared non-mutating tasks have ordinary user filesystem access, not enforced read-only isolation.",
       "The live progress tail stays on the executing device; the runtime transports no command output except the bounded terminal report.",
       "Physical acceptance on the Pixel, the Shield, the Mac, the Omarchy PC and the Pin."
     ],
@@ -896,5 +909,12 @@
       "overflow": "The write is refused at policyDocument bytes, so a committed policy always fits. If a document over that bound ever reached delivery it is withdrawn rather than truncated: the installation is told it holds no policy and does nothing.",
       "clients": "macOS reads it through cosmos_surface_device_policy, Android and Android TV through NativeSurface.devicePolicy, Linux through the same shared client. Linux keeps its own local openers file, which is how that desktop opens a document and is not owner policy Cosmos holds."
     }
-  }
+  },
+  "platformProfiles": {
+    "macos": "native-audience-v6",
+    "linux": "native-linux-tasks-v7",
+    "android": "native-audience-v6",
+    "android_tv": "native-audience-v6"
+  },
+  "linuxTaskProfile": "native-linux-tasks-v7 adds moderate-risk action.run on Linux. Existing native-audience-v6 Linux approvals keep their original manifest and cannot run commands until reapproved. Reapproval fences the connection and its permissions; other platforms retain native-audience-v6."
 }

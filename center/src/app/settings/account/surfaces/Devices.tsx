@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { record } from "@/lib/contracts/surfaces";
-import { NATIVE_APPROVAL, NATIVE_DESCRIPTOR_BYTES, nativePublicKeyFingerprint, parseNativeDescriptorText, parseNativeSurface, parseNativeSurfaces,
+import { currentNativeApproval, NATIVE_DESCRIPTOR_BYTES, nativePublicKeyFingerprint, parseNativeDescriptorText, parseNativeSurface, parseNativeSurfaces,
   type NativeDescriptor, type NativeSurface } from "@/lib/contracts/nativeSurfaces";
 import { PIN_APPROVAL, parsePairedPinDevices, parsePinSurface, parsePinSurfaces, type PinSurface } from "@/lib/contracts/pinSurfaces";
 import { SPEECH_REGION } from "@/lib/contracts/speechDisclosure";
@@ -240,7 +240,7 @@ export function Devices() {
   async function change(chosen: Review | NativeSurface) {
     if (active.current || rows === undefined) return;
     const approving = "descriptor" in chosen;
-    if (approving ? chosen !== review || chosen.existing && !chosen.existing.revoked && chosen.existing.approval === NATIVE_APPROVAL
+    if (approving ? chosen !== review || chosen.existing && !chosen.existing.revoked && chosen.existing.approval === currentNativeApproval(chosen.existing.platform)
       : !rows.some(row => row.surfaceId === chosen.surfaceId && row.revision === chosen.revision)) return;
     descriptorRead.current++;
     const expectedRevision = approving ? chosen.existing?.revision ?? 0 : chosen.revision;
@@ -319,7 +319,7 @@ export function Devices() {
     } finally { if (generation.current === current) { pinActive.current = null; setPinBusy(false); } }
   }
   const alreadyApproved = review?.existing !== null && review?.existing !== undefined && !review.existing.revoked
-    && review.existing.approval === NATIVE_APPROVAL;
+    && review.existing.approval === currentNativeApproval(review.existing.platform);
   const willDrop = review && review.existing && !review.existing.revoked ? heldNames(review.held) : [];
 
   /** Grants each dropped permission again at the value it had, one step at a time. */

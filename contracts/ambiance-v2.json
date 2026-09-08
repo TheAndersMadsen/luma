@@ -1372,6 +1372,30 @@
       "anchor": "fn ambiance_private_payloads_restored_from_earlier_policy_are_retired_before_dispatch",
       "scope": "Private card payloads restored in proposed, dispatched or acknowledged states are cleared by current policy before any subsequent dispatch.",
       "limitation": "Serialized in-memory state fixture; already-seen content cannot be revoked and actual client cleanup remains a device acceptance gate."
+    },
+    {
+      "id": "linux-task-runtime-test-definition",
+      "kind": "test-definition",
+      "path": "cosmos/crates/cosmos/src/ambiance/action.rs",
+      "anchor": "fn ambiance_linux_commands_require_the_new_profile_and_reject_file_changes",
+      "scope": "Linux command permissions require the newly approved manifest and foreground confirmation; file-changing entries are rejected. Dispatch waits for the exact grant and completion waits for observed command evidence.",
+      "limitation": "In-memory runtime with synthetic connection and actor state; physical Linux authentication and room transport are not established."
+    },
+    {
+      "id": "linux-task-controller-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_commands.py",
+      "anchor": "class RunControllerTest",
+      "scope": "The Linux controller binds a local click to the exact task, generation, description and policy; it waits for grant and binding acknowledgment before starting and for report commit before showing completion. Lost acknowledgment, expiry, policy change and missing confirmation cannot spawn.",
+      "limitation": "Synthetic shared-client snapshots and process runner; this does not establish an installed Omarchy session."
+    },
+    {
+      "id": "linux-task-process-test-definition",
+      "kind": "test-definition",
+      "path": "clients/linux/tests/test_commands.py",
+      "anchor": "class ProcessTest",
+      "scope": "Real host subprocess tests cover nonzero exits, bounded output, environment filtering, symlink containment, cancellation, time budget and children holding a pipe after their parent exits.",
+      "limitation": "Host process evidence only. No enforced filesystem isolation, escaped process-group containment or physical Omarchy lifecycle acceptance."
     }
   ],
   "requirements": [
@@ -1992,9 +2016,13 @@
         "6.1"
       ],
       "requirement": "A thin Linux client supports the owner's Omarchy PC through the same approved surface and room contract.",
-      "acceptance": "Verify the installed desktop/compositor, local microphone and screen-sharing permission flow, lock/sleep, playback stop, protected credential storage, reconnect and installable packaging. Browser access does not establish native Linux support.",
-      "status": "pending",
-      "evidence": []
+      "acceptance": "Verify the installed desktop/compositor, local microphone and screen-sharing permission flow, lock/sleep, playback stop, protected credential storage, reconnect and installable packaging. Browser access does not establish native Linux support. Tasks require reapproval, fixed owner-authored argv, local confirmation, bounded process supervision and committed outcome evidence. File-changing commands stay unavailable until real owner authentication is implemented; mutates=false is not a sandbox.",
+      "status": "partial",
+      "evidence": [
+        "linux-task-runtime-test-definition",
+        "linux-task-controller-test-definition",
+        "linux-task-process-test-definition"
+      ]
     },
     {
       "id": "shield-playback-context",

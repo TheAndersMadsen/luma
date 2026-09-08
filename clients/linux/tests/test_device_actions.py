@@ -166,14 +166,12 @@ class BindingTest(DeviceActionHarness):
         self.assertEqual(self.commands("report")[0][1]["evidence"]["reason"], "unresolvable")
         self.assertEqual(self.launcher.started, [])
 
-    def test_run_route_and_play_are_unsupported_and_say_so_plainly(self):
+    def test_run_without_a_command_policy_is_refused(self):
         self.connected()
         self.fold(task=open_task({"kind": "run", "entryId": "project-tests"}, channel="action.run"))
         self.assertEqual(self.commands("report")[0][1]["evidence"]["reason"], "not_permitted")
-        self.assertEqual(self.state.task.unsupported, "run")
-        card = viewstate.task_card(self.state.task)
-        self.assertEqual((card.title, card.detail, card.remedy),
-                         (S.NOT_DONE, S.UNSUPPORTED_RUN, S.UNSUPPORTED_REMEDY))
+        self.assertIsNone(self.state.task.unsupported)
+        self.assertEqual(self.launcher.started, [])
 
     def test_a_report_names_the_action_it_is_about(self):
         self.connected()
@@ -551,6 +549,9 @@ class CeremonyTest(DeviceActionHarness):
 
     def test_confirming_carries_the_attestation_this_desktop_can_actually_prove(self):
         self.connected()
+        self.controller.set_visible(True)
+        self.controller.drain()
+        self.fold(operation="set_visible", visible=True)
         self.fold(operation="confirmation", confirmation=confirmation())
         self.assertTrue(self.controller.confirm())
         self.controller.drain()

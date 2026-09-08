@@ -175,6 +175,18 @@ class OptionalSymbolTest(unittest.TestCase):
                 surface.device_policy(length)
         surface.destroy()
 
+    def test_task_progress_requires_all_action_calls_and_preserves_milliseconds(self):
+        _, old = self.load(ACTION_SYMBOLS)
+        self.assertFalse(old.features.commands)
+        handle, library = self.load((*ACTION_SYMBOLS, "cosmos_surface_progress"))
+        self.assertTrue(library.features.commands)
+        surface = native.Surface(library, b'{"version":1}', NullBindings())
+        self.assertEqual(surface.progress(2, 10500), native.OK)
+        self.assertEqual(handle.calls[-1], ("cosmos_surface_progress", (surface._handle, 2, 10500)))
+        for sequence, elapsed in ((0, 1), (2**32, 1), (1, -1), (1, 900001)):
+            self.assertEqual(surface.progress(sequence, elapsed), native.INVALID_ARGUMENT)
+        surface.destroy()
+
     def test_newer_library_binds_send_text_to_and_with_context(self):
         handle, library = self.load(("cosmos_surface_send_text_to", "cosmos_surface_send_text_with_context"))
         self.assertEqual(library.features, native.Features(targets=True, context=True))

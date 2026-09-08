@@ -15,15 +15,16 @@ class EventDecodingTest(unittest.TestCase):
         self.assertEqual(event.operation, "prepare")
         self.assertTrue(event.ok)
         self.assertEqual(event.descriptor.platform, "linux")
-        self.assertEqual(event.descriptor.approval, "native-audience-v6")
+        self.assertEqual(event.descriptor.approval, "native-linux-tasks-v7")
         self.assertTrue(event.needs_reconnect)
         self.assertIsNone(event.display)
 
     def test_every_published_approval_rung_still_decodes(self):
         """The newest profile is what this build enrols at; an installation the owner
         approved earlier keeps its own, and the challenge carries that one."""
-        self.assertEqual(APPROVAL_PROFILE, "native-audience-v6")
+        self.assertEqual(APPROVAL_PROFILE, "native-linux-tasks-v7")
         self.assertEqual(KNOWN_APPROVALS, (
+            "native-linux-tasks-v7",
             "native-audience-v6", "native-voice-input-v5", "native-device-action-v4",
             "native-shared-speech-v3", "native-shared-display-v2",
         ))

@@ -19,6 +19,7 @@ from enum import Enum
 from typing import Callable, Deque, Optional, Protocol
 
 from . import actions
+from .commands import CommandRunner
 from .document import Document
 from . import strings as S
 from .context import ScreenContext
@@ -310,6 +311,7 @@ class Controller:
                  reconnect_delays: tuple = RECONNECT_DELAYS,
                  openers: Optional[Openers] = None,
                  launcher: Optional[actions.Launcher] = None,
+                 command_runner: Optional[CommandRunner] = None,
                  which: Callable[[str], Optional[str]] = shutil.which,
                  now_ms: Callable[[], int] = lambda: int(time.time() * 1000)) -> None:
         self._factory = surface_factory
@@ -332,6 +334,12 @@ class Controller:
         # naming any other is not this connection's and is refused.
         self._policy_binding: Optional[tuple] = None
         self._launcher = launcher if launcher is not None else actions.ProcessLauncher()
+        self._runner = command_runner if command_runner is not None else CommandRunner()
+        self._command_action: Optional[str] = None
+        self._run_confirmation: Optional[tuple] = None
+        self._run_granted = False
+        self._progress_sequence = 0
+        self._progress_sent = 0.0
         self._which = which
         self._now_ms = now_ms
         self._ledger = actions.Ledger()
@@ -633,6 +641,7 @@ class Controller:
             # This exact copy was already decided about; re-delivery is idempotent.
             return
         self.close_document()
+        self._stop_command()
         self._policy_seen = seen
         binding = (record.surface_id, record.approval_revision)
         if self._policy_binding is not None and self._policy_binding != binding:
@@ -653,18 +662,23 @@ class Controller:
         try:
             policy = parse_policy(raw, surface_id=record.surface_id,
                                   approval_revision=record.approval_revision, digest=record.digest)
+            if (policy.revision != record.actions_revision or policy.commands_revision != record.commands_revision
+                    or len(raw) != record.byte_length):
+                raise InvalidPolicy("the policy sections do not match the snapshot revisions")
         except InvalidPolicy as error:
             log.warning("a delivered policy was refused whole: %s", error)
             self._drop_policy(refused=True)
             return
         self._policy = policy
         self._policy_binding = binding
-        log.info("holding the owner's policy for this installation (actions revision %d)", policy.revision)
+        log.info("holding the owner's policy for this installation (actions %s, commands %s)",
+                 policy.revision, policy.commands_revision)
         self._update(policy_held=True, policy_refused=False)
 
     def _drop_policy(self, refused: bool) -> None:
         """Holding nothing is an ordinary state: this computer then does nothing."""
         self._policy = None
+        self._stop_command()
         self.close_document()
         if not refused:
             # A connection that ends takes its copy and its binding with it; a
@@ -678,6 +692,8 @@ class Controller:
         """One command, decided entirely here. Acknowledging says it is legal on
         this computer; only what this computer then observes may be reported."""
         self.close_document()
+        if self._command_action is not None:
+            self._runner.stop()
         # Only the viewer retains transferred bytes. Task metadata and the
         # outcome ledger must not keep another copy after the view is closed.
         self._task = replace(task, document=None)
@@ -706,6 +722,35 @@ class Controller:
             # Never acknowledge a command this computer will not attempt.
             self._send_report(task, actions.refusal_report(decision.refusal), TASK_REFUSED, label,
                               reason=decision.refusal, unsupported=decision.unsupported)
+            return
+        if decision.command is not None:
+            if (not self._state.features.commands or self._runner.busy
+                    or not self._run_authorized(task)):
+                self._send_report(task, actions.refusal_report("no_attestation"), TASK_REFUSED, label,
+                                  reason="no_attestation")
+                return
+            binding = self._policy_seen
+            self._update(task=TaskView(task.action_id, label, TASK_WORKING, elapsed=0, kind="run"),
+                         message=S.NOTICE_TASK, failure=None)
+
+            def acknowledged(_event, ok: bool) -> None:
+                if (not ok or self._task_action != task.action_id or self._task_reported
+                        or self._policy_seen != binding or not self._run_granted
+                        or not self._run_authorized(task)):
+                    if self._task_action == task.action_id and not self._task_reported:
+                        self._send_report(task, actions.refusal_report("no_attestation"), TASK_REFUSED, label)
+                    return
+                self._run_confirmation = None
+                self._run_granted = False
+                if self._runner.start(decision.command):
+                    self._command_action = task.action_id
+                    self._progress_sequence = 0
+                    self._progress_sent = self._task_started = self._scheduler.monotonic()
+                else:
+                    self._send_report(task, actions.refusal_report("no_handler"), TASK_REFUSED, label)
+
+            self._defer("acknowledge_task", self._surface.acknowledge_task, on_settled=acknowledged,
+                        guard=lambda: self._task_action == task.action_id and self._state.phase == Phase.CONNECTED)
             return
         self._task_launch = decision.launch
         self._acknowledge_task(task)
@@ -763,14 +808,17 @@ class Controller:
         # successful report acknowledgment may turn the card into Completed.
         self._update(task=TaskView(task.action_id, label, TASK_WORKING if phase == TASK_DONE else phase,
                                    elapsed=elapsed, reason=reason,
-                                   unsupported=unsupported))
+                                   unsupported=unsupported, kind=task.operation.get("kind", "open"),
+                                   exit_code=report.get("evidence", {}).get("exitCode")))
         if self._surface is None:
             return
         payload = actions.report_bytes(report)
         action_id = task.action_id
         def settled(_event, ok: bool) -> None:
             if phase == TASK_DONE and self._task_action == action_id:
-                self._update(task=TaskView(action_id, label, TASK_DONE if ok else TASK_UNKNOWN, elapsed=elapsed))
+                self._update(task=TaskView(action_id, label, TASK_DONE if ok else TASK_UNKNOWN, elapsed=elapsed,
+                                          kind=task.operation.get("kind", "open"),
+                                          exit_code=report.get("evidence", {}).get("exitCode")))
 
         def send() -> int:
             try:
@@ -789,6 +837,11 @@ class Controller:
 
     def _collect_launch(self) -> None:
         """What the launcher saw, folded into the one report this command gets."""
+        command_report = self._runner.poll()
+        if command_report is not None:
+            if self._command_action == self._task_action and self._task is not None and not self._task_reported:
+                self._send_report(self._task, command_report, self._phase_for(command_report), self._task.label)
+            self._command_action = None
         observation = self._launcher.poll()
         task = self._task
         if observation is None or self._task_reported or task is None or self._task_launch is None:
@@ -801,6 +854,7 @@ class Controller:
         stopped; the launcher then says what it saw, and ``cancelled`` is only
         for what this computer can prove."""
         self.close_document(actions.CANCELLED)
+        self._stop_command()
         if self._task_action is None or self._task_reported:
             return
         log.info("stopping the running command (%s)", reason)
@@ -817,21 +871,59 @@ class Controller:
         """Answer the ceremony with what this desktop can actually prove: that
         someone was at this window and pressed the key."""
         confirmation = self._state.confirmation
-        if confirmation is None or self._surface is None or self._state.ceremony_dismissed:
+        if (confirmation is None or self._surface is None or self._state.ceremony_dismissed
+                or self._state.phase != Phase.CONNECTED or not self._state.visible
+                or not self._wanted_visible or self._now_ms() >= confirmation.expires_at_ms):
             return False
         if confirmation.attestation != "foreground_tap":
             # A keypress here is not device-owner authentication and never
             # stands in for it.
             return False
+        binding = self._policy_seen
+        self._run_confirmation = (confirmation, binding)
+        self._run_granted = False
+
+        def current() -> bool:
+            return (self._state.phase == Phase.CONNECTED and self._state.visible and self._wanted_visible
+                    and self._state.confirmation == confirmation and self._policy_seen == binding
+                    and self._now_ms() < confirmation.expires_at_ms and not self._state.ceremony_dismissed)
+
+        def granted(_event, ok: bool) -> None:
+            if self._run_confirmation == (confirmation, binding):
+                self._run_granted = ok
+                if not ok:
+                    self._run_confirmation = None
+
         self._defer("grant", lambda: self._surface.grant(True, "foreground_tap"),
-                    guard=lambda: self._state.phase == Phase.CONNECTED)
+                    on_settled=granted, guard=current)
         self._update(message=S.NOTICE_TASK)
         return True
+
+    def _run_authorized(self, task: Task) -> bool:
+        if (self._run_confirmation is None or self._policy is None or self._state.phase != Phase.CONNECTED
+                or not self._state.visible or not self._wanted_visible
+                or self._now_ms() >= min(task.expires_at_ms, task.report_by_ms)):
+            return False
+        ceremony, binding = self._run_confirmation
+        return (binding == self._policy_seen and ceremony.action_id == task.action_id
+                and ceremony.turn_id == task.turn_id and ceremony.generation == task.generation
+                and ceremony.attestation == "foreground_tap" and ceremony.risk == "moderate"
+                and self._now_ms() < ceremony.expires_at_ms
+                and ceremony.description_digest == actions.confirmation_digest({
+                    "verb": "run", "subject": task.label, "deviceKind": "linux",
+                    "effect": "does not change files", "class": task.privacy}))
+
+    def _stop_command(self) -> None:
+        self._runner.stop()
+        self._run_confirmation = None
+        self._run_granted = False
 
     def decline(self) -> bool:
         """Declining is one control away and weighs exactly as much as confirming."""
         if self._state.confirmation is None or self._surface is None:
             return False
+        self._run_confirmation = None
+        self._run_granted = False
         self._defer("grant", lambda: self._surface.grant(False, None),
                     guard=lambda: self._state.phase == Phase.CONNECTED)
         self._update(message=S.CONFIRM_DECLINED)
@@ -842,6 +934,8 @@ class Controller:
         own, which denies by default."""
         if not self._state.ceremony_open:
             return False
+        self._run_confirmation = None
+        self._run_granted = False
         self._update(ceremony_dismissed=True, message=S.CONFIRM_DISMISSED)
         return True
 
@@ -885,6 +979,19 @@ class Controller:
 
     def _tick_action(self) -> None:
         """The clocks the cards read: elapsed time and the ceremony countdown."""
+        if self._command_action == self._task_action and self._task is not None and not self._task_reported:
+            if self._state.phase != Phase.CONNECTED or self._now_ms() >= min(self._task.expires_at_ms, self._task.report_by_ms):
+                self._stop_command()
+            now = self._scheduler.monotonic()
+            if self._runner.busy and self._surface is not None and now - self._progress_sent >= 5:
+                self._progress_sequence += 1
+                sequence = self._progress_sequence
+                elapsed = min(900_000, int((now - self._task_started) * 1000))
+                action_id = self._command_action
+                self._progress_sent = now
+                self._defer("progress", lambda seq=sequence, duration=elapsed: self._surface.progress(seq, duration),
+                            guard=lambda: self._command_action == action_id and not self._task_reported
+                            and self._state.phase == Phase.CONNECTED)
         if self._state.document is not None and self._task is not None:
             deadline = self._task.expires_at_ms if self._task_reported else min(
                 self._task.expires_at_ms, self._task.report_by_ms)
@@ -905,6 +1012,8 @@ class Controller:
 
     def _reset_actions(self) -> None:
         self.close_document()
+        self._stop_command()
+        self._command_action = None
         if self._task_action is not None or self._launcher.busy:
             self._launcher.stop()
         # The permission belongs to the connection; without one, nothing is held.
@@ -1015,6 +1124,7 @@ class Controller:
         self._on_settled = None
         self._update(phase=Phase.BLOCKED, busy=False, failure=failure, message=failure.message)
         self.close_document()
+        self._stop_command()
 
     def _check_deadline(self) -> None:
         if self._expected is None or self._scheduler.monotonic() < self._deadline:
@@ -1023,6 +1133,11 @@ class Controller:
         self._expected = None
         self._on_settled = None
         log.warning("native %s did not settle before its deadline", name)
+        if (name in ("grant", "acknowledge_task") and self._task is not None
+                and self._task.channel == "action.run" and self._command_action is None):
+            self._stop_command()
+            self._task_reported = True
+            self._update(task=replace(self._state.task, phase=TASK_UNKNOWN))
         if name == "report" and self._task_reported and self._state.task is not None and self._state.task.running:
             self._update(task=replace(self._state.task, phase=TASK_UNKNOWN))
         if name == "prepare":

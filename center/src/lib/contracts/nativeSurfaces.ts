@@ -6,6 +6,8 @@ import { exact, integer, record, UUID } from "./surfaces";
  * operating system can honestly report.
  */
 export const NATIVE_APPROVAL = "native-audience-v6";
+export const NATIVE_LINUX_APPROVAL = "native-linux-tasks-v7";
+export const currentNativeApproval = (platform: NativePlatform) => platform === "linux" ? NATIVE_LINUX_APPROVAL : NATIVE_APPROVAL;
 /** Persisted voice approvals keep listening and acting, and declare no audience until the owner reapproves. */
 export const LEGACY_NATIVE_VOICE_APPROVAL = "native-voice-input-v5";
 /** Persisted action approvals keep acting, and declare no microphone and no audience until reapproved. */
@@ -123,12 +125,21 @@ function legacyVoiceManifest(platform: NativePlatform): NativeManifest {
  * runtime does not know what kind of screen it is, so it competes at the floor
  * of whatever kind of reply is being routed.
  */
-export function nativeManifest(platform: NativePlatform): NativeManifest {
+export function legacyAudienceManifest(platform: NativePlatform): NativeManifest {
   const manifest = legacyVoiceManifest(platform);
   const audience = PUBLISHED_AUDIENCE[platform];
   return { ...manifest, capabilities: { ...manifest.capabilities,
     output: Object.fromEntries(Object.entries(manifest.capabilities.output).map(([channel, declaration]) =>
       [channel, { ...declaration, audience }])) } };
+}
+
+export function nativeManifest(platform: NativePlatform): NativeManifest {
+  const manifest = legacyAudienceManifest(platform);
+  if (platform === "linux") {
+    manifest.capabilities.output["action.run"] = { maxClass: "shared_room", shared: true, risk: "moderate", idempotent: false, reportBudgetMs: 900000, audience: "desk" };
+    manifest.expression["action.run"] = ["thinking", "acknowledged", "degraded"];
+  }
+  return manifest;
 }
 
 const legacyDisplayManifest = (): NativeManifest => ({
@@ -156,13 +167,15 @@ export const NATIVE_SURFACE_POSTURE = {
   playbackVerified: false,
 } as const;
 
-export type NativeApproval = typeof NATIVE_APPROVAL | typeof LEGACY_NATIVE_VOICE_APPROVAL | typeof LEGACY_NATIVE_ACTION_APPROVAL
+export type NativeApproval = typeof NATIVE_APPROVAL | typeof NATIVE_LINUX_APPROVAL | typeof LEGACY_NATIVE_VOICE_APPROVAL | typeof LEGACY_NATIVE_ACTION_APPROVAL
   | typeof LEGACY_NATIVE_SPEECH_APPROVAL | typeof LEGACY_NATIVE_DISPLAY_APPROVAL;
 export type NativeSurfacePosture = typeof NATIVE_SURFACE_POSTURE & { approval: NativeApproval; manifest: NativeManifest };
 
 /** The whole posture Cosmos projects for one platform at the current profile; the shape a test or a review renders against. */
 export const nativePosture = (platform: NativePlatform): NativeSurfacePosture =>
-  ({ ...NATIVE_SURFACE_POSTURE, approval: NATIVE_APPROVAL, manifest: nativeManifest(platform) });
+  ({ ...NATIVE_SURFACE_POSTURE, approval: currentNativeApproval(platform), manifest: nativeManifest(platform) });
+export const legacyAudiencePosture = (platform: NativePlatform): NativeSurfacePosture =>
+  ({ ...NATIVE_SURFACE_POSTURE, approval: NATIVE_APPROVAL, manifest: legacyAudienceManifest(platform) });
 export const legacyVoicePosture = (platform: NativePlatform): NativeSurfacePosture =>
   ({ ...NATIVE_SURFACE_POSTURE, approval: LEGACY_NATIVE_VOICE_APPROVAL, manifest: legacyVoiceManifest(platform) });
 export const legacyActionPosture = (platform: NativePlatform): NativeSurfacePosture =>
@@ -176,7 +189,7 @@ export interface NativeDescriptor {
   enrollmentId: string;
   publicKey: string;
   platform: NativePlatform;
-  approval: typeof NATIVE_APPROVAL;
+  approval: typeof NATIVE_APPROVAL | typeof NATIVE_LINUX_APPROVAL;
 }
 export interface NativeApprovalInput extends NativeDescriptor { expectedRevision: number }
 export interface NativeSurface extends Readonly<typeof NATIVE_SURFACE_POSTURE> {
@@ -241,9 +254,9 @@ function publicKeyBytes(value: unknown): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(raw, char => char.charCodeAt(0));
 }
 function descriptor(input: Record<string, unknown>): NativeDescriptor {
-  if (!nonnilUuid(input.enrollmentId) || !platform(input.platform) || input.approval !== NATIVE_APPROVAL) throw new Error("invalid_native_descriptor");
+  if (!nonnilUuid(input.enrollmentId) || !platform(input.platform) || input.approval !== currentNativeApproval(input.platform)) throw new Error("invalid_native_descriptor");
   publicKeyBytes(input.publicKey);
-  return { enrollmentId: input.enrollmentId.toLowerCase(), publicKey: input.publicKey as string, platform: input.platform, approval: NATIVE_APPROVAL };
+  return { enrollmentId: input.enrollmentId.toLowerCase(), publicKey: input.publicKey as string, platform: input.platform, approval: currentNativeApproval(input.platform) };
 }
 export function parseNativeDescriptor(value: unknown): NativeDescriptor {
   const input = record(value);
@@ -278,7 +291,7 @@ export function parseNativeSurface(value: unknown): NativeSurface {
   if (!platform(native.platform)) throw new Error("invalid_native_surface");
   // Binding to the record's OWN platform is what keeps the set closed: an
   // Android manifest on a Mac record is unknown, not "some known manifest".
-  const posture = [nativePosture(native.platform), legacyVoicePosture(native.platform), legacyActionPosture(native.platform),
+  const posture = [nativePosture(native.platform), legacyAudiencePosture(native.platform), legacyVoicePosture(native.platform), legacyActionPosture(native.platform),
     legacySpeechPosture(), legacyDisplayPosture()]
     .find(candidate => Object.entries(candidate).every(([key, expected]) => exact(native[key], expected)));
   if (!posture) throw new Error("unsupported_native_posture");

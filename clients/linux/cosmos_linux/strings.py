@@ -152,8 +152,7 @@ REFUSAL_UNRESOLVABLE = "That document is not in the folder this computer knows b
 REFUSAL_UNRESOLVABLE_REMEDY = "Check that folder in Center, then ask again."
 REFUSAL_VERSION_CHANGED = "That document changed since it was read. It was not opened."
 REFUSAL_VERSION_CHANGED_REMEDY = "Ask again to open the version this computer has."
-# The three operations this platform does not offer at all.
-UNSUPPORTED_RUN = "This computer does not run commands."
+# The operations this platform does not offer at all.
 UNSUPPORTED_ROUTE = "This computer does not start navigation."
 UNSUPPORTED_PLAY = "This computer does not play media."
 UNSUPPORTED_OTHER = "This computer cannot do that."
@@ -161,9 +160,9 @@ UNSUPPORTED_REMEDY = "Ask for it on a device that can."
 # What Cosmos has allowed this computer, and what this computer knows locally.
 # The permission comes from Center; the openers file only says how a document
 # is opened here once it is allowed.
-POLICY_NONE = "Cosmos has not given this computer permission to open anything."
-POLICY_NONE_REMEDY = "Allow it for this computer in Center. Until then it opens nothing."
-POLICY_REFUSED = "Cosmos sent permission this computer could not verify, so it will open nothing."
+POLICY_NONE = "Cosmos has not given this computer permission to open content or run tasks."
+POLICY_NONE_REMEDY = "Allow it for this computer in Center."
+POLICY_REFUSED = "Cosmos sent permission this computer could not verify, so it will carry out no actions."
 POLICY_REFUSED_REMEDY = "Update Cosmos on this computer, then reconnect."
 OPENERS_MISSING = "Documents open here with this desktop's own handler."
 OPENERS_MISSING_REMEDY = "Add openers.json to the Cosmos data folder to open them at a line or a page."

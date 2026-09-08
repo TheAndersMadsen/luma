@@ -1,6 +1,6 @@
 """Carrying out one device action on this computer, and saying only what was seen.
 
-Cosmos can ask this installation to open something. Three rules shape every
+Cosmos can ask this installation to open content or run an approved task. Three rules shape every
 line here:
 
 * **Re-verify locally.** The command is checked against this installation's own
@@ -17,8 +17,8 @@ line here:
   command is legal here and claims nothing. Only an observation may say
   ``completed``; a launch this computer could not observe is ``unknown``.
 
-``action.run``, ``action.route`` and ``action.play`` are not on this platform's
-manifest and are refused plainly.
+``action.run`` binds a fixed owner-authored entry. Navigation and playback are
+not on this platform's manifest and are refused plainly.
 
 The decisions are pure functions. The one impure part is
 :class:`ProcessLauncher`, which spawns a detached process on a worker thread
@@ -44,16 +44,15 @@ from .policy import NO_OPENERS, Openers, Policy, Resolved, resolve_under_root
 
 log = logging.getLogger("cosmos.actions")
 
-# The one action channel this platform declares. The rest are refused by name.
+# Opening and fixed tasks are implemented. The rest are refused by name.
 OPEN_CHANNEL = "action.open"
 UNSUPPORTED_CHANNELS = {
-    "action.run": "run",
     "action.route": "route",
     "action.play": "play",
 }
 # What a decline is called on the wire. These four are the only ones this
-# platform can honestly send: it has no owner-authored command entries and no
-# lock screen of its own.
+# platform uses for open actions; task refusals also use entry_changed and
+# no_attestation. This client claims no lock-screen authentication.
 NO_HANDLER = "no_handler"
 NOT_PERMITTED = "not_permitted"
 UNRESOLVABLE = "unresolvable"
@@ -174,6 +173,7 @@ class Plan:
     bound: bool
     launch: Optional[Launch] = None
     document: Optional[document_module.Document] = None
+    command: Optional[policy_module.CommandEntry] = None
     refusal: Optional[str] = None
     # An operation this platform does not offer at all, named plainly.
     unsupported: Optional[str] = None
@@ -190,7 +190,8 @@ def plan(task, policy: Optional[Policy], openers: Openers = NO_OPENERS,
     operation = task.operation
     if task.channel in UNSUPPORTED_CHANNELS:
         return Plan(bound=False, refusal=NOT_PERMITTED, unsupported=UNSUPPORTED_CHANNELS[task.channel])
-    if task.channel != OPEN_CHANNEL or operation.get("kind") != "open":
+    run = task.channel == "action.run" and operation.get("kind") == "run"
+    if not run and (task.channel != OPEN_CHANNEL or operation.get("kind") != "open"):
         return Plan(bound=False, refusal=NOT_PERMITTED, unsupported=str(operation.get("kind") or "that"))
     if policy is None:
         # No permission is held here, so nothing is permitted here. That is an
@@ -199,10 +200,20 @@ def plan(task, policy: Optional[Policy], openers: Openers = NO_OPENERS,
     if content_digest(operation) != task.content_digest:
         # Either side drifting means this is not the command the runtime bound.
         return Plan(bound=False, refusal=NOT_PERMITTED)
-    if not policy.allows_class(task.privacy):
+    if not policy.allows_class(task.privacy, run=run):
         # The owner spent a ceiling when they gave this permission; a command
         # routed above it is not the permission that was given.
         return Plan(bound=False, refusal=NOT_PERMITTED)
+    if run:
+        entry = policy.command(operation.get("entryId"))
+        if entry is None:
+            return Plan(bound=False, refusal=NOT_PERMITTED)
+        if (operation.get("entryDigest") != entry.entry_digest or operation.get("argvDigest") != entry.argv_digest
+                or operation.get("label") != entry.label or type(operation.get("mutates")) is not bool
+                or operation["mutates"] != entry.mutates or type(operation.get("budgetMs")) is not int
+                or operation["budgetMs"] != entry.budget_ms):
+            return Plan(bound=False, refusal="entry_changed")
+        return Plan(bound=True, command=entry)
     locator = operation.get("locator") or {}
     scheme = locator.get("scheme")
     position = operation.get("position")

@@ -291,9 +291,8 @@ const argvLines = (argv: string[]) => argv.join("\n");
 const parseArgv = (text: string) => text.split("\n").map(line => line.trim()).filter(line => line !== "");
 
 /**
- * "Tasks on this device". macOS only, because it is the one platform that can
- * supply an actor attestation without a new dependency. Every entry confirms
- * before it runs, and `argv` is fixed here by a person.
+ * Every task confirms locally; file-changing entries require a venue that can
+ * authenticate the device owner. The approved manifest states that ability.
  */
 export function DeviceTasksEditor({ row, state, ceiling, personal, onRefreshDevices }: {
   row: NativeSurface;
@@ -302,6 +301,8 @@ export function DeviceTasksEditor({ row, state, ceiling, personal, onRefreshDevi
   personal: boolean;
   onRefreshDevices(): void;
 }) {
+  const attestation = row.manifest.capabilities.output["confirm.tap"]?.attestation;
+  const canChangeFiles = Array.isArray(attestation) && attestation.includes("device_owner_auth");
   const saved = state.snapshot?.policy ?? null;
   const [draft, setDraft] = useState<DeviceCommandPolicy | null>(null);
   const [touched, setTouched] = useState(false);
@@ -325,7 +326,7 @@ export function DeviceTasksEditor({ row, state, ceiling, personal, onRefreshDevi
     setNote("Write one task, then choose Save. A task with no command is not a permission.");
   }
   async function save() {
-    if (!draft || !validCommandPolicy(draft) || over) return;
+    if (!draft || !validCommandPolicy(draft) || over || (!canChangeFiles && draft.entries.some(item => item.mutates))) return;
     const capped = RANK[draft.maximumClass] <= RANK[ceiling] ? draft : { ...draft, maximumClass: ceiling };
     const outcome = await state.commit(() => ({ policy: capped }), "Cosmos confirmed the tasks this device may run.");
     if (outcome.result === "confirmed") { setTouched(false); setNote(""); }
@@ -338,15 +339,16 @@ export function DeviceTasksEditor({ row, state, ceiling, personal, onRefreshDevi
   const dirty = touched && !exact(draft, saved);
   const weight = draft ? bodyBytes({ approval: DEVICE_COMMANDS_APPROVAL, approvalRevision: row.revision, expectedRevision: state.snapshot?.revision ?? 0, policy: draft }) : 0;
   const over = weight > DEVICE_COMMANDS_BYTES;
-  const valid = draft !== null && validCommandPolicy(draft) && !over;
+  const valid = draft !== null && validCommandPolicy(draft) && !over && (canChangeFiles || !draft.entries.some(item => item.mutates));
   return <div className={`${styles.switchRow} ${styles.tallRow}`} role="group" aria-label="Tasks on this device">
     <div className={styles.switchText}>
       <span className={styles.switchTitle}>Tasks on this device</span>
       <span className={styles.switchDescription}>
-        Commands you write here, and only these. Cosmos can ask this Mac to run one of them; it can never write a command,
-        add an argument or reach a shell. Every task asks you to confirm on the Mac before it runs.
+        Commands you write here, and only these. Cosmos can ask this computer to run one of them; it cannot write a command
+        or add an argument. Every task asks you to confirm on this computer before it runs.
       </span>
-      <span className={styles.switchPrivacy}>This Mac runs what you list with no sandbox around it. Keep the list to things you would run yourself.</span>
+      <span className={styles.switchPrivacy}>This computer runs what you list with no sandbox around it. Keep the list to things you would run yourself.</span>
+      {!canChangeFiles ? <span className={styles.switchPrivacy}>Only tasks you mark as changing no files are available here. File-changing tasks need device-owner authentication, which this client cannot provide. This setting does not prevent a program from writing files.</span> : null}
       {reading ? <span className={styles.switchState} role="status">Checking…</span> : null}
       <Failure state={state} onRefreshDevices={onRefreshDevices} refused={SENSITIVE_LABEL_MESSAGE} />
       {note ? <span className={styles.switchState} role="status">{note}</span> : null}
@@ -379,7 +381,7 @@ export function DeviceTasksEditor({ row, state, ceiling, personal, onRefreshDevi
               disabled={busy || full} onChange={event => setEntry({ ...entry, cwd: event.target.value.trim() })} />
           </label>
           <label className={styles.checkField}>
-            <input type="checkbox" checked={entry.mutates} disabled={busy || full} onChange={event => setEntry({ ...entry, mutates: event.target.checked })} />
+            <input type="checkbox" checked={entry.mutates} disabled={busy || full || !canChangeFiles} onChange={event => setEntry({ ...entry, mutates: event.target.checked })} />
             This task changes files
           </label>
           <label className={styles.field} htmlFor={`task-budget-${row.surfaceId}`}>Give up after

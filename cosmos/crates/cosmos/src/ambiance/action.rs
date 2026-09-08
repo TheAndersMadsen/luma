@@ -1439,6 +1439,16 @@ impl super::RuntimeState {
             }
             if !crate::surface_registry::native_declares(record, Channel::ActionRun.as_str())
                 || policy.maximum_class > self.action_ceiling(records, surface)
+                || policy.entries.iter().any(|entry| {
+                    !super::grant::venue_declares(
+                        record,
+                        super::grant::required_attestation(if entry.mutates {
+                            Risk::High
+                        } else {
+                            Risk::Moderate
+                        }),
+                    )
+                })
             {
                 return Err(super::RuntimeError::PolicyBlocked);
             }
@@ -2558,6 +2568,102 @@ mod tests {
             offer_output_to_cognition: false,
             entries: vec![entry()],
         }
+    }
+
+    #[test]
+    fn ambiance_linux_commands_require_the_new_profile_and_reject_file_changes() {
+        let (mut fixture, ids) = Fixture::new(&["linux"]);
+        let linux = ids[0];
+        let mut policy = command_policy();
+        assert!(policy.entries[0].mutates);
+        assert!(matches!(
+            fixture.set_commands(linux, Some(policy.clone())),
+            Err(RuntimeError::PolicyBlocked)
+        ));
+        policy.entries[0].mutates = false;
+        let record = fixture.records.get_mut(&linux).unwrap();
+        record.approved_manifest =
+            crate::surface_registry::legacy_native_audience_manifest("linux");
+        assert!(matches!(
+            fixture.set_commands(linux, Some(policy.clone())),
+            Err(RuntimeError::PolicyBlocked)
+        ));
+        fixture.records.get_mut(&linux).unwrap().approved_manifest =
+            crate::surface_registry::native_manifest("linux");
+        let entry = policy.entries[0].clone();
+        fixture.set_commands(linux, Some(policy)).unwrap();
+        let delivered = fixture
+            .state
+            .device_policy(&fixture.records, linux)
+            .unwrap()
+            .unwrap();
+        assert!(delivered.actions.is_none());
+        assert!(!delivered.commands.unwrap().entries[0].mutates);
+        let fence = fixture.begin();
+        let operation = Operation::Run {
+            entry_id: entry.id.clone(),
+            label: entry.label.clone(),
+            entry_digest: entry.entry_digest(),
+            argv_digest: entry.argv_digest(),
+            budget_ms: entry.budget_ms,
+            mutates: false,
+        };
+        let RuntimeResult::Proposed(action) = fixture.propose(&fence, operation, NOW + 2).unwrap()
+        else {
+            panic!("proposed")
+        };
+        assert_eq!(action.status, ActionStatus::AwaitingGrant);
+        fixture.poll(linux, NOW + 3);
+        assert_eq!(
+            fixture.action(action.id).status,
+            ActionStatus::AwaitingGrant
+        );
+        let request = fixture.confirmation(linux, NOW + 4).unwrap();
+        assert_eq!(request.attestation, Attestation::ForegroundTap);
+        assert_eq!(request.description.device_kind, "linux");
+        assert!(
+            fixture
+                .grant(
+                    &request,
+                    linux,
+                    true,
+                    None,
+                    &request.description_digest,
+                    NOW + 5
+                )
+                .is_err()
+        );
+        fixture
+            .grant(
+                &request,
+                linux,
+                true,
+                Some(Attestation::ForegroundTap),
+                &request.description_digest,
+                NOW + 6,
+            )
+            .unwrap();
+        fixture.poll(linux, NOW + 7);
+        fixture
+            .acknowledge(&fixture.action(action.id), NOW + 8)
+            .unwrap();
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Acknowledged);
+        fixture
+            .report(
+                &fixture.action(action.id),
+                ReportOutcome::Completed,
+                Evidence::Command {
+                    entry_id: entry.id,
+                    exit_code: Some(3),
+                    duration_ms: 100,
+                    output_bytes: 0,
+                    truncated: false,
+                },
+                None,
+                NOW + 9,
+            )
+            .unwrap();
+        assert_eq!(fixture.action(action.id).status, ActionStatus::Completed);
     }
 
     #[test]

@@ -19,9 +19,10 @@ from .native import MAX_POLICY_BYTES, MAX_SPEECH_BYTES, MAX_TEXT_BYTES
 # KNOWN_APPROVALS is every rung an installation the owner approved earlier still
 # holds, because the challenge carries the record's own profile. A descriptor
 # naming none of them is an invalid response.
-APPROVAL_PROFILE = "native-audience-v6"
+APPROVAL_PROFILE = "native-linux-tasks-v7"
 KNOWN_APPROVALS = (
     APPROVAL_PROFILE,
+    "native-audience-v6",
     "native-voice-input-v5",
     "native-device-action-v4",
     "native-shared-speech-v3",
@@ -42,8 +43,8 @@ TURN_STATES = frozenset({"working", "waiting", "confirming", "acting", "shown", 
                          "nowhere", "unknown"})
 ORIGINS = frozenset({"pin", "browser", "macos", "linux", "android", "android_tv"})
 SURFACE_PLATFORMS = frozenset({"browser", "macos", "linux", "android", "android_tv"})
-# The action channels the runtime may name. Only `action.open` is on this
-# platform's manifest; the rest are decoded so they can be refused by name.
+# The action channels the runtime may name. Opening and fixed tasks are
+# implemented; the rest are decoded so they can be refused by name.
 ACTION_CHANNELS = frozenset({"action.open", "action.route", "action.play", "action.run"})
 OPERATION_KINDS = frozenset({"open", "route", "play", "run"})
 LOCATOR_SCHEMES = frozenset({"https", "app", "file", "snapshot"})
