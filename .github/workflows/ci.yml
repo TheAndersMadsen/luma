@@ -224,6 +224,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
         with:
           components: rustfmt
+      # The cache restore creates the missing parents of its paths at mode
+      # 0755, and `./luma pin check` refuses an existing test directory that
+      # is not 0700. Create them first, at 0700, so the restore fills them.
+      - name: Create the Pin test directories at mode 0700
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/pin-runtime-data/build/test-process/cargo-home"
       - name: restore Pin test dependencies and compiler state
         id: pin-runtime-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
