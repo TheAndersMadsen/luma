@@ -1,0 +1,50 @@
+name: Feature request
+description: A stock Pin behaviour Luma does not recreate yet, or an improvement to Center or the CLI.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The decompiled stock apps are Luma's specification. A request that names
+        the stock behaviour is much easier to act on than a general idea.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The task, from the wearer's or owner's point of view. "Ask the Pin for …", "See … in Center".
+    validations:
+      required: true
+  - type: textarea
+    id: stock
+    attributes:
+      label: What the stock Pin or humane.center did
+      description: |
+        How Humane's software behaved, if you know: the phrase, the app, the screen, the answer.
+        If you have the decompiled reference (`./luma stock decompile`), name the class or method.
+        Write "unknown" if you do not know; do not paste stock code.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Assistant (voice answers, tools, providers)
+        - Music
+        - Captures, notes, contacts, or My Data in Center
+        - Pin setup, installer, or updates
+        - Server setup, deploy, backup, or CLI
+        - Documentation
+        - Other
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds, other tools, or why the current behaviour is not enough.
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: This is not a security problem (those go through SECURITY.md)
+          required: true
+        - label: I have not attached stock APKs or decompiled stock code
+          required: true

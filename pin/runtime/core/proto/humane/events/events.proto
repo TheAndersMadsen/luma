@@ -1,0 +1,73 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+// EventsIngestService, telemetry event ingestion.
+
+syntax = "proto3";
+
+package humane.events;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+
+option java_multiple_files = true;
+
+// ---- Messages ----
+
+message UUID {
+  string value = 1;
+}
+
+message NotableEvent {
+  UUID event_identifier = 1;
+  string originator_identifier = 2;
+  google.protobuf.Timestamp creation_time = 3;
+  google.protobuf.Struct event_data = 4;
+  string event_type = 5;
+  humane.common.encryption.EncryptedData encrypted_event_data = 6;
+  humane.common.encryption.EncryptedData encrypted_location = 7;
+  bool device_is_locked = 8;
+}
+
+message IngestResponse {
+  UUID event_identifier = 1;
+}
+
+message IngestBatchRequest {
+  repeated NotableEvent events = 1;
+}
+
+message IngestBatchResponse {
+  repeated UUID event_identifier = 1;
+}
+
+message EventFilters {
+  string event_type = 1;
+  string event_originator_id = 2;
+  google.protobuf.Timestamp event_start_time = 3;
+  google.protobuf.Timestamp event_end_time = 4;
+  google.protobuf.Struct event_properties_filter = 5;
+}
+
+message DeviceEventQueryRequest {
+  EventFilters filters = 1;
+  int32 max_results = 2;
+}
+
+message EventsQueryResponse {
+  repeated NotableEvent events = 1;
+}
+
+// ---- Service ----
+
+service EventsIngestService {
+  // Stock keeps these bidirectional streams open and acknowledges each input frame.
+  rpc Ingest (stream NotableEvent) returns (stream IngestResponse);
+
+  rpc IngestBatch (stream IngestBatchRequest) returns (stream IngestBatchResponse);
+}
+
+service DeviceEventsHistoryService {
+  rpc QueryEvents (DeviceEventQueryRequest) returns (EventsQueryResponse);
+}

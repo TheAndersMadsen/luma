@@ -1,0 +1,466 @@
+# `luma setup production` writes the operator-local overlay. The release
+# workflow publishes this source-only model as an OCI Compose application;
+# operator files and values are added only by the local overlay at deployment.
+
+x-production-labels: &production-labels
+  dk.andersmadsen.luma.product: Luma
+  dk.andersmadsen.luma.release: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID}
+  dk.andersmadsen.luma.environment: production
+  org.opencontainers.image.revision: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID}
+
+x-production-cosmos-environment: &production-cosmos-environment
+  COSMOS_AUTH_MODE: edge-authenticated
+  COSMOS_ENVIRONMENT: production
+  COSMOS_STATE_DIR: /var/lib/cosmos
+  COSMOS_DATABASE_URL: ${COSMOS_DATABASE_URL:?run luma setup production}
+  COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?run luma setup production}
+  COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:?run luma setup production}
+  COSMOS_OIDC_JWKS_URI: http://keycloak:8080/realms/humane/protocol/openid-connect/certs
+  COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
+  LUMA_DEPLOYMENT_ENVIRONMENT: production
+
+x-production-cosmos-dependencies: &production-cosmos-dependencies
+  postgres:
+    condition: service_healthy
+  keycloak:
+    condition: service_healthy
+
+services:
+  connectivity:
+    profiles: [pin]
+    environment:
+      <<: *production-cosmos-environment
+    depends_on: *production-cosmos-dependencies
+    networks: !override
+      - cosmos-internal
+
+  ai-bus:
+    environment:
+      <<: *production-cosmos-environment
+      COSMOS_CAPTURE_STORAGE_DIR: /var/lib/cosmos/captures
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-enforce}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:?run luma setup production}
+      COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-true}
+      COSMOS_LLM_BASE_URL: ${COSMOS_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      COSMOS_LLM_API_KEY: ${COSMOS_LLM_API_KEY:-}
+      COSMOS_LLM_MODEL: ${COSMOS_LLM_MODEL:-openai/gpt-5.6-luna}
+      COSMOS_LLM_REASONING_EFFORT: ${COSMOS_LLM_REASONING_EFFORT:-}
+      COSMOS_LLM_MAX_TOKENS: ${COSMOS_LLM_MAX_TOKENS:-512}
+      COSMOS_SEARXNG_BASE_URL: ${COSMOS_SEARXNG_BASE_URL:-}
+      COSMOS_SERPAPI_KEY: ${COSMOS_SERPAPI_KEY:-}
+      COSMOS_GOOGLE_MAPS_KEY: ${COSMOS_GOOGLE_MAPS_KEY:-}
+      COSMOS_PIRATE_WEATHER_KEY: ${COSMOS_PIRATE_WEATHER_KEY:-}
+      COSMOS_WOLFRAM_APP_ID: ${COSMOS_WOLFRAM_APP_ID:-}
+      COSMOS_PPLX_API_KEY: ${COSMOS_PPLX_API_KEY:-}
+      COSMOS_PPLX_MODEL: ${COSMOS_PPLX_MODEL:-sonar}
+      COSMOS_OPEN_FOOD_FACTS_USERNAME: ${COSMOS_OPEN_FOOD_FACTS_USERNAME:-}
+      COSMOS_OPEN_FOOD_FACTS_PASSWORD: ${COSMOS_OPEN_FOOD_FACTS_PASSWORD:-}
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
+      COSMOS_AZURE_SPEECH_KEY: ${COSMOS_AZURE_SPEECH_KEY:-}
+      COSMOS_AZURE_SPEECH_REGION: ${COSMOS_AZURE_SPEECH_REGION:-}
+      COSMOS_AZURE_SPEECH_VOICE: ${COSMOS_AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}
+      COSMOS_ONBOARDING_AUTHORITY: ${COSMOS_ONBOARDING_AUTHORITY:-cosmos-edge}
+      # The operator console runs here and reports the account an unpaired Pin
+      # enrolls into. The wearer's Pin passcode is registered here too, against
+      # the one OPAQUE setup the provisioning ceremony opens it with, so both
+      # propose that setup from the same seed.
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:-}
+      COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:-}
+      COSMOS_CAPTURE_UPLOAD_BASE_URL: ${COSMOS_CAPTURE_UPLOAD_BASE_URL:?run luma setup production}
+      COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:?run luma setup production}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:?run luma setup production}
+      COSMOS_MUSICBRAINZ_BASE_URL: ${COSMOS_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      COSMOS_CENTER_MUSIC_QUERY_URL: http://center:4000/api/internal/music/query
+      COSMOS_SHOPPING_VISUAL_SEARCH_URL: ${COSMOS_SHOPPING_VISUAL_SEARCH_URL:-}
+      COSMOS_SHOPPING_ALLOWED_HOSTS: ${COSMOS_SHOPPING_ALLOWED_HOSTS:-}
+      COSMOS_SHOPPING_API_KEY: ${COSMOS_SHOPPING_API_KEY:-}
+    networks: !override
+      cosmos-internal: {}
+      search-service: {}
+      provider-egress:
+        gw_priority: 1
+    depends_on: *production-cosmos-dependencies
+
+  account:
+    environment:
+      <<: *production-cosmos-environment
+    depends_on: *production-cosmos-dependencies
+
+  contacts:
+    environment:
+      <<: *production-cosmos-environment
+    depends_on: *production-cosmos-dependencies
+
+  feature-flags:
+    environment:
+      <<: *production-cosmos-environment
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
+    depends_on: *production-cosmos-dependencies
+
+  notable-events:
+    environment:
+      <<: *production-cosmos-environment
+    depends_on: *production-cosmos-dependencies
+
+  provisioning:
+    profiles: [pin]
+    environment:
+      <<: *production-cosmos-environment
+      COSMOS_DUC_CA_CERT: /etc/cosmos-duc/duc-ca.crt
+      COSMOS_DUC_CA_KEY: /etc/cosmos-duc/duc-ca.key
+      COSMOS_ALLOW_SINGLE_REPLICA_ENROLLMENT: "1"
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:-}
+      COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:-}
+    depends_on: *production-cosmos-dependencies
+
+  center:
+    environment:
+      LUMA_ENVIRONMENT: production
+      LUMA_DEPLOYMENT_ENVIRONMENT: production
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:?run luma setup production}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:?run luma setup production}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?run luma setup production}
+      KEYCLOAK_BASE_URL: http://keycloak:8080
+      KEYCLOAK_REALM: humane
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-center}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?run luma setup production}
+      KEYCLOAK_SCOPES: ${KEYCLOAK_SCOPES:-openid email profile}
+      LUMA_MUSIC_GATEWAY_ORIGIN: ${LUMA_MUSIC_GATEWAY_ORIGIN:?run luma setup production}
+      TIDAL_CLIENT_ID: ${TIDAL_CLIENT_ID:-}
+      TIDAL_CLIENT_SECRET: ${TIDAL_CLIENT_SECRET:-}
+      TIDAL_SCOPES: ${TIDAL_SCOPES:-}
+      TIDAL_COUNTRY_CODE: ${TIDAL_COUNTRY_CODE:-}
+      APPLE_MUSIC_DEVELOPER_TOKEN: ${APPLE_MUSIC_DEVELOPER_TOKEN:-}
+      LUMA_SPOTIFY_ADAPTER_TIMEOUT_MS: ${LUMA_SPOTIFY_ADAPTER_TIMEOUT_MS:-10000}
+      # This server's release as setup recorded it, and where and whether it
+      # updates itself. The operator overlay mounts the update status
+      # (LUMA_UPDATE_STATUS_FILE) that `./luma update production` writes.
+      LUMA_RELEASE_VERSION: ${LUMA_RELEASE_VERSION:-}
+      LUMA_RELEASE_TAG: ${LUMA_RELEASE_TAG:-}
+      LUMA_PIN_RELEASE_VERSION: ${LUMA_PIN_RELEASE_VERSION:-}
+      LUMA_PIN_RELEASE_VERSION_CODE: ${LUMA_PIN_RELEASE_VERSION_CODE:-}
+      LUMA_RELEASE_NOTES: ${LUMA_RELEASE_NOTES:-}
+      LUMA_RELEASE_PUBLISHED_AT: ${LUMA_RELEASE_PUBLISHED_AT:-}
+      LUMA_UPDATE_SOURCE: ${LUMA_UPDATE_SOURCE:-}
+      LUMA_AUTO_UPDATES: ${LUMA_AUTO_UPDATES:-off}
+    volumes: !override
+      - center-data:/data
+    networks: !override
+      cosmos-internal: {}
+      pin-control: {}
+      provider-egress:
+        gw_priority: 1
+    depends_on:
+      ai-bus: { condition: service_healthy }
+      account: { condition: service_healthy }
+      contacts: { condition: service_healthy }
+      feature-flags: { condition: service_healthy }
+      notable-events: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cosmos
+      POSTGRES_DB: cosmos
+      POSTGRES_PASSWORD: ${COSMOS_PG_PASSWORD:?run luma setup production}
+    volumes:
+      - cosmos-pgdata:/var/lib/postgresql/data
+    networks:
+      - cosmos-internal
+    mem_limit: 2g
+    pids_limit: 256
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: database
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U cosmos -d cosmos]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 30
+
+  keycloak:
+    profiles: !reset []
+    image: ${LUMA_KEYCLOAK_IMAGE:-ghcr.io/theandersmadsen/luma/keycloak:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID}}
+    command: [start, --optimized, --import-realm]
+    environment: !override
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: cosmos
+      KC_DB_PASSWORD: ${COSMOS_PG_PASSWORD:?run luma setup production}
+      KC_HOSTNAME: ${LUMA_PUBLIC_ORIGIN:?run luma setup production}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?run luma setup production}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run luma setup production}
+      JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=60
+    volumes: !override
+      - keycloak-data:/opt/keycloak/data
+    networks: !override
+      - cosmos-internal
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  traefik:
+    image: ${LUMA_TRAEFIK_IMAGE:-traefik:v3.6.25@sha256:31267173a15b4944e797a76ffd9c419707c8d8b32fe5b610f80cd0cfa05f372d}
+    # Ping is enabled in the rendered traefik.yml (a config file makes the
+    # CLI --ping flag a no-op). The healthcheck reads the same file.
+    command: [--configFile=/etc/traefik/traefik.yml]
+    restart: unless-stopped
+    ports:
+      - target: 80
+        published: "80"
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: "443"
+        protocol: tcp
+        mode: host
+    volumes:
+      - traefik-acme:/var/lib/traefik
+    networks:
+      - public-edge
+      - cosmos-internal
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: ingress
+    healthcheck:
+      test: [CMD, traefik, healthcheck, --ping]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    depends_on:
+      center: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+  edge:
+    profiles: [pin]
+    image: ${LUMA_ENVOY_IMAGE:-envoyproxy/envoy:v1.31-latest@sha256:caa5b411be1633b90023592a34a7e010c933d6e60206c758f631485e53006865}
+    entrypoint: [envoy]
+    user: "101:101"
+    command: [-c, /etc/cosmos-edge/envoy.yaml]
+    restart: unless-stopped
+    read_only: true
+    networks:
+      - cosmos-internal
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 128
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: device-edge
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9901;
+          printf 'GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          head -1 <&3 | grep -q ' 200 '
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    depends_on:
+      feature-flags: { condition: service_healthy }
+      provisioning: { condition: service_healthy }
+
+  searxng:
+    profiles: [search]
+    image: searxng/searxng@sha256:f4c8e59de166ed71f6380c0847c312ca51f0d41996e31d0559163b6b09ecde52
+    user: "977:977"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=977,gid=977
+      - /var/cache/searxng:size=128m,mode=0750,uid=977,gid=977
+    environment:
+      FORCE_OWNERSHIP: "false"
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-}
+    networks:
+      search-service: {}
+      search-egress: { gw_priority: 1 }
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 128
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: search
+    healthcheck:
+      test: [CMD, wget, --quiet, --tries=1, --spider, http://127.0.0.1:8080/healthz]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  center-iroh-bridge:
+    profiles: [pin]
+    image: ${LUMA_CENTER_IROH_BRIDGE_IMAGE:-ghcr.io/theandersmadsen/luma/center-iroh-bridge:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID}}
+    command:
+      - --listen-ip
+      - 0.0.0.0
+      - --port
+      - "18080"
+      - --assignment-file
+      - /var/lib/center-iroh-bridge/assignment.json
+      - --control-token-file
+      - /run/secrets/pin_bridge_control_token
+      - --secret-key-file
+      - /var/lib/center-iroh-bridge/endpoint.key
+    restart: unless-stopped
+    read_only: true
+    volumes:
+      - iroh-bridge-data:/var/lib/center-iroh-bridge
+    networks:
+      pin-control: {}
+      provider-egress: { gw_priority: 1 }
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: center-iroh-bridge
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, "4", http://127.0.0.1:18080/__health]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  spotify-adapter:
+    profiles: [spotify]
+    image: ${LUMA_SPOTIFY_IMAGE:-ghcr.io/theandersmadsen/luma/spotify-adapter:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID}}
+    restart: unless-stopped
+    read_only: true
+    environment:
+      LUMA_SPOTIFY_ADAPTER_BIND_ADDRESS: 0.0.0.0
+      LUMA_SPOTIFY_ADAPTER_PORT: "18081"
+      LUMA_SPOTIFY_ADAPTER_TIMEOUT_MS: ${LUMA_SPOTIFY_ADAPTER_TIMEOUT_MS:-10000}
+      LUMA_SPOTIFY_ADAPTER_TOKEN_FILE: /run/secrets/spotify_adapter_token
+      LUMA_SPOTIFY_ADAPTER_UPSTREAM_ORIGIN: http://center-iroh-bridge:18080
+    networks: [pin-control]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    pids_limit: 128
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: spotify-adapter
+    # Mirrors the adapter image's own HEALTHCHECK: `bun --no-env-file src/healthcheck.mjs`
+    # GETs the liveness route on the configured bind address and port.
+    healthcheck:
+      test: [CMD, bun, --no-env-file, src/healthcheck.mjs]
+      interval: 30s
+      timeout: 8s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      center-iroh-bridge: { condition: service_healthy }
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    user: "65534:65534"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+    volumes:
+      - prometheus-data:/prometheus
+    networks: [cosmos-internal]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 256
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: metrics
+    healthcheck:
+      test: [CMD, wget, --quiet, --tries=1, --spider, http://127.0.0.1:9090/-/healthy]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
+    ports:
+      - target: 3000
+        published: "${LUMA_GRAFANA_PORT:-13001}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks: [cosmos-internal, loopback-publish]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    pids_limit: 256
+    labels:
+      <<: *production-labels
+      dk.andersmadsen.luma.component: dashboards
+    # The Grafana image ships neither wget nor curl. Probe /api/health the way
+    # the edge service probes its admin listener.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/3000;
+          printf 'GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          head -1 <&3 | grep -q ' 200 '
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      prometheus: { condition: service_healthy }
+
+networks: !override
+  cosmos-internal:
+    internal: true
+  public-edge: {}
+  provider-egress: {}
+  search-service:
+    internal: true
+  search-egress: {}
+  pin-control:
+    internal: true
+  loopback-publish:
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+
+volumes: !override
+  cosmos-state: {}
+  cosmos-pgdata: {}
+  center-data: {}
+  keycloak-data: {}
+  traefik-acme: {}
+  prometheus-data: {}
+  grafana-data: {}
+  iroh-bridge-data: {}

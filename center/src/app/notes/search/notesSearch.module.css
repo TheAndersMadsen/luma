@@ -1,0 +1,40 @@
+/* Notes search, the recovered `/notes/search?q=` route. A search bar over the
+   note grid; Cosmos searches every note and pages the matches.
+
+   The bar is the shared VoyagerField pill (controls.module.css `.fieldSearch`),
+   not its own 1px iron border at radius 14 with an invented focus colour —
+   which is what made this route read as a different product from Captures'
+   search bar three files away. Only the placement is local. */
+
+.bar {
+  composes: fieldSearch from "../../../components/controls.module.css";
+  margin: 0 auto 18px;
+  max-width: 640px;
+}
+
+/* Focus lives on the inner input, so the pill brightens via :focus-within,
+   with the shared `--focused-outline-shadow`, never a hand-picked cyan. */
+.bar:focus-within {
+  box-shadow: var(--focused-outline-shadow);
+}
+
+.icon {
+  flex: none;
+  color: var(--luma-colors-crater-base);
+  display: inline-flex;
+}
+
+.input {
+  composes: fieldSearchInput from "../../../components/controls.module.css";
+}
+
+.count {
+  margin: -6px auto 14px;
+  max-width: 640px;
+  font-size: 12px;
+  color: var(--luma-text-muted);
+}
+
+.back {
+  composes: circularButton from "../../../components/buttons.module.css";
+}

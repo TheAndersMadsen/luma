@@ -1,0 +1,87 @@
+/* CircularButton_CircularButton, shared by the toolbars, back buttons and the notes FAB. */
+
+.circularButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--luma-colors-penumbra-base);
+  color: var(--luma-colors-white);
+  box-shadow: var(--outline-shadow);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.circularButton:hover:not(:disabled) {
+  background: var(--luma-colors-button-background-dark-secondary-hover);
+}
+
+.circularButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* the "+ new note" FAB, yellow is Notes' colour, not a global accent */
+.circularButtonAccent {
+  background: var(--luma-colors-yellow-100);
+  color: var(--luma-colors-black);
+}
+
+.circularButtonAccent:hover:not(:disabled) {
+  background: #ffe600;
+}
+
+/*
+ * Secondary pill, the "Update" affordance on Login rows.
+ *
+ * Geometry, colour and hover now come from the one shared secondary in
+ * controls.module.css. Thirteen near-identical secondaries across the app used
+ * to disagree about all three. The class name and every call site are unchanged.
+ */
+.secondaryButton {
+  composes: buttonSecondary from "./controls.module.css";
+}
+
+/* Small round "+", the MFA add control. */
+.addButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--luma-colors-white);
+  background: var(--luma-colors-button-background-dark-secondary-base);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.addButton:hover {
+  background: var(--luma-colors-button-background-dark-secondary-hover);
+}
+
+/* Destructive text affordance, "Delete". Confirms before acting (see caller). */
+.deleteButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--luma-colors-red-50);
+  background: transparent;
+  transition: background-color var(--transition-duration) ease-out,
+    color var(--transition-duration) ease-out;
+  min-height: 44px;
+}
+
+.deleteButton:hover {
+  color: var(--luma-colors-red-100);
+  background: rgba(255, 72, 52, 0.12);
+}

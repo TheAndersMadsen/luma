@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "component": "luma-device-builder",
+  "source": "pin",
+  "platform": "host-native",
+  "status": "implemented",
+  "toolchain": {
+    "jdk": {
+      "distribution": "Eclipse Temurin",
+      "version": "17.0.14+7",
+      "image": "eclipse-temurin:17.0.14_7-jdk-jammy",
+      "imageIndexDigest": "sha256:23f74f7840a6948f9da3870876f475c4febeb365757891a6a9ebda38a42cf53f",
+      "evidence": "derived from device README and host CI requirement for JDK 17"
+    },
+    "gradle": {
+      "version": "8.9",
+      "source": "pin/gradle/wrapper/gradle-wrapper.properties",
+      "evidence": "observed"
+    },
+    "android": {
+      "commandLineTools": {
+        "version": "15859902",
+        "sha256": "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583",
+        "evidence": "observed on the official Android Developers download page"
+      },
+      "platform": "34",
+      "buildTools": "35.0.0",
+      "ndkRelease": "r28c",
+      "ndk": "28.2.13676358",
+      "ndkArchive": {
+        "url": "https://dl.google.com/android/repository/android-ndk-r28c-linux.zip",
+        "size": 722261334,
+        "sha1": "a7b54a5de87fecd125a17d54f73c446199e72a64",
+        "sha256": "dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f",
+        "sourceRoot": "android-ndk-r28c",
+        "destination": "/opt/android-sdk/ndk/28.2.13676358",
+        "evidence": "official Android NDK unsupported-download archive metadata plus an independently computed SHA-256"
+      },
+      "rustTarget": "aarch64-linux-android",
+      "evidence": "observed in copied Android modules and build operations documentation"
+    },
+    "rust": {
+      "version": "1.91.1",
+      "image": "rust:1.91.1-bookworm",
+      "imageIndexDigest": "sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33",
+      "evidence": "derived from the highest rust-version in the locked dependency graph (portmapper@0.19.1 requires rustc 1.91)"
+    },
+    "cargoNdk": {
+      "version": "4.1.2",
+      "archive": {
+        "url": "https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-x86_64-unknown-linux-musl-v4.1.2.tgz",
+        "size": 2736539,
+        "sha256": "dc148bebbfcd7d5355e9858530d5a69c20ce69cf3268c54b9f63c60cb4c9a966",
+        "sourceRoot": "cargo-ndk-x86_64-unknown-linux-musl-v4.1.2",
+        "target": "x86_64-unknown-linux-musl",
+        "evidence": "upstream v4.1.2 release asset metadata and an independently computed SHA-256"
+      },
+      "arm64Archive": {
+        "url": "https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-aarch64-unknown-linux-musl-v4.1.2.tgz",
+        "size": 2642233,
+        "sha256": "2d9f4f28f797ee98a97a5b760197e4e64f2ce2967d716cf57c69ad01f4ed72ba",
+        "sourceRoot": "cargo-ndk-aarch64-unknown-linux-musl-v4.1.2",
+        "target": "aarch64-unknown-linux-musl",
+        "evidence": "upstream v4.1.2 release asset metadata and an independently computed SHA-256"
+      },
+      "evidence": "observed in copied build operations documentation"
+    },
+    "jadx": {
+      "version": "1.5.6",
+      "archive": {
+        "url": "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+        "size": 72646741,
+        "sha256": "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974"
+      },
+      "runtime": "the jdk image above, with no network; used only by ./luma stock decompile",
+      "evidence": "upstream v1.5.6 release asset digest and an independently computed SHA-256"
+    },
+    "bun": {
+      "version": "1.4.2",
+      "image": "oven/bun:1.4.2-slim",
+      "imageIndexDigest": "sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61"
+    },
+    "pnpm": {
+      "version": "12.6.0",
+      "archives": {
+        "linux-arm64": "973af2b3eb9509416cf889a7336705062c936407d5fda07298814e7532f5dea1",
+        "linux-x64": "3f4c66f668d0e84219679982d095b30da68325e1fac9284e7f5dc1584bd3d13e",
+        "darwin-arm64": "1030f38e14fa2e6c87fe6ab0313a3bf3b794a961504f4439bad2ca2110d3583e",
+        "darwin-x64": "baee033929fd76bdf0193ea35aad6efa7ac2931b96f2780328d244c70174306a"
+      }
+    }
+  },
+  "runtime": {
+    "user": "builder",
+    "sourceMount": "/workspace/pin",
+    "workingState": "/state/device-build/worktree",
+    "artifactOutput": "/state/artifacts/device",
+    "debugArtifactOutput": "/state/artifacts/device-debug",
+    "externalCaches": [
+      "/cache/android",
+      "/cache/cargo",
+      "/cache/gradle",
+      "/cache/pnpm"
+    ],
+    "defaultCommand": "help",
+    "commands": [
+      "help",
+      "versions",
+      "doctor",
+      "build-cli",
+      "build-android",
+      "build-debug",
+      "build-debug-role",
+      "check-unit",
+      "prefetch-release",
+      "build-release",
+      "shell"
+    ]
+  },
+  "boundaries": {
+    "sourceIsReadOnly": true,
+    "credentialFreeHostPlatform": "Linux x86_64",
+    "sourceMountMode": "repository mounted read-only; compilation happens in external build state",
+    "changedSelectionBoundary": "the CLI uses Git changed paths and a small role mapping before Docker starts",
+    "compilerSourceIsolation": "the container copies the read-only Pin source into reusable external build state",
+    "debugCommandsRejectSigningInputs": true,
+    "dependencyCaches": "Cargo, Gradle, pnpm, and Android caches persist under the external build directory",
+    "roleScopedDebugIsCompileOnly": true,
+    "serverDebugCompilesRuntimeCore": "cargo check --locked --all-targets --features iroh",
+    "debugArtifactPublication": "selected compile-only APKs and SHA256SUMS are written to the external debug artifact directory",
+    "releaseDependencyFetch": "networked dependency-only prefetch with no signing or private-asset mounts",
+    "releaseSigningInputs": "external read-only d8a64 mounts validated against fixed certificate identity",
+    "releaseSigningNetwork": "none; Gradle and Cargo run offline from the prefetch cache",
+    "releaseArtifactsInImage": false,
+    "privateNativeAssetsInImage": false,
+    "usbExposed": false,
+    "adbInstalled": false,
+    "physicalProvisioning": "host-only exact-target action",
+    "physicalInstallation": "host-only exact-target action"
+  }
+}

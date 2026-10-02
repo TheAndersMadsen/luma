@@ -1,0 +1,22 @@
+.reconnect {
+  composes: statusRetry from "./status.module.css";
+}
+.dialog {
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  margin: auto;
+  padding: 36px 28px 28px;
+  border: 1px solid var(--luma-colors-dark-matter-base);
+  border-radius: 24px;
+  background: var(--luma-colors-eclipse-base);
+  color: var(--luma-colors-solar-base);
+  box-shadow: 0 24px 80px #0008;
+}
+.dialog::backdrop { background: #000b; backdrop-filter: blur(6px); }
+.dialog h2 { margin: 0 32px 16px 0; font-size: 34px; font-weight: 300; letter-spacing: -.04em; }
+.dialog p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--luma-colors-crater-base); }
+.close { position: absolute; top: 12px; right: 12px; width: 44px; height: 44px; border: 0; border-radius: 50%; color: inherit; background: transparent; font-size: 28px; cursor: pointer; }
+.close:hover { background: #fff1; }
+.close:focus-visible { outline: 2px solid var(--luma-colors-beam-base); outline-offset: 2px; }

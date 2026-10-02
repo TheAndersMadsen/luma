@@ -1,0 +1,94 @@
+.panel {
+  position: fixed;
+  right: 24px;
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  z-index: 60;
+  width: min(440px, calc(100vw - 32px));
+  height: min(620px, calc(100dvh - 180px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--luma-radius-raised);
+  background: rgba(19, 20, 20, 0.98);
+  box-shadow: var(--outline-shadow), 0 24px 80px rgba(0, 0, 0, 0.65);
+  animation: assistantIn var(--luma-motion-transition) cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.panel[hidden] { display: none; }
+
+.header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px 12px 16px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.identity,
+.headerActions { display: flex; align-items: center; }
+.identity { gap: 10px; min-width: 0; }
+
+.mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  background: var(--luma-colors-button-background-dark-secondary-base);
+  color: var(--luma-colors-beam-base);
+}
+
+.title,
+.subtitle { display: block; }
+.title { font-size: 16px; line-height: 1.15; color: var(--luma-colors-white); }
+.subtitle { margin-top: 2px; font-size: 12px; font-weight: 400; color: var(--luma-colors-crater-base); }
+.headerActions { gap: 8px; }
+.status { max-width: 132px; }
+
+.close {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: var(--luma-colors-crater-base);
+  transition: color var(--transition-duration) ease-out,
+    background-color var(--transition-duration) ease-out,
+    transform var(--transition-duration) ease-out;
+}
+.close:hover { color: var(--luma-colors-white); background: var(--luma-colors-button-background-dark-secondary-base); }
+.close:active { transform: scale(0.96); }
+
+.chat {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 14px;
+}
+
+@keyframes assistantIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 600px) {
+  .panel {
+    inset: auto 0 0;
+    width: 100%;
+    height: min(82dvh, 720px);
+    border-radius: var(--luma-radius-raised) var(--luma-radius-raised) 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .header { padding-left: 18px; }
+  .status { display: none; }
+  .chat { padding-inline: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel { animation: none; }
+}

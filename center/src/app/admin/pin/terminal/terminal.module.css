@@ -1,0 +1,158 @@
+/*
+ * The operator device shell.
+ *
+ * Written in the same --luma-* tokens as the rest of Center. The only thing here
+ * that is not Center's own palette is the terminal viewport itself, which is
+ * black-on-grey because that is what the programs running inside it expect
+ * their ANSI colours to sit on.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--luma-spacing-base-3);
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--luma-spacing-base-4) var(--luma-spacing-base-3) var(--luma-spacing-base-6);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--luma-spacing-base-2);
+}
+
+.headerText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--luma-colors-white);
+}
+
+.subtitle {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+}
+
+.warning {
+  border: 1px solid var(--luma-divider);
+  border-left: 3px solid var(--luma-status-warning);
+  border-radius: var(--luma-radius-control);
+  padding: 14px 18px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--luma-colors-apollo-base);
+  background: var(--luma-colors-penumbra-200);
+}
+
+.panel {
+  composes: surface from "../../../../components/controls.module.css";
+  display: flex;
+  flex-direction: column;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.panelTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--luma-colors-white);
+}
+
+.state {
+  font-size: 13px;
+  color: var(--luma-colors-crater-base);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.note {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+  max-width: 640px;
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.button {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+  flex: none;
+}
+
+.buttonQuiet {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+  flex: none;
+}
+
+.buttonDanger {
+  composes: buttonDanger from "../../../../components/controls.module.css";
+  flex: none;
+}
+
+.link {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--luma-colors-beam-base);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+}
+
+/* --------------------------------------------------------- the viewport -- */
+
+.viewportWrap {
+  padding: 0 20px 20px;
+  overflow-x: auto;
+}
+
+.viewport {
+  background: var(--luma-colors-black);
+  border: 1px solid var(--luma-colors-lunar-grey-dark-200);
+  border-radius: var(--luma-radius-control);
+  padding: 12px;
+  min-height: 360px;
+}
+
+/* xterm renders its own layers. Keep them inside our rounded surface. */
+.viewport :global(.xterm) {
+  height: 100%;
+}

@@ -1,0 +1,30 @@
+// Independently authored from scrubbed wire observations of an operator-owned
+// device. Field order and scalar widths are protocol facts; names are clone-owned.
+namespace cosmos.krypton.secureasset;
+
+table Header {
+  kid:[ubyte];
+  // Stock's generated Header accessor defaults an omitted algorithm field to
+  // AES-KW (1).  FlatBuffers omits scalar fields equal to their schema default,
+  // so declaring the default is required to decode genuine device envelopes.
+  algorithm:ubyte = 1;
+}
+
+table AssetBinding {
+  encoding:ubyte;
+  domain:int;
+  object_id:int;
+  metadata:[ubyte];
+}
+
+table SecureAsset {
+  header:[ubyte];
+  aad:[ubyte];
+  wrapped_cek:[ubyte];
+  iv:[ubyte];
+  auth_tag:[ubyte];
+  ciphertext:[ubyte];
+}
+
+root_type SecureAsset;
+file_identifier "HMSA";

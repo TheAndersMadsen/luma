@@ -1,0 +1,141 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.privacy.grpc.pub;
+
+import "google/protobuf/timestamp.proto";
+import "humane/krypton/grpc/auth.proto";
+import "humane/krypton/grpc/key.proto";
+import "humane/privacy/grpc/common.proto";
+
+message ClientKeyUpdate {
+  bytes kid = 1;
+  humane.privacy.grpc.common.ClientKeyAttributes client_attrs = 2;
+}
+
+message EstablishWrappingKeysRequest {
+  humane.krypton.grpc.key.ClearKey clear_key = 1;
+}
+
+message EstablishWrappingKeysResponse {
+  humane.krypton.grpc.key.ClearKey clear_key = 2;
+}
+
+message ExportableKey {
+  bytes kid = 1;
+  humane.privacy.grpc.common.KeyState status = 2;
+  humane.privacy.grpc.common.ClientKeyAttributes client_attrs = 5;
+  humane.krypton.grpc.auth.Credentials creds = 6;
+  oneof key {
+    humane.krypton.grpc.key.WrappedKey wrapped_key = 3;
+    humane.krypton.grpc.key.ClearKey clear_key = 4;
+  }
+}
+
+message GetConfigurationRequest {
+  google.protobuf.Timestamp since_ts = 1;
+}
+
+message GetConfigurationResponse {
+  google.protobuf.Timestamp updated_ts = 1;
+  repeated PrivacySettingConfiguration configs = 2;
+}
+
+message GetSettingsRequest {
+  repeated string names = 1;
+}
+
+message GetSettingsResponse {
+  repeated humane.privacy.grpc.common.PrivacySettingInfo settings = 1;
+}
+
+message ImportKeysRequest {
+  repeated ImportableKey keys = 1;
+}
+
+message ImportKeysResponse {
+  repeated humane.privacy.grpc.common.KeyStateResponse results = 1;
+}
+
+message ImportableKey {
+  bytes kid = 1;
+  oneof key {
+    humane.krypton.grpc.key.WrappedKey wrapped_key = 2;
+    humane.krypton.grpc.key.ClearKey clear_key = 3;
+  }
+  oneof attrs {
+    humane.privacy.grpc.common.ClientKeyAttributes client_attrs = 4;
+    humane.privacy.grpc.common.EphemeralKeyAttributes ephemeral_attrs = 5;
+  }
+}
+
+message PrivacySettingConfiguration {
+  string name = 1;
+  string value = 2;
+  string manager = 3;
+  repeated string labels = 4;
+}
+
+message RemoveKeysRequest {
+  repeated bytes kids = 1;
+  bool deleted = 2;
+}
+
+message RemoveKeysResponse {
+  repeated humane.privacy.grpc.common.KeyStateResponse results = 1;
+}
+
+message RequestKeysRequest {
+  repeated bytes kids = 1;
+}
+
+message RequestKeysResponse {
+  repeated ExportableKey keys = 1;
+}
+
+message SyncKeysRequest {
+}
+
+// Both fields are REPEATED on the device. In the protobuf-lite message-info
+// string for SyncKeysResponse the two trailing field-type bytes are 0x1c and
+// 0x1b: field 1 is lite FieldType 28 (BYTES_LIST), field 2 is 27 (MESSAGE_LIST).
+// The generated class backs them with `Internal.ProtobufList<ByteString>
+// deleteKids_` / `Internal.ProtobufList<ExportableKey> exportedKeys_`
+// (sources/humane/privacy/grpc/pub/SyncKeysResponse.java:24,25,362). A singular
+// `bytes` encodes identically to a one-element list, so this was invisible while
+// the response was always empty -- and would have silently capped key sync at
+// one kid the moment it stopped being.
+message SyncKeysResponse {
+  repeated bytes deletekids = 1;
+  repeated ExportableKey exportedkeys = 2;
+}
+
+message UpdateKeysRequest {
+  repeated ClientKeyUpdate updates = 1;
+}
+
+message UpdateKeysResponse {
+  repeated humane.privacy.grpc.common.KeyStateResponse results = 1;
+}
+
+message UpdateSettingsRequest {
+  repeated humane.privacy.grpc.common.PrivacySetting settings = 1;
+}
+
+message UpdateSettingsResponse {
+  repeated humane.privacy.grpc.common.SettingStateResponse results = 1;
+}
+
+service PublicPrivacyService {
+  rpc EstablishWrappingKeys (EstablishWrappingKeysRequest) returns (EstablishWrappingKeysResponse);
+  rpc GetConfiguration (GetConfigurationRequest) returns (GetConfigurationResponse);
+  rpc GetSettings (GetSettingsRequest) returns (GetSettingsResponse);
+  rpc ImportKeys (ImportKeysRequest) returns (ImportKeysResponse);
+  rpc RemoveKeys (RemoveKeysRequest) returns (RemoveKeysResponse);
+  rpc RequestKeys (RequestKeysRequest) returns (RequestKeysResponse);
+  rpc SyncKeys (SyncKeysRequest) returns (SyncKeysResponse);
+  rpc UpdateKeys (UpdateKeysRequest) returns (UpdateKeysResponse);
+  rpc UpdateSettings (UpdateSettingsRequest) returns (UpdateSettingsResponse);
+}

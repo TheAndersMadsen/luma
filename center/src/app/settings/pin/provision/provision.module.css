@@ -1,0 +1,171 @@
+.content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px 24px 24px;
+}
+
+.intro {
+  margin: 0;
+  color: var(--luma-text-muted);
+  line-height: 1.5;
+}
+
+.facts {
+  margin: 0;
+}
+
+.facts > div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.45fr) minmax(0, 1fr);
+  gap: 20px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.facts dt {
+  color: var(--luma-text-muted);
+}
+
+.facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mono,
+.subject {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 24px 20px;
+}
+
+.field {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--luma-colors-white);
+}
+
+.input {
+  composes: field from "../../../../components/controls.module.css";
+  width: 100%;
+}
+
+.primaryButton {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+}
+
+.secondaryButton {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.quietButton {
+  composes: buttonQuietSmall from "../../../../components/controls.module.css";
+}
+
+.bundle {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.bundleHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.subject {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.directSetup,
+.fallbackBody {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.activationStatus,
+.connectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.directHeader {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.directHeader > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.directHeader strong {
+  color: var(--luma-colors-white);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.directHeader small {
+  color: var(--luma-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fallback {
+  width: 100%;
+  padding-top: 16px;
+  border-top: 1px solid var(--luma-divider);
+}
+
+.fallback > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--luma-text-muted);
+  font-size: 13px;
+}
+
+.fallbackBody {
+  padding-top: 16px;
+}
+
+@media (max-width: 560px) {
+  .facts > div {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .directHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.connectionDetails > summary { cursor: pointer; list-style: none; }
+.connectionDetails > summary::-webkit-details-marker { display: none; }
+.connectionDetails > summary::after { content: "+"; color: var(--luma-text-muted); font-size: 22px; }
+.connectionDetails[open] > summary::after { content: "−"; }
+.passcodeNote { color: var(--luma-text-muted); font-size: 13px; line-height: 1.6; }

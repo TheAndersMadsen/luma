@@ -1,0 +1,382 @@
+/* Toolbar, two stacked rows, mirroring Toolbar_* from the original */
+.toolbarAndSpacerContainer {
+  position: relative;
+  z-index: 20;
+}
+
+.toolbarContainerTopNav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: calc(18px + env(safe-area-inset-top))
+    calc(24px + env(safe-area-inset-right)) 18px
+    calc(24px + env(safe-area-inset-left));
+  pointer-events: none;
+}
+
+.toolbarContainerTopNav > * {
+  pointer-events: auto;
+}
+
+/* min-width: 0 on the two 1fr cells so a long chrome message (the backend
+   badge) shrinks instead of shoving the centred nav pill off-centre. */
+.left {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sourceStatus {
+  display: flex;
+  min-width: 0;
+}
+
+.sourceStatus:empty {
+  display: none;
+}
+
+.toolBarContainerTopNavSpacer {
+  height: var(--toolbarHeight);
+}
+
+/* ExperienceNav, the pill */
+.experienceNavContainer {
+  display: flex;
+  justify-content: center;
+  position: relative;
+}
+
+.surface {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 100px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.tabList {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tabLink {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 20px;
+  border-radius: 100px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--luma-colors-crater-base);
+  transition: color var(--transition-duration) ease-out,
+    background-color var(--transition-duration) ease-out;
+}
+
+.tabLink:hover {
+  color: var(--luma-colors-white);
+}
+
+.tabLinkSelected {
+  color: var(--luma-colors-white);
+}
+
+/* Mobile activator */
+.menuActivator {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 100px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+  min-height: 44px;
+}
+
+.caretContainer {
+  display: inline-flex;
+  transform: rotate(-90deg);
+  color: var(--luma-colors-crater-base);
+}
+
+.caretContainerOpen {
+  transform: rotate(90deg);
+}
+
+/* Mobile experience-nav dropdown, the activator reveals the four tabs plus the
+   recovered fifth "Menu" entry. */
+.mobileNav {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow), 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+.mobileNavItem {
+  display: flex;
+  align-items: center;
+  padding: 11px 16px;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+  min-height: 44px;
+}
+
+.mobileNavItem:hover {
+  color: var(--luma-colors-white);
+  background: var(--luma-colors-penumbra-200, #131414);
+}
+
+.mobileNavItemActive {
+  color: var(--luma-colors-white);
+}
+
+@media (max-width: 1071px) {
+  .desktopExperienceNavContainer {
+    display: none;
+  }
+  .menuActivator {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 560px) {
+  .toolbarContainerTopNav {
+    display: flex;
+    padding-inline: calc(16px + env(safe-area-inset-left)) calc(16px + env(safe-area-inset-right));
+  }
+  .toolbarContainerTopNav > .left:empty {
+    display: none;
+  }
+  .toolbarContainerTopNav > .center {
+    flex: 1;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+  .toolbarContainerTopNav > .right {
+    flex: none;
+    gap: 8px;
+  }
+  .sourceStatus {
+    position: absolute;
+    top: calc(68px + env(safe-area-inset-top));
+    right: calc(16px + env(safe-area-inset-right));
+    left: calc(16px + env(safe-area-inset-left));
+    justify-content: flex-end;
+  }
+  .toolbarAndSpacerContainer:has(.sourceStatus:not(:empty)) .toolBarContainerTopNavSpacer {
+    height: calc(var(--toolbarHeight) + 52px);
+  }
+  .mobileNav {
+    left: 0;
+    transform: none;
+    min-width: min(220px, calc(100vw - 88px));
+  }
+}
+
+.homeLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+
+/* System toolbar, pinned to the bottom: logo left, account menu right.
+   SystemToolbar_toolbarContainer in the original. */
+.systemToolbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 22px calc(26px + env(safe-area-inset-right))
+    calc(22px + env(safe-area-inset-bottom))
+    calc(26px + env(safe-area-inset-left));
+  pointer-events: none;
+  z-index: 20;
+  color: var(--luma-colors-white);
+}
+
+/* keeps the marks legible when content scrolls beneath them */
+.systemToolbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--luma-colors-black) 20%, transparent);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.systemToolbar > * > * {
+  pointer-events: auto;
+}
+
+/* NavMenu, the account dropdown (original classes NavMenu_triggerButton /
+   NavMenu_iconWrapper). Trigger = avatar + caret; dropdown opens upward since it
+   is anchored to the bottom system bar. */
+.navMenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.navMenuTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 999px;
+  color: var(--luma-colors-white);
+  background: transparent;
+  box-shadow: var(--outline-shadow);
+  transition: background-color var(--transition-duration) ease-out;
+  min-height: 44px;
+}
+
+.navMenuTrigger:hover {
+  background: var(--luma-colors-button-background-dark-secondary-base);
+}
+
+.navMenuIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.navMenuCaret {
+  display: inline-flex;
+  color: var(--luma-colors-crater-base);
+  transform: rotate(-90deg); /* ChevronLeft → points down */
+  transition: transform var(--transition-duration) ease-out;
+}
+
+.navMenuCaretOpen {
+  transform: rotate(90deg); /* points up while the menu is open */
+}
+
+.navMenuDropdown {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  min-width: 220px;
+  max-height: calc(100dvh - 140px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: var(--luma-radius-surface);
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--menu-drop-shadow), var(--outline-shadow);
+  z-index: 30;
+}
+
+/* A labelled group inside the account menu (role="group", a valid child of
+   role="menu", unlike a bare header span). */
+.navMenuGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Group headers inside the account menu, the same idiom the Settings sidebar
+   uses for "Account" / "Ai Pin", so groups read as groups in both places. */
+.navMenuGroupHeader {
+  padding: 12px 14px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+  color: var(--luma-colors-crater-base);
+}
+
+.navMenuItem {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--luma-colors-white);
+  background: transparent;
+  transition: background-color var(--transition-duration) ease-out;
+  min-height: 44px;
+}
+
+.navMenuItem:hover {
+  background: var(--luma-colors-button-background-dark-secondary-hover);
+}
+
+.main {
+  min-height: calc(100dvh - var(--toolbarHeight));
+  padding-bottom: calc(104px + env(safe-area-inset-bottom));
+}
+
+/* The "talk to your Pin" entry in the system row, clearly secondary, and the
+   reason /talk is no longer a route you can only reach by typing its URL. It is
+   suppressed on /talk itself (Shell's showAiMic), where you are already there. */
+.aiMicButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border: 1px solid var(--luma-colors-iron-base, #505355);
+  border-radius: 999px;
+  color: var(--luma-colors-crater-base, #a9abab);
+  text-decoration: none;
+  font-size: 13px;
+  background: rgba(0, 0, 0, 0.72);
+  cursor: pointer;
+  min-height: 44px;
+  transition: color var(--transition-duration) ease-out, border-color var(--transition-duration) ease-out,
+    background-color var(--transition-duration) ease-out, transform var(--transition-duration) ease-out;
+}
+.aiMicButton:hover {
+  color: var(--luma-colors-beam-base, #00ffe0);
+  border-color: rgba(0, 255, 224, 0.3);
+}
+.aiMicButton:active { transform: scale(0.97); }
+.aiMicButtonActive {
+  color: var(--luma-colors-beam-base, #00ffe0);
+  border-color: rgba(0, 255, 224, 0.3);
+  background: var(--luma-colors-penumbra-base);
+}

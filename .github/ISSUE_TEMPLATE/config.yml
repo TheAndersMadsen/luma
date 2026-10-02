@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/TheAndersMadsen/luma/security/advisories/new
+    about: Report a vulnerability privately. Never open a public issue for one; see SECURITY.md.
+  - name: Troubleshooting first
+    url: https://github.com/TheAndersMadsen/luma#troubleshooting
+    about: Symptom-first fixes for setup, deploy, sign-in, and USB problems.

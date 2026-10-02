@@ -1,0 +1,20 @@
+node_modules/
+.next/
+*.tsbuildinfo
+out/
+build/
+.DS_Store
+*.pem
+.env*
+!.env.example
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+next-env.d.ts
+.vercel
+# The wearer's channel keys, plus the `<file>.<pid>.tmp` sibling the store
+# renames over them so a replacement is atomic. The glob covers both: a
+# temporary left behind by a crash is still wearer key material.
+.cosmos-channel-key.json*
+.cosmos-channel-key.json*
+.gstack/

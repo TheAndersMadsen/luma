@@ -1,0 +1,5 @@
+# Gitleaks fingerprints for reviewed false positives. One line per finding.
+# Vendored dock-helper unit test sets a synthetic placeholder token:
+pin/ghostlock/source/tests/reclaim_capture_gate_test.c:generic-api-key:37
+# Center login-refusal test reuses the synthetic session secret the other verify tests set:
+center/verify/login-refusal.test.mjs:generic-api-key:7

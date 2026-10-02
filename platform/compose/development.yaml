@@ -1,0 +1,281 @@
+# Explicit local-development policy. Use with:
+# docker compose -f compose.yaml -f platform/compose/development.yaml ...
+
+x-development-labels: &development-labels
+  dk.andersmadsen.luma.environment: development
+
+x-development-cosmos-build: &development-cosmos-build
+  image: luma/cosmos-development:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the development source id}
+  build:
+    context: ./cosmos
+    dockerfile: Dockerfile
+    additional_contexts:
+      wire_contracts: ./contracts/wire
+
+# Optional while local identity is disabled. When the root CLI enables the
+# identity profile, every OIDC verifier waits for Keycloak's health check before
+# it fetches the initial JWKS.
+x-development-identity-dependency: &development-identity-dependency
+  keycloak:
+    condition: service_healthy
+    required: false
+
+services:
+  connectivity:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+    ports:
+      - 127.0.0.1:${LUMA_CONNECTIVITY_PORT:-18080}:18080
+
+  ai-bus:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-audit}
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+      COSMOS_LLM_BASE_URL: ${COSMOS_LLM_BASE_URL:-}
+      COSMOS_LLM_API_KEY: ${COSMOS_LLM_API_KEY:-}
+      COSMOS_LLM_MODEL: ${COSMOS_LLM_MODEL:-openai/gpt-5.6-luna}
+      COSMOS_LLM_REASONING_EFFORT: ${COSMOS_LLM_REASONING_EFFORT:-}
+      COSMOS_LLM_MAX_TOKENS: ${COSMOS_LLM_MAX_TOKENS:-512}
+      COSMOS_SERPAPI_KEY: ${COSMOS_SERPAPI_KEY:-}
+      COSMOS_GOOGLE_MAPS_KEY: ${COSMOS_GOOGLE_MAPS_KEY:-}
+      COSMOS_PIRATE_WEATHER_KEY: ${COSMOS_PIRATE_WEATHER_KEY:-}
+      COSMOS_WOLFRAM_APP_ID: ${COSMOS_WOLFRAM_APP_ID:-}
+      COSMOS_PPLX_API_KEY: ${COSMOS_PPLX_API_KEY:-}
+      COSMOS_PPLX_MODEL: ${COSMOS_PPLX_MODEL:-sonar}
+      COSMOS_OPEN_FOOD_FACTS_USERNAME: ${COSMOS_OPEN_FOOD_FACTS_USERNAME:-}
+      COSMOS_OPEN_FOOD_FACTS_PASSWORD: ${COSMOS_OPEN_FOOD_FACTS_PASSWORD:-}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:-}
+      COSMOS_MUSICBRAINZ_BASE_URL: ${COSMOS_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      COSMOS_SHOPPING_VISUAL_SEARCH_URL: ${COSMOS_SHOPPING_VISUAL_SEARCH_URL:-}
+      COSMOS_SHOPPING_ALLOWED_HOSTS: ${COSMOS_SHOPPING_ALLOWED_HOSTS:-}
+      COSMOS_SHOPPING_API_KEY: ${COSMOS_SHOPPING_API_KEY:-}
+      COSMOS_AZURE_SPEECH_KEY: ${COSMOS_AZURE_SPEECH_KEY:-}
+      COSMOS_AZURE_SPEECH_REGION: ${COSMOS_AZURE_SPEECH_REGION:-}
+      COSMOS_AZURE_SPEECH_VOICE: ${COSMOS_AZURE_SPEECH_VOICE:-en-US-AvaMultilingualNeural}
+    ports:
+      - 127.0.0.1:${LUMA_AI_BUS_GRPC_PORT:-15051}:15051
+
+  account:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+    ports:
+      - 127.0.0.1:${LUMA_ACCOUNT_GRPC_PORT:-15052}:15051
+
+  contacts:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+    ports:
+      - 127.0.0.1:${LUMA_CONTACTS_GRPC_PORT:-15053}:15051
+
+  feature-flags:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+    ports:
+      - 127.0.0.1:${LUMA_FEATURE_FLAGS_GRPC_PORT:-15054}:15051
+
+  notable-events:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+    ports:
+      - 127.0.0.1:${LUMA_NOTABLE_EVENTS_GRPC_PORT:-15055}:15051
+
+  provisioning:
+    <<: *development-cosmos-build
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    environment:
+      COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-development-insecure}
+      COSMOS_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+      COSMOS_OIDC_ISSUER: ${LUMA_LOCAL_OIDC_ISSUER:-}
+      COSMOS_OIDC_JWKS_URI: ${LUMA_LOCAL_OIDC_JWKS_URI:-}
+      COSMOS_DUC_CA_CERT: /run/secrets/duc_ca_cert
+      COSMOS_DUC_CA_KEY: /run/secrets/duc_ca_key
+    secrets:
+      - duc_ca_cert
+      - duc_ca_key
+    ports:
+      - 127.0.0.1:${LUMA_PROVISIONING_GRPC_PORT:-15056}:15051
+
+  center:
+    image: luma/center-development:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the development source id}
+    build:
+      context: .
+      dockerfile: center/Dockerfile
+      additional_contexts:
+        wire_contracts: ./contracts/wire
+      target: development
+    command:
+      - pnpm
+      - run
+      - dev
+    depends_on: *development-identity-dependency
+    labels:
+      <<: *development-labels
+    restart: "no"
+    read_only: false
+    user: "1000:1000"
+    environment:
+      NODE_ENV: development
+      LUMA_ENVIRONMENT: development
+      LUMA_DEPLOYMENT_ENVIRONMENT: development
+    ports:
+      - 127.0.0.1:${LUMA_CENTER_PORT:-4000}:4000
+    tmpfs: !override
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1000
+    volumes:
+      - center-development-next:/app/center/.next
+    develop:
+      watch:
+        - action: sync
+          path: ./center
+          target: /app/center
+          ignore:
+            - .next/
+            - node_modules/
+            - package.json
+            - Dockerfile
+        - action: rebuild
+          path: ./pnpm-workspace.yaml
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./bunfig.toml
+        - action: rebuild
+          path: ./center/package.json
+        - action: rebuild
+          path: ./pnpm-lock.yaml
+        - action: rebuild
+          path: ./center/Dockerfile
+        - action: rebuild
+          path: ./.dockerignore
+        - action: sync+restart
+          path: ./contracts/wire
+          target: /app/contracts
+
+  keycloak:
+    labels:
+      <<: *development-labels
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+      KC_HOSTNAME: http://localhost:${LUMA_KEYCLOAK_PORT:-8088}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - 127.0.0.1:${LUMA_KEYCLOAK_PORT:-8088}:8080
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    secrets:
+      - source: identity_realm
+        target: /opt/keycloak/data/import/realm.json
+
+  device-builder:
+    profiles:
+      - build-tools
+    build:
+      context: .
+      dockerfile: platform/containers/pin-builder/Dockerfile
+    platform: linux/amd64
+    image: luma/device-builder:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+    working_dir: /workspace
+    read_only: true
+    init: true
+    volumes:
+      - .:/workspace:ro
+      - ${LUMA_DATA_DIR:?set LUMA_DATA_DIR outside the source tree}:/workspace/state
+      - device-android-cache:/cache/android
+      - device-cargo-cache:/cache/cargo
+      - device-gradle-cache:/cache/gradle
+      - device-pnpm-cache:/cache/pnpm
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 6g
+    labels:
+      dk.andersmadsen.luma.product: Luma
+      dk.andersmadsen.luma.release: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+      dk.andersmadsen.luma.environment: development
+      dk.andersmadsen.luma.component: pin-builder
+      org.opencontainers.image.revision: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+
+networks:
+  cosmos-internal:
+    internal: false
+
+secrets:
+  duc_ca_cert:
+    file: ${LUMA_SECRETS_DIR:?set LUMA_SECRETS_DIR outside the source tree}/pki/duc-ca.crt
+  duc_ca_key:
+    file: ${LUMA_SECRETS_DIR:?set LUMA_SECRETS_DIR outside the source tree}/pki/duc-ca.key
+  identity_realm:
+    file: ${LUMA_SECRETS_DIR:?set LUMA_SECRETS_DIR outside the source tree}/identity/realm.json
+
+volumes:
+  keycloak-data:
+  center-development-next:
+  device-android-cache:
+  device-cargo-cache:
+  device-gradle-cache:
+  device-pnpm-cache:

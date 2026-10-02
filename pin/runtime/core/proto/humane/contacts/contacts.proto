@@ -1,0 +1,162 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+// ContactsRPCService, contact management.
+
+syntax = "proto3";
+
+package humane.contacts;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "humane/common/encryption.proto";
+
+option java_multiple_files = true;
+
+// ---- Messages ----
+
+message Name {
+  string first_name = 1;
+  string last_name = 2;
+  string nickname = 3;
+  string display_name = 4;
+}
+
+message PhoneNumber {
+  string value = 1;
+  string type = 2;
+}
+
+message Email {
+  string value = 1;
+  string type = 2;
+}
+
+message ContactSource {
+  string name = 1;
+}
+
+message Organization {
+  string name = 1;
+}
+
+enum SocialProviderAttributeEnum {
+  SOCIAL_PROVIDER_ATTRIBUTE_UNKNOWN = 0;
+  WORKSPACE_ID = 1;
+  USER_ID = 2;
+}
+
+message SocialProviderAttribute {
+  SocialProviderAttributeEnum type = 1;
+  string value = 2;
+}
+
+enum SocialProvider {
+  SOCIAL_PROVIDER_UNKNOWN = 0;
+  SLACK = 1;
+}
+
+message SocialHandle {
+  SocialProvider social_provider = 1;
+  repeated SocialProviderAttribute social_provider_attributes = 2;
+}
+
+message ContactAction {
+  string id = 1;
+  string message = 2;
+}
+
+message Contact {
+  string id = 1;
+  int32 version = 2 [deprecated = true];
+  repeated Email emails = 3;
+  Name name = 4;
+  repeated ContactAction contact_actions = 5 [deprecated = true];
+  repeated SocialHandle social_handles = 6;
+  repeated string telephone_numbers = 7 [deprecated = true];
+  bool temporary = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  bool trusted = 10;
+  bool emergency = 11;
+  repeated PhoneNumber phone_numbers = 12;
+  ContactSource contact_source = 13;
+  Organization organization = 14;
+  google.protobuf.Timestamp modified_at = 15;
+  bool internal_favorite = 16;
+}
+
+message GetContactsRequest {
+  optional string search_term = 1;
+}
+
+message ContactList {
+  repeated Contact contacts = 1 [deprecated = true];
+  repeated humane.common.encryption.EncryptedData encrypted_contacts = 2;
+  repeated int32 encrypted_contacts_versions = 3 [deprecated = true];
+}
+
+message ContactDeltasRequest {
+  string id = 1;
+  int32 version = 2;
+}
+
+message GetContactDeltasRequest {
+  repeated ContactDeltasRequest contact_requests = 1 [deprecated = true];
+  google.protobuf.Timestamp last_synced_time = 2;
+}
+
+message GetContactDeltasResponse {
+  repeated Contact contacts = 1 [deprecated = true];
+  repeated string deleted_contact_ids = 2;
+  repeated humane.common.encryption.EncryptedData encrypted_contacts = 3;
+  repeated int32 encrypted_contacts_versions = 4 [deprecated = true];
+  google.protobuf.Timestamp latest_sync_time = 5;
+}
+
+message DeleteContactRequest {
+  repeated string ids = 1;
+}
+
+// ---- Streaming messages ----
+
+message GetContactsStreamingRequest {
+  oneof sync_option {
+    google.protobuf.Timestamp last_synced_time = 1;
+    bool full_sync = 2;
+  }
+  bool server_should_decrypt = 3;
+}
+
+message GetContactsStreamingPageRequest {
+  GetContactsStreamingRequest streaming_request = 1;
+  int32 page_size = 2;
+}
+
+message GetContactsStreamingResponse {
+  google.protobuf.Timestamp modified_time = 1;
+  oneof response {
+    string deleted_contact_id = 2;
+    humane.common.encryption.EncryptedData encrypted_contact = 3;
+    Contact contact = 4;
+  }
+}
+
+message GetContactsStreamingPageResponse {
+  repeated GetContactsStreamingResponse page_content = 1;
+  int32 page_num = 2;
+  int32 total_pages = 3;
+}
+
+// ---- Service ----
+
+service ContactsRPCService {
+  rpc GetContacts (GetContactsRequest) returns (ContactList);
+  rpc GetContactDeltas (GetContactDeltasRequest) returns (GetContactDeltasResponse);
+  rpc GetContactsStreaming (GetContactsStreamingRequest)
+      returns (stream GetContactsStreamingResponse);
+  rpc GetContactsPaginatedStreaming (GetContactsStreamingPageRequest)
+      returns (stream GetContactsStreamingPageResponse);
+  rpc CreateContacts (ContactList) returns (ContactList);
+  rpc UpdateContacts (ContactList) returns (google.protobuf.Empty);
+  rpc DeleteContacts (DeleteContactRequest) returns (google.protobuf.Empty);
+}

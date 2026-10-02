@@ -1,0 +1,2 @@
+# Configuration comes from the CLI or container environment, never an ambient .env.
+env = false

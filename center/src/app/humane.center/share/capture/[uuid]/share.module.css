@@ -1,0 +1,79 @@
+/* Public share page, a standalone, chrome-light page (no app nav), like /wifi. */
+.stage {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--luma-colors-eclipse-base);
+}
+
+.chrome {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 22px 24px;
+  color: var(--luma-colors-white);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.frame {
+  margin: 0;
+  flex: 1;
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px 48px;
+}
+
+.image {
+  width: 100%;
+  height: auto;
+  max-height: 82dvh;
+  object-fit: contain;
+  border-radius: 16px;
+  box-shadow: var(--outline-shadow);
+  background: var(--luma-colors-penumbra-base);
+}
+
+/* Two states share this box: a link that does not open (a verdict, no
+   action) and a server that did not answer (a retry). */
+.unavailable {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 0 24px 48px;
+  text-align: center;
+}
+
+.unavailableTitle {
+  margin: 0;
+  max-width: 520px;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--luma-colors-crater-base);
+}
+
+.unavailableDetail {
+  margin: 0;
+  max-width: 420px;
+  color: var(--luma-text-muted);
+  line-height: 1.5;
+}
+
+.retry {
+  composes: buttonSecondary from "../../../../../components/controls.module.css";
+  text-decoration: none;
+}

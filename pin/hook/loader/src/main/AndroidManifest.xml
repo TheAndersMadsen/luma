@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sharedUserId="android.uid.system"
+    tools:ignore="Deprecated">
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <application
+        android:allowBackup="false"
+        android:label="Luma Compatibility Loader"
+        android:process="system">
+
+        <!-- Apply compatibility at boot. Priority 999 ensures this runs before
+             the stock boot receivers, so the known package configuration is
+             ready before their processes start. -->
+        <receiver
+            android:name=".BootCompatibilityReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Humane's original carrier was provisioned before shutdown. Recheck
+             the supplied replacement-carrier compatibility values whenever a
+             new SIM/config becomes effective and after each boot phase. The
+             receiver runs in the system process and accepts only broadcasts
+             from senders that hold the platform phone-state mutation grant. -->
+        <receiver
+            android:name=".CarrierCompatibilityReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.MODIFY_PHONE_STATE">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.telephony.action.CARRIER_CONFIG_CHANGED" />
+                <action android:name="android.intent.action.SIM_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Release-coupled refresh after a Compatibility Layer update. The
+             action value is the existing control-protocol identifier; current
+             callers explicitly target this receiver. -->
+        <receiver
+            android:name=".CompatibilityRefreshReceiver"
+            android:process="system"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.penumbraos.hook.INJECT_CONFIGURED_TARGETS" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Re-apply the exact Server's transient seInfo after a keep-data
+             package replacement. Android 12L does not deliver the implicit
+             PACKAGE_REPLACED broadcast to this target-SDK-32 manifest
+             receiver, so the updater explicitly invokes this fixed component.
+             The action has no package input and remains limited to
+             DUMP-authorized physical recovery callers. -->
+        <receiver
+            android:name=".ServerRuntimePolicyRepairReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.penumbraos.hook.REPAIR_SERVER_RUNTIME_POLICY" />
+            </intent-filter>
+        </receiver>
+
+        <!-- INFERRED Luma root-runner handoff. The fixed Binder transaction
+             accepts only UID 2000, derives its PID from Binder, and verifies
+             CPU 7 after moving that exact process to the firmware-proven
+             restricted cpuset. -->
+        <service
+            android:name=".StandaloneDockCpuBrokerService"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+
+        <!-- Legacy physical-recovery bridge. Disabled by default and callable
+             only by a DUMP-authorized shell after explicitly enabling the
+             component; routine administration uses the authenticated dashboard. -->
+        <receiver
+            android:name=".AdbBridgeReceiver"
+            android:process="system"
+            android:enabled="false"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.penumbraos.hook.ADB_BRIDGE" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

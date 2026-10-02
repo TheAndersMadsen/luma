@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:label="Setup Helper">
+
+        <receiver
+            android:name=".InstallReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.penumbraos.systeminjector.exploit.STAGE1" />
+                <action android:name="com.penumbraos.systeminjector.exploit.STAGE2" />
+                <action android:name="com.penumbraos.systeminjector.exploit.RECOVER_STAGE2" />
+                <action android:name="com.penumbraos.systeminjector.exploit.RECOVER_ROLLBACK" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name=".BootstrapStatusProvider"
+            android:authorities="com.penumbraos.systeminjector.exploit.status"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+
+    </application>
+
+</manifest>

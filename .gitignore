@@ -1,0 +1,72 @@
+# Operator runtime output belongs outside source. These remain ignored as a
+# compatibility guard if an override accidentally points at the workspace.
+/private/
+/state/
+/var/
+/artifacts/
+/releases/
+/deployments/
+
+# Secret-bearing local configuration.
+.env
+.env.*
+!.env.example
+.secrets/
+*.local
+*.secret
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.token
+*.mobileprovision
+gradle-local.properties
+secrets.properties
+
+# The leaked Humane ADB cert must never be committed. ADB auth is delegated to
+# PenumbraOS's remote signer; Luma ships no ADB key (see SECURITY.md).
+adbkey
+adbkey.pub
+
+# Proprietary/device/capture artifacts are never source.
+/full/
+*.apk
+*.apks
+*.aab
+*.img
+*.mbn
+*.pcap
+*.pcapng
+*.har
+
+# Generated dependencies and build output.
+node_modules/
+.next/
+target/
+build/
+.gradle/
+dist/
+dist-*/
+coverage/
+test-results/
+test-runs/
+out/
+.cache/
+*.tsbuildinfo
+*.bak
+*.bak[0-9]*
+
+# Platform and editor noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.gstack/
+.codex/
+.claude/
+
+# JVM crash logs (hs_err_pid*.log) from a host JDK that failed to start.
+hs_err_pid*.log
+replay_pid*.log

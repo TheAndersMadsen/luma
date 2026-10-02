@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sharedUserId="android.uid.system"
+    tools:ignore="Deprecated">
+
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <application
+        android:allowBackup="false"
+        android:label="Luma Compatibility Layer">
+        <!-- No activities, no receivers, no services.
+             This APK exists only to be loaded into other processes
+             via sharedLibraryFiles. -->
+
+        <!-- Generated Tier-A package set the Compatibility Loader should target at boot.
+             The manifest merger substitutes a comma-separated literal so the
+             loader can continue reading this value through Bundle.getString. -->
+        <meta-data
+            android:name="com.penumbraos.hook.TARGET_PACKAGES"
+            android:value="${tierAPackageSetHookTargets}" />
+
+    </application>
+</manifest>

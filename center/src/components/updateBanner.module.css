@@ -1,0 +1,77 @@
+/*
+ * The operator's update banner: one calm panel above the page, in the shared
+ * surface, never an alert colour. Nothing here is urgent.
+ */
+
+.banner {
+  composes: surface from "./controls.module.css";
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  max-width: 960px;
+  margin: 12px auto 0;
+  padding: 16px 20px;
+}
+
+@media (max-width: 1000px) {
+  .banner {
+    margin: 12px 12px 0;
+  }
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+}
+
+.copy {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+}
+
+.notes {
+  font-size: 14px;
+  color: var(--luma-colors-crater-base);
+}
+
+.notes summary {
+  cursor: pointer;
+  color: var(--luma-colors-beam-base);
+}
+
+.notesBody {
+  margin: 8px 0 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.link {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--luma-colors-beam-base);
+}
+
+.dismiss {
+  composes: buttonQuietSmall from "./controls.module.css";
+  flex: none;
+}

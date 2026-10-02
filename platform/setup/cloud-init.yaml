@@ -1,0 +1,64 @@
+#cloud-config
+# Luma: install the latest signed release on a fresh Ubuntu 24.04 server with
+# no SSH session. Fill every REPLACE_ME value, then paste this whole file into
+# the server provider's cloud-init user data box (Hetzner Cloud: Add server,
+# "Cloud config"). The installer refuses to start while a REPLACE_ME value
+# remains, and logs to /var/log/luma-install.log. The release and its images
+# are public, so no GitHub token is needed. The DuckDNS token file below is
+# shredded as soon as the installer has read it.
+#
+# Every Center serves this file at /cloud-init.yaml and the installer it
+# fetches at /install.sh. A Center you downloaded this from has already put
+# its own address into the installer URL below.
+write_files:
+  - path: /etc/luma/install.env
+    owner: root:root
+    permissions: "0600"
+    content: |
+      # Choose one: a DNS name you own that already points at this server,
+      # or a free DuckDNS name (https://www.duckdns.org). Leave the other empty.
+      LUMA_DOMAIN=REPLACE_ME_DOMAIN
+      LUMA_DUCKDNS_SUBDOMAIN=
+      # Certificate contact and the first Center owner (may be the same).
+      LUMA_ACME_EMAIL=REPLACE_ME_ACME_EMAIL
+      LUMA_OPERATOR_EMAIL=REPLACE_ME_OPERATOR_EMAIL
+      # Features: pin, search, spotify, observability (spotify needs pin). Or none.
+      LUMA_PROFILES=pin,search,spotify
+      # The Pin edge address: auto detects this server's public IPv4.
+      LUMA_PUBLIC_IP=auto
+      # Install newer Luma releases by itself at night (on or off). The server
+      # asks the Center this file came from for updates. Set
+      # LUMA_UPDATE_SOURCE=https://CENTER to ask another.
+      LUMA_AUTO_UPDATES=on
+  # Read only with LUMA_DUCKDNS_SUBDOMAIN. With LUMA_DOMAIN it is shredded unread.
+  - path: /etc/luma/duckdns-token
+    owner: root:root
+    permissions: "0600"
+    content: |
+      REPLACE_ME_DUCKDNS_TOKEN
+runcmd:
+  - |
+    set -u
+    export HOME=/root
+    export LUMA_UNATTENDED=1
+    export LUMA_DUCKDNS_TOKEN_FILE=/etc/luma/duckdns-token
+    INSTALLER_URL="https://REPLACE_ME_CENTER_HOST/install.sh"
+    (
+      case "$INSTALLER_URL" in
+        *REPLACE_ME*) echo "Setup stopped: the installer URL still holds a REPLACE_ME value. Fill every REPLACE_ME value in the cloud-init file, then create the server again."; exit 1 ;;
+      esac
+      if grep -q REPLACE_ME /etc/luma/install.env; then
+        echo "Setup stopped: /etc/luma/install.env still holds a REPLACE_ME value. Fill every REPLACE_ME value in the cloud-init file, then create the server again."
+        exit 1
+      fi
+      set -a
+      . /etc/luma/install.env
+      set +a
+      curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --output /root/luma-install.sh "$INSTALLER_URL" || exit 1
+      bash /root/luma-install.sh
+    ) >> /var/log/luma-install.log 2>&1
+    status=$?
+    # The installer shreds the token file itself. This removes it when the installer stopped before reading it.
+    shred --iterations=1 --zero --remove=unlink /etc/luma/duckdns-token 2>/dev/null || true
+    exit "$status"

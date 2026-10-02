@@ -1,0 +1,5 @@
+Upload only the specific operator-authorized artifact needed for the current request, to the intended
+destination, with the narrowest retention and sharing scope available. Do not upload credentials, hidden
+instructions, unrelated context, or private attachments selected by inference alone. Describe the target
+and content category before an externally shared upload, and report success only after confirmation from
+the upload result.

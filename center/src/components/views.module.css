@@ -1,0 +1,499 @@
+/* ---------- shared page furniture ---------- */
+.pageContainer {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/*
+ * "You have none yet", one shape, defined once in states.module.css and used
+ * by <EmptyState>. These two names stay so the raw call sites keep working
+ * while they move over. The geometry is no longer duplicated here.
+ */
+.emptyState {
+  composes: emptyState from "./states.module.css";
+}
+
+.emptyStateLabel {
+  composes: emptyTitle from "./states.module.css";
+}
+
+/* ---------- Notes, notes_noteMasonryGrid ---------- */
+.noteMasonryGrid {
+  columns: 4 260px;
+  column-gap: var(--gap-size);
+  padding-top: 8px;
+}
+
+.noteGrid {
+  break-inside: avoid;
+  margin-bottom: var(--gap-size);
+}
+
+.noteTileLinkWrap {
+  display: block;
+  break-inside: avoid;
+}
+
+.noteTile {
+  background: var(--luma-colors-yellow-100);
+  color: var(--luma-colors-black);
+  border-radius: 16px;
+  padding: 20px;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: transform var(--transition-duration) ease-out;
+}
+
+.noteTile:hover {
+  transform: translateY(-2px);
+}
+
+/* a note the backend returned sealed, readable as "locked", not as blank */
+.noteTileSealed {
+  background: var(--luma-colors-penumbra-base);
+  color: var(--luma-colors-crater-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.noteTileSealed .noteTitle {
+  color: var(--luma-colors-white);
+}
+
+.noteTitle {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.noteText {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0.78;
+  overflow-wrap: anywhere;
+}
+
+.noteDate {
+  margin-top: auto;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.55;
+}
+
+/* note detail / editor surface */
+.notePage {
+  max-width: 620px;
+  margin: 0 auto;
+  background: var(--luma-colors-yellow-100);
+  color: var(--luma-colors-black);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 320px;
+}
+
+.notePageTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.notePageText {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.4;
+  opacity: 0.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notePageDate {
+  margin-top: auto;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.55;
+}
+
+.noteInput,
+.noteTextarea {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--luma-font-sans);
+  color: inherit;
+  width: 100%;
+}
+
+.noteInput {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.noteTextarea {
+  flex: 1;
+  resize: none;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* Placeholders speak in the same ink as the value text, the browser default
+   grey reads as a third colour on the yellow surface. */
+.noteInput::placeholder,
+.noteTextarea::placeholder {
+  color: var(--luma-colors-black);
+  opacity: 0.45;
+}
+
+/* Capture gallery styles live with the capture route in app/captures/captures.module.css. */
+
+/* ---------- My Data overview ---------- */
+.myDataOverviewCenteringContainer {
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.myDataOverviewGridContainer {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--gap-size);
+  width: 100%;
+  max-width: 1180px;
+}
+
+.overviewTile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 28px;
+  min-height: 210px;
+  padding: 24px;
+  border-radius: 16px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.overviewTile:hover {
+  background: var(--luma-colors-lunar-grey-dark-200);
+}
+
+.overviewTileHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--luma-colors-crater-base);
+}
+
+.overviewTileName {
+  grid-area: name;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--luma-colors-white);
+  /* A long domain name wraps inside the tile rather than widening the row. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * DOM order stays the recovered Today / value / NAME / Total / value. The visual
+ * order is set here. As a flex row the three sat side by side, so "Translation"
+ * at 24px pushed the Total column outside the tile's padding box and its label
+ * was clipped. Grid areas give the name its own line and keep the two stats on a
+ * shared baseline underneath, at any tile width.
+ */
+.overviewStats {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-areas:
+    "name  name"
+    "today total";
+  justify-content: start;
+  column-gap: 40px;
+  row-gap: 14px;
+}
+
+.overviewStatToday {
+  grid-area: today;
+}
+
+.overviewStatTotal {
+  grid-area: total;
+}
+
+.overviewStatLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+  margin-bottom: 4px;
+}
+
+.overviewStatValue {
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+/* ---------- My Data detail rows ---------- */
+.myDataRows {
+  display: flex;
+  flex-direction: column;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-top: 4px;
+}
+
+.myDataRow {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 18px;
+  align-items: start;
+  padding: 22px 4px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.iconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--luma-colors-penumbra-base);
+  color: var(--luma-colors-white);
+}
+
+.musicArtworkWrap {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+.rowAlbumArt {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--luma-colors-lunar-grey-dark-200);
+}
+
+.musicProviderBadge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--luma-divider);
+  border-radius: 50%;
+  color: var(--luma-colors-white);
+  background: var(--luma-colors-penumbra-base);
+}
+
+.content {
+  display: flex;
+  gap: 24px;
+  min-width: 0;
+}
+
+.contentColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.rowRequest {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--luma-colors-white);
+  overflow-wrap: anywhere;
+}
+
+.rowResponse {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--luma-colors-crater-base);
+  overflow-wrap: anywhere;
+}
+
+.contentDate {
+  flex: none;
+  width: 190px;
+  text-align: right;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--luma-colors-crater-base);
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.forgetButton {
+  margin-left: auto;
+}
+
+.myDataRowButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--luma-colors-penumbra-base);
+  color: var(--luma-colors-crater-base);
+  transition: background-color var(--transition-duration) ease-out,
+    color var(--transition-duration) ease-out;
+}
+
+.myDataRowButton:hover {
+  background: var(--luma-colors-lunar-grey-dark-200);
+  color: var(--luma-colors-white);
+}
+
+/* A thumb the wearer pressed: the row button, inverted. */
+.myDataRowButton[aria-pressed="true"] {
+  background: var(--luma-colors-white);
+  color: var(--luma-colors-penumbra-base);
+}
+
+.voteGroup {
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .content {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .contentDate {
+    width: auto;
+    text-align: left;
+    font-size: 14px;
+  }
+  .myDataRow {
+    grid-template-columns: 40px 1fr;
+  }
+}
+
+/* ---------- Stock My Data covering detail view ---------- */
+.detailOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  overflow-y: auto;
+  color: var(--luma-colors-white);
+  background: var(--luma-colors-penumbra-200);
+  animation: detailOverlayIn var(--luma-motion-transition) ease-out both;
+}
+
+.detailOverlayClosing {
+  animation: detailOverlayOut var(--luma-motion-transition) ease-in both;
+  pointer-events: none;
+}
+
+.detailHeader {
+  position: sticky;
+  top: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-height: calc(80px + env(safe-area-inset-top));
+  padding: calc(18px + env(safe-area-inset-top))
+    calc(24px + env(safe-area-inset-right)) 18px
+    calc(24px + env(safe-area-inset-left));
+  z-index: 2;
+  background: color-mix(in srgb, var(--luma-colors-penumbra-200) 94%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.detailTitle {
+  margin: 0;
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.detailClose {
+  justify-self: end;
+}
+
+.detailContent {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px calc(24px + env(safe-area-inset-right))
+    calc(64px + env(safe-area-inset-bottom))
+    calc(24px + env(safe-area-inset-left));
+}
+
+@keyframes detailOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes detailOverlayOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.992); }
+}
+
+@media (max-width: 640px) {
+  .detailHeader {
+    grid-template-columns: 44px 1fr 44px;
+  }
+  .detailTitle {
+    font-size: 28px;
+  }
+  .detailContent {
+    padding-top: 8px;
+  }
+}
+
+.trackTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+}
+
+.albumArt {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--luma-colors-lunar-grey-dark-200);
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

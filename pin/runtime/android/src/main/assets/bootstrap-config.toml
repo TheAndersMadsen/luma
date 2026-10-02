@@ -1,0 +1,57 @@
+[llm]
+provider = "echo"
+model = "cosmos-remote"
+gemini_google_search = false
+
+[llm.memory]
+enabled = false
+
+[server]
+http_bind_addr = "127.0.0.1:8080"
+grpc_bind_addr = "127.0.0.1:9090"
+public_addr = "127.0.0.1:8080"
+lan_dashboard_enabled = false
+# Center enables the remote tunnel only after it has installed this deployment's
+# exact bridge EndpointId. An unpaired Pin must always be able to boot safely.
+iroh_remote_center_enabled = false
+admin_token = "__APP_ADMIN_TOKEN__"
+
+[storage]
+media_dir = "__APP_MEDIA_DIR__"
+db_path = "__APP_DB_PATH__"
+
+[weather]
+measurement_system = "metric"
+temperature_unit = "celsius"
+
+[spotify]
+enabled = false
+experimental_acknowledged = false
+device_name = "Ai Pin"
+
+[logging]
+log_dir = "__APP_LOG_DIR__"
+
+[dev]
+apk_install_enabled = false
+# Boot-time compatibility-package recovery. Default OFF: at boot Device Services
+# only OBSERVES the compatibility package set (Device Services, Compatibility
+# Layer, Compatibility Loader, and Device Installer)
+# and logs content-free presence booleans. Setting this to true through the
+# authenticated settings API is the explicit operator authorization for the
+# ROADMAP-documented restoration (`pm install -r --user 0`) of a MISSING
+# Compatibility Layer or Compatibility Loader package, and only when the
+# staged APK at
+# <persistent-root>/recovery/<package>.apk matches the operator-pinned release
+# SHA-256 (dev.injected_package_recovery_hook_sha256 /
+# dev.injected_package_recovery_hook_injector_sha256, from the release's
+# SHA256SUMS). One attempt per boot. Never targets an installed package, the
+# Device Services itself, or the Device Installer. Gate and pins live in this
+# canonical config so the authorization survives an app data-clear via the vault.
+injected_package_recovery_enabled = false
+# injected_package_recovery_hook_sha256 = ""           # set via settings API
+# injected_package_recovery_hook_injector_sha256 = ""  # set via settings API
+
+# Persisted cloud feature-flag overrides. Penumbra always supplies its required
+# custom-vision baseline even when this table is empty.
+[feature_flags.overrides]

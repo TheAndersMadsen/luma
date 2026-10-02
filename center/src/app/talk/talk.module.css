@@ -1,0 +1,142 @@
+/* "Talk to Cosmos", an honest addition, drawn with .Center's own controls.
+   It used to draw its own borders, radii and weight-600 type, which is a large
+   part of why the additions read as a different product bolted onto this one.
+   The panel edge, the buttons and the composer now come from
+   components/controls.module.css like everything else. */
+
+.talk {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 120px;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100svh - 120px);
+}
+
+.head { text-align: center; padding: 8px 0 20px; }
+.head h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--luma-colors-solar-base, #fff);
+}
+.head p {
+  margin: 8px auto 0;
+  max-width: 460px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--luma-colors-crater-base, #a9abab);
+}
+
+/* The assistant's own readiness, said out loud rather than hidden in a title. */
+.statusRow {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 2px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--luma-colors-iron-base) transparent;
+}
+
+.empty { margin: auto; text-align: center; padding: 28px 12px; }
+.empty p { margin: 0 0 16px; color: var(--luma-colors-apollo-base, #e2e2e0); font-size: 16px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.chipsButton { composes: buttonQuiet from "../../components/controls.module.css"; }
+
+.turn { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 16px 0; border-top: 1px solid var(--luma-divider); }
+.turn:first-child { border-top: 0; }
+.who { padding-top: 3px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--luma-text-muted); }
+.body { min-width: 0; }
+.you .say { color: var(--luma-colors-crater-base, #a9abab); }
+.say { margin: 0; font-size: 16px; font-weight: 400; line-height: 1.5; color: var(--luma-colors-solar-base, #fff); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.cue { margin: 0 0 10px; color: var(--luma-colors-crater-base, #a9abab); font-size: 13px; }
+
+.trace { margin: 12px 0 0; }
+.trace summary {
+  width: fit-content;
+  cursor: pointer;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--luma-colors-button-background-dark-secondary-base);
+  font-size: 12px;
+  color: var(--luma-colors-crater-base, #a9abab);
+  list-style: none;
+  transition: color var(--transition-duration) ease-out,
+    background-color var(--transition-duration) ease-out;
+}
+.trace summary:hover { color: var(--luma-colors-white); background: var(--luma-colors-button-background-dark-secondary-hover); }
+.trace summary::-webkit-details-marker { display: none; }
+.trace ol { list-style: none; margin: 8px 0 0; padding: 0 0 0 2px; display: flex; flex-direction: column; gap: 6px; }
+.trace li { font-size: 12px; }
+.stepName { font-family: ui-monospace, monospace; color: var(--luma-colors-apollo-base, #e2e2e0); }
+/* Placement only, the marker itself is <StatusChip variant="tag">. */
+.srcTag { margin-left: 8px; }
+.obs { margin: 4px 0 0; color: var(--luma-colors-crater-base, #a9abab); font-size: 12px; line-height: 1.45; }
+
+.thinking { display: flex; align-items: center; margin: 0; min-height: 32px; }
+
+/* The composer is a panel, so it uses the one panel edge. */
+.composer {
+  composes: surface from "../../components/controls.module.css";
+  position: relative;
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px;
+}
+/* Two classes' worth of specificity, so the focused edge always wins over the
+   composed resting one regardless of stylesheet order. */
+.composer.composer:focus-within { box-shadow: var(--focused-outline-shadow); }
+
+.composerInput { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 10px 12px; color: var(--luma-colors-solar-base, #fff); font: inherit; }
+.composerInput::placeholder { color: var(--luma-text-muted); }
+
+.send { composes: buttonPrimary from "../../components/controls.module.css"; }
+
+/* Talk (speech-to-text) button, pulses while listening. */
+.micButton {
+  flex: none;
+  width: 44px; height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--luma-colors-iron-base, #505355);
+  border-radius: var(--luma-radius-control);
+  background: transparent;
+  color: var(--luma-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.micButton.micButtonOn {
+  color: var(--luma-colors-eclipse-base, #0f0f0f);
+  background: var(--luma-colors-beam-base, #00ffe0);
+  border-color: transparent;
+  animation: micPulse 1.4s ease-in-out infinite;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 224, 0.55); }
+  50% { box-shadow: 0 0 0 7px rgba(0, 255, 224, 0); }
+}
+
+.voice { composes: buttonQuietSmall from "../../components/controls.module.css"; }
+.voice.voiceOn { color: var(--luma-colors-beam-base, #00ffe0); border-color: rgba(0, 255, 224, 0.3); }
+
+@media (max-width: 480px) {
+  .turn { grid-template-columns: 38px minmax(0, 1fr); gap: 8px; }
+  .who { font-size: 10px; }
+  .voice { padding-inline: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .micButton.micButtonOn { animation: none; }
+}

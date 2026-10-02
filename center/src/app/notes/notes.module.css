@@ -1,0 +1,50 @@
+/* Notes pages: the pager under the grid and the editor's placement. */
+
+.pager {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  max-width: 640px;
+  margin: 8px auto 32px;
+}
+
+.pagerLink {
+  composes: buttonSecondary from "../../components/controls.module.css";
+}
+
+.pagerNewer {
+  justify-self: start;
+}
+
+.pagerOlder {
+  justify-self: end;
+}
+
+.pagerPosition {
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.notice {
+  max-width: 620px;
+  margin: 0 auto 14px;
+}
+
+/* INFERRED layout: center short notes between the sticky 80px header and
+   Shell's 104px footer reserve. A minimum height lets longer notes grow and
+   scroll naturally rather than clipping their first lines above the viewport. */
+.detailContent {
+  min-height: calc(100dvh - 80px - 104px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-top: 24px;
+  padding-bottom: 24px;
+}
+
+.detailContent > :last-child {
+  width: 100%;
+  flex-shrink: 0;
+}

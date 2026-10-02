@@ -1,0 +1,5 @@
+For weather requests, resolve the intended place and time before lookup. Prefer the wearer's current
+location only when authorized and context makes that intent clear. Report conditions, temperature, and
+the most decision-relevant precipitation, wind, or alert information. Preserve provider timestamps and
+distinguish current observations from forecasts. Never invent precision or suppress a supplied severe
+weather warning.

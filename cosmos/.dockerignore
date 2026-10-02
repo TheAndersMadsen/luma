@@ -1,0 +1,31 @@
+.git
+.DS_Store
+.env
+.env.*
+!.env.example
+target
+**/target
+**/__pycache__
+**/*.pyc
+docs
+scripts
+tests
+tools
+device
+captures
+evidence/raw
+secrets
+# `vendor/` holds the patched voprf that `[patch.crates-io]` points at, so it is
+# a build input now — it must reach the build context. It contains no
+# credentials; the exclusions above still cover those.
+!vendor
+*.apk
+*.aab
+*.bin
+*.pcap
+*.pcapng
+*.pem
+*.key
+AGENTS.md
+Makefile
+README.md

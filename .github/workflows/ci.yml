@@ -1,0 +1,339 @@
+# Component checks shared by pull requests, main, and tagged releases.
+# No job contacts a production server or device.
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform:
+    name: platform checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: install pinned pnpm
+        run: |
+          bun platform/setup/install-pnpm.mjs "$HOME/.local/share/pnpm"
+          printf '%s\n' "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= -pyflakes=
+      # Acceptance tests import Center and Device Installer modules, whose
+      # packages come from the workspace lockfile.
+      - name: install from lockfile
+        run: pnpm install --frozen-lockfile
+      # The release-signature tests sign and verify with a throwaway key and
+      # skip when no cosign is installed; give them the release's own pinned
+      # verifier, checked against its size and SHA-256.
+      - name: install the pinned cosign verifier
+        run: |
+          set -euo pipefail
+          cosign="$(bun --no-env-file -e 'const { provisionPinnedCosign } = await import("./platform/distribution/release-proof.mjs"); console.log(await provisionPinnedCosign({ cacheRoot: process.env.RUNNER_TEMP }))')"
+          sudo install -m 0755 "$cosign" /usr/local/bin/cosign
+          cosign version
+      - run: ./luma check platform --full
+
+  center:
+    name: center formatting and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Bind the Center cache to runner temp
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          /usr/bin/printf 'NPM_CONFIG_STORE_DIR=%s\n' \
+            "${runner_temp}/center-pnpm-cache" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: install pinned pnpm
+        run: |
+          bun platform/setup/install-pnpm.mjs "$HOME/.local/share/pnpm"
+          printf '%s\n' "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"
+      - name: restore Center pnpm download cache
+        id: center-pnpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/center-pnpm-cache
+          key: center-pnpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            center-pnpm-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: install from lockfile
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm --dir center typecheck
+      - name: focused component checks
+        run: pnpm --dir center test
+      - name: UI component checks
+        run: pnpm --dir center test:ui
+      - name: production image and runtime
+        run: |
+          docker build --build-context wire_contracts=./contracts/wire \
+            --build-arg LUMA_RELEASE_ID=bun-pnpm-check \
+            --tag luma/center:ci -f center/Dockerfile .
+          bun platform/deploy/acceptance/javascript-runtime.mjs \
+            luma/center:ci "$RUNNER_TEMP/center-runtime.json"
+          bun center/verify/http-boundaries.mjs \
+            luma/center:ci "$RUNNER_TEMP/center-http.json"
+      - name: Keep runtime verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: center-runtime
+          path: |
+            ${{ runner.temp }}/center-runtime.json
+            ${{ runner.temp }}/center-http.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Spotify adapter tests
+        run: pnpm --dir center/adapters/spotify test
+      - name: clean in-tree residue
+        if: ${{ always() }}
+        run: |
+          rm -rf node_modules pin/device-installer/cli/node_modules center/node_modules center/.next center/adapters/spotify/node_modules
+          rm -f center/tsconfig.tsbuildinfo center/next-env.d.ts
+      - name: save Center pnpm download cache
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.center-pnpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/center-pnpm-cache
+          key: center-pnpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+  cosmos:
+    name: cosmos formatting and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: cosmos_test
+          POSTGRES_PASSWORD: cosmos_test_ci_only
+          POSTGRES_DB: cosmos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cosmos_test -d cosmos_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Bind Cosmos Cargo state to runner temp
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          runner_temp="$(/usr/bin/realpath -e -- "${RUNNER_TEMP}")"
+          test "${runner_temp}" = "${RUNNER_TEMP}"
+          test -f "${GITHUB_ENV}" && test ! -L "${GITHUB_ENV}"
+          /usr/bin/printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\n' \
+            "${runner_temp}/cosmos-cargo-home" \
+            "${runner_temp}/cosmos-cargo-target" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
+        with:
+          components: clippy, rustfmt
+      - name: restore Cosmos Cargo downloads and target state
+        id: cosmos-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/cosmos-cargo-home/registry
+            ${{ runner.temp }}/cosmos-cargo-home/git
+            ${{ runner.temp }}/cosmos-cargo-target
+          key: cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: |
+            cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-
+            cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-
+      - name: formatting
+        run: cargo fmt --all --check --manifest-path cosmos/Cargo.toml
+      - name: warnings-as-errors lint
+        run: cargo clippy --workspace --all-targets --locked --manifest-path cosmos/Cargo.toml -- -D warnings
+      - name: focused component checks
+        env:
+          # Every Postgres-backed store, key-directory and route test runs
+          # against the service above. Without this they print SKIPPED.
+          COSMOS_TEST_DATABASE_URL: postgresql://cosmos_test:cosmos_test_ci_only@127.0.0.1:5432/cosmos_test
+        run: cargo test --workspace --locked --manifest-path cosmos/Cargo.toml
+      - name: release-only 4096-bit RSA compatibility
+        working-directory: cosmos
+        run: |
+          set -euo pipefail
+          test "$(cargo test -p cosmos-crypto --locked tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep -- --ignored --exact --list | grep -Fxc 'tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep: test')" -eq 1
+          cargo test -p cosmos-crypto --locked tests::production_wrapping_key_is_4096_bit_and_accepts_explicit_sha1_oaep -- --ignored --exact --test-threads=1
+      - name: verify the pinned native Codex bundle
+        run: |
+          docker build --target codex --tag luma/codex:ci -f cosmos/Dockerfile cosmos
+          test "$(docker run --rm --entrypoint /opt/codex/bin/codex luma/codex:ci --version)" = 'codex-cli 0.149.1'
+      - name: save Cosmos Cargo downloads and target state
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cosmos-rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/cosmos-cargo-home/registry
+            ${{ runner.temp }}/cosmos-cargo-home/git
+            ${{ runner.temp }}/cosmos-cargo-target
+          key: cosmos-rust-v2-${{ runner.os }}-${{ runner.arch }}-1.91.1-${{ hashFiles('cosmos/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+
+  pin-runtime:
+    name: Pin runtime and Android tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      # The runtime test target plus the pinned Android builder image (SDK and
+      # NDK) exceed the hosted runner's free disk. None of this job's tools
+      # come from the preinstalled .NET, Android, Haskell, or CodeQL bundles.
+      - name: Free runner disk for the Android builder image
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: install pinned pnpm
+        run: |
+          bun platform/setup/install-pnpm.mjs "$HOME/.local/share/pnpm"
+          printf '%s\n' "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@38ae5351029910ad7674ccfad89c37cbd636f3c4 # 1.91.1
+        with:
+          components: rustfmt
+      - name: restore Pin test dependencies and compiler state
+        id: pin-runtime-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/pin-runtime-data/build/test-process/cargo-home/registry
+            ${{ runner.temp }}/pin-runtime-data/build/test-process/cargo-home/git
+            ${{ runner.temp }}/pin-runtime-data/build/test-process/cargo-target
+            ${{ runner.temp }}/pin-runtime-data/build/pin-builder-cache
+          key: pin-tests-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'platform/containers/pin-builder/toolchain.json', 'platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/**/Cargo.lock', 'pin/**/gradle-wrapper.properties', 'pin/**/*.gradle.kts') }}-${{ github.sha }}
+          restore-keys: |
+            pin-tests-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'platform/containers/pin-builder/toolchain.json', 'platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/**/Cargo.lock', 'pin/**/gradle-wrapper.properties', 'pin/**/*.gradle.kts') }}-
+      - name: install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libprotobuf-dev protobuf-compiler
+      - name: formatting
+        run: |
+          cargo fmt --check --manifest-path pin/runtime/core/Cargo.toml
+          cargo fmt --check --manifest-path pin/bridge/Cargo.toml
+      - name: Pin contributor checks with the pinned Android builder
+        env:
+          LUMA_DATA_DIR: ${{ runner.temp }}/pin-runtime-data
+          LUMA_BUILD_DIR: ${{ runner.temp }}/pin-runtime-data/build
+        shell: bash
+        run: ./luma pin check 2>&1 | tee "$RUNNER_TEMP/pin-check.log"
+      - name: Keep Pin check evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pin-check-log
+          path: ${{ runner.temp }}/pin-check.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: save Pin test dependencies and compiler state
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pin-runtime-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ${{ runner.temp }}/pin-runtime-data/build/test-process/cargo-home/registry
+            ${{ runner.temp }}/pin-runtime-data/build/test-process/cargo-home/git
+            ${{ runner.temp }}/pin-runtime-data/build/test-process/cargo-target
+            ${{ runner.temp }}/pin-runtime-data/build/pin-builder-cache
+          key: pin-tests-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'platform/containers/pin-builder/toolchain.json', 'platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/**/Cargo.lock', 'pin/**/gradle-wrapper.properties', 'pin/**/*.gradle.kts') }}-${{ github.sha }}
+
+  pin-builder-linux-amd64:
+    name: Pin debug artifact checks (Linux/x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require Linux/x64
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: install pinned pnpm
+        run: |
+          bun platform/setup/install-pnpm.mjs "$HOME/.local/share/pnpm"
+          printf '%s\n' "$HOME/.local/share/pnpm" >> "$GITHUB_PATH"
+      - name: Restore Pin build cache
+        id: pin-builder-deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache
+          key: pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/device-installer/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
+          restore-keys: |
+            pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build all debug APKs
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/pin-builder-data"
+          build="$data/build"
+          LUMA_DATA_DIR="$data" LUMA_BUILD_DIR="$build" \
+            bun --no-env-file ./luma pin build-debug \
+              --role installer --role bootstrap --role hook --role server --role hook-injector
+      - name: Verify debug APK checksums
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/pin-builder-data/build/pin-debug-builder-state/artifacts/device-debug"
+          test "$(find "$root" -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 5
+          (cd "$root" && sha256sum --check SHA256SUMS)
+      - name: Keep the verified debug APK set
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pin-debug-apks
+          path: ${{ runner.temp }}/pin-builder-data/build/pin-debug-builder-state/artifacts/device-debug/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save Pin build cache
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pin-builder-deps.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache
+          key: pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/device-installer/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
+
+  complete:
+    name: CI passed
+    if: ${{ always() }}
+    needs: [platform, center, cosmos, pin-runtime, pin-builder-linux-amd64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every component to pass
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          printf '%s\n' "$CHECK_RESULTS" | jq -e 'all(.[]; .result == "success")'

@@ -1,0 +1,54 @@
+# Luma
+
+> Luma is a self-hosted, MIT-licensed recreation of the Humane Ai Pin's cloud,
+> control center, and device runtime, for owners who run it on their own server
+> after the original service was discontinued on 28 February 2025. It is an
+> independent community project, not affiliated with Humane or HP, and contains
+> no Humane source code or binaries.
+
+Luma has three parts: Cosmos (the Rust cloud the Pin calls), Center (the Next.js
+web control panel), and the Pin companion apps and runtime. Read the README for
+the overview and quick start, AGENTS.md for the contributor and agent rules, and
+the docs below for depth. Names from the original system (the `humane.*` gRPC
+packages, Android package IDs) appear only as interoperability identifiers.
+
+## Start here
+
+- [README](README.md): overview, quick start, and the documentation map
+- [AGENTS.md](AGENTS.md): contributor and AI-agent rules, architecture, commands
+- [CONTRIBUTING](CONTRIBUTING.md): set up a checkout and open a pull request
+
+## Reference
+
+- [Install](docs/install.md): set up Luma on an Ubuntu server
+- [Configure services](docs/services.md): assistant, speech, search, maps, music, OS3
+- [Run your server](docs/operations.md): update, back up, restore, sessions, Traefik
+- [For developers](docs/developers.md): configuration, stock reference, builds, releases
+- [Connect a Pin (USB/ADB)](docs/connect-a-pin.md): Linux permissions and ADB checks
+- [Troubleshooting](docs/troubleshooting.md): symptoms, causes, fixes
+
+## Explanation
+
+- [What your Center does](docs/center.md): the web control panel, feature by feature
+- [Architecture](docs/architecture.md): components, data ownership, how the Pin talks to Luma
+- [The assistant runtime](docs/assistant.md): routes, deadlines, policy, music rules
+- [App privacy](docs/privacy.md): what each app sees and sends
+
+## How-to guides
+
+- [Server from nothing](guides/server-from-nothing.md)
+- [Connect your Pin](guides/connect-your-pin.md)
+- [Update Luma](guides/update.md)
+- [Troubleshooting](guides/troubleshooting.md)
+- [Glossary](guides/glossary.md)
+
+## Legal
+
+- [NOTICE](NOTICE): third-party components and provenance
+- [TRADEMARKS](TRADEMARKS.md): trademark and nominative-use statement
+- [LICENSE](LICENSE): MIT
+
+## Optional
+
+- [Questions](docs/faq.md): FAQ and AI-assisted setup
+- [SECURITY](SECURITY.md): how to report a vulnerability

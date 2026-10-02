@@ -1,0 +1,38 @@
+# Rust
+/target/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.bks
+/secrets/
+
+# Private observation data
+/evidence-private/
+/captures/
+/logs/
+*.pcap
+*.pcapng
+*.apk
+*.bin
+*.dump
+
+# Generated/private protocol inputs
+/proto/private-observed/
+/generated/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+secrets/
+*.env

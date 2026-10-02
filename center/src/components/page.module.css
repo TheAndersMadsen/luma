@@ -1,0 +1,76 @@
+.page {
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.wide { max-width: 1600px; }
+.content { max-width: 1180px; }
+.narrow { max-width: 760px; }
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.heading { min-width: 0; }
+.titleRow { display: flex; align-items: baseline; gap: 12px; }
+.header h1 {
+  margin: 0;
+  font-size: clamp(30px, 4vw, 44px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+.header p {
+  max-width: 640px;
+  margin: 8px 0 0;
+  color: var(--luma-colors-crater-base);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.meta {
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.actions { display: flex; align-items: center; gap: 10px; flex: none; }
+
+
+.listRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 64px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+.listRow:last-child { border-bottom: 0; }
+.listLeading {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--luma-colors-eclipse-base);
+  color: var(--luma-colors-crater-base);
+}
+.listCopy { display: grid; gap: 3px; min-width: 0; }
+.listTitle { color: var(--luma-colors-crater-base); font-size: 16px; font-weight: 500; }
+.listDescription { color: var(--luma-colors-crater-base); font-size: 14px; font-weight: 400; line-height: 1.35; }
+.listValue { min-width: 0; color: var(--luma-colors-white); font-size: 15px; text-align: right; overflow-wrap: anywhere; }
+.listAction { display: flex; justify-content: flex-end; }
+
+@media (max-width: 700px) {
+  .page { padding: 0 16px; }
+  .header { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .header h1 { font-size: 32px; }
+  .actions { width: 100%; }
+  .listRow { grid-template-columns: auto minmax(0, 1fr) auto; padding-inline: 16px; }
+  .listValue { grid-column: 2; text-align: left; }
+}

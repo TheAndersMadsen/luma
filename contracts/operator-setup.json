@@ -1,0 +1,1747 @@
+{
+  "schemaVersion": 1,
+  "contractId": "operator-setup",
+  "contractVersion": "2.4.0",
+  "mutationPolicies": {
+    "read-only": {
+      "confirmationRequired": false,
+      "exactSerialRequired": false
+    },
+    "local-mutation": {
+      "confirmationRequired": false,
+      "exactSerialRequired": false
+    },
+    "remote-mutation": {
+      "confirmationRequired": true,
+      "exactSerialRequired": false
+    },
+    "device-mutation": {
+      "confirmationRequired": true,
+      "exactSerialRequired": true
+    }
+  },
+  "status": {
+    "schemaVersion": 4,
+    "envelope": {
+      "requiredFields": [
+        "schemaVersion",
+        "contract",
+        "state",
+        "mode",
+        "ok",
+        "nextCommandId",
+        "next",
+        "release"
+      ],
+      "optionalFields": [
+        "problem"
+      ],
+      "contractFields": [
+        "id",
+        "version",
+        "journey"
+      ],
+      "releaseFields": [
+        "operator",
+        "pin"
+      ],
+      "pinFields": [
+        "enabled",
+        "expected",
+        "observed",
+        "compatible"
+      ]
+    },
+    "states": [
+      {
+        "id": "uninitialized",
+        "mode": "uninitialized",
+        "journeyId": "production",
+        "ok": false,
+        "nextCommandId": null,
+        "next": "./luma setup contributor or ./luma setup local"
+      },
+      {
+        "id": "local-ready",
+        "mode": "local",
+        "journeyId": "local",
+        "ok": true,
+        "nextCommandId": "doctor.local",
+        "next": "./luma doctor"
+      },
+      {
+        "id": "local-invalid",
+        "mode": "local",
+        "journeyId": "local",
+        "ok": false,
+        "nextCommandId": "init",
+        "next": "./luma init"
+      },
+      {
+        "id": "production-ready",
+        "mode": "production",
+        "journeyId": "production",
+        "ok": true,
+        "nextCommandId": "doctor.production",
+        "next": "./luma doctor production"
+      },
+      {
+        "id": "production-invalid",
+        "mode": "production",
+        "journeyId": "production",
+        "ok": false,
+        "nextCommandId": "setup.production",
+        "next": "./luma setup production --pin-release-archive ../luma-pin-*.tar.gz (from the newest luma-operator folder)"
+      }
+    ],
+    "releaseCompatibility": {
+      "operatorFields": [
+        "version",
+        "revision"
+      ],
+      "pinIdentityFields": [
+        "version",
+        "versionCode",
+        "releaseId",
+        "manifestSha256"
+      ],
+      "observedPinFields": [
+        "schemaVersion",
+        "compatible",
+        "acquired",
+        "activated",
+        "active",
+        "staged",
+        "version",
+        "versionCode",
+        "releaseId",
+        "manifestSha256"
+      ],
+      "profileDisabled": {
+        "observed": null,
+        "compatible": null
+      },
+      "profileEnabledMissingCompatible": false
+    }
+  },
+  "commands": [
+    {
+      "id": "init",
+      "tokens": [
+        "init"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Initialize external configuration, secrets, and state directories.",
+      "usage": "luma init",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "doctor.local",
+      "tokens": [
+        "doctor"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Check local prerequisites and report the next action.",
+      "usage": "luma doctor [--json]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "doctor.production",
+      "tokens": [
+        "doctor",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Validate the production Compose configuration on this host.",
+      "usage": "luma doctor production [--env-file FILE] [--project-name NAME]",
+      "documentationAnchor": "README.md#get-luma"
+    },
+    {
+      "id": "verify.production",
+      "tokens": [
+        "verify",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Verify the running production services and public endpoints.",
+      "usage": "luma verify production [--env-file FILE] [--project-name NAME]",
+      "documentationAnchor": "README.md#get-luma"
+    },
+    {
+      "id": "eval.assistant.production",
+      "tokens": [
+        "eval",
+        "assistant",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Evaluate the real production Cosmos assistant with repeated model-path cases.",
+      "usage": "luma eval assistant production [--repeat N] [--case ID] [--json] [--env-file FILE] [--project-name NAME]",
+      "documentationAnchor": "README.md#the-assistant-runtime"
+    },
+    {
+      "id": "stack.build",
+      "tokens": [
+        "stack",
+        "build"
+      ],
+      "aliases": [
+        [
+          "build"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build the local container stack.",
+      "usage": "luma stack build [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "stack.up",
+      "tokens": [
+        "stack",
+        "up"
+      ],
+      "aliases": [
+        [
+          "up"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Start the local product stack.",
+      "usage": "luma stack up [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "stack.down",
+      "tokens": [
+        "stack",
+        "down"
+      ],
+      "aliases": [
+        [
+          "down"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Stop the local product stack without deleting volumes.",
+      "usage": "luma stack down [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "stack.status",
+      "tokens": [
+        "stack",
+        "status"
+      ],
+      "aliases": [
+        [
+          "status"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show local stack service status.",
+      "usage": "luma stack status [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "stack.logs",
+      "tokens": [
+        "stack",
+        "logs"
+      ],
+      "aliases": [
+        [
+          "logs"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show recent local stack logs.",
+      "usage": "luma stack logs [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "stack.config",
+      "tokens": [
+        "stack",
+        "config"
+      ],
+      "aliases": [
+        [
+          "config"
+        ]
+      ],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Render the resolved Compose model without secret interpolation.",
+      "usage": "luma stack config [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "dev.center",
+      "tokens": [
+        "dev",
+        "center"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Center with Turbopack hot reload and Compose Watch.",
+      "usage": "luma dev center",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "dev.down",
+      "tokens": [
+        "dev",
+        "down"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Stop the isolated development stack without deleting volumes.",
+      "usage": "luma dev down",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "check.center",
+      "tokens": [
+        "check",
+        "center"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Center type, server, UI, and Spotify adapter checks directly from the working tree.",
+      "usage": "luma check center",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "check.cosmos",
+      "tokens": [
+        "check",
+        "cosmos"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Cosmos checks, optionally selecting one test filter.",
+      "usage": "luma check cosmos [TEST_FILTER]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "check.platform",
+      "tokens": [
+        "check",
+        "platform"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run fast platform checks, or the full Node acceptance inventory with --full.",
+      "usage": "luma check platform [--full]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "check.changed",
+      "tokens": [
+        "check",
+        "changed"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Select the smallest safe checks for committed and working-tree changes.",
+      "usage": "luma check changed [--base REF]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "test",
+      "tokens": [
+        "test"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run the broad repository checks.",
+      "usage": "luma test [--source]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "pin.doctor",
+      "tokens": [
+        "pin",
+        "doctor"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Check Pin host, signing, assets, and device prerequisites.",
+      "usage": "luma pin doctor [options]",
+      "documentationAnchor": "README.md#build-the-pin-apps"
+    },
+    {
+      "id": "pin.check",
+      "tokens": [
+        "pin",
+        "check"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Run Pin source checks.",
+      "usage": "luma pin check [options]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "pin.build-debug",
+      "tokens": [
+        "pin",
+        "build-debug"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Compile selected non-installable debug APK roles.",
+      "usage": "luma pin build-debug (--role ROLE...) or (--changed [--base REF])",
+      "documentationAnchor": "README.md#build-the-pin-apps"
+    },
+    {
+      "id": "pin.release.build",
+      "tokens": [
+        "pin",
+        "release",
+        "build"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build, sign, and verify the five-APK Pin release in the pinned builder.",
+      "usage": "luma pin release build --version YYYY-MM-DD.N --version-code INTEGER",
+      "documentationAnchor": "README.md#build-the-pin-apps"
+    },
+    {
+      "id": "pin.release.acquire",
+      "tokens": [
+        "pin",
+        "release",
+        "acquire"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Acquire and stage the exact signed Pin archive named by this operator release.",
+      "usage": "luma pin release acquire [--archive FILE | --check] [--json]",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.release.export",
+      "tokens": [
+        "pin",
+        "release",
+        "export"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Export the current verified five-APK Pin release for publication.",
+      "usage": "luma pin release export --output ARCHIVE [--json]",
+      "documentationAnchor": "README.md#build-the-pin-apps"
+    },
+    {
+      "id": "pin.install",
+      "tokens": [
+        "pin",
+        "install"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Install a verified release on one exact Pin.",
+      "usage": "luma pin install [--serial SERIAL] [--confirm] [--release RELEASE_ID] [--store DIR] [--adb PATH]",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "deploy.production",
+      "tokens": [
+        "deploy",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Deploy this release's whole stack (Cosmos, Center, identity, and the edge) on this host.",
+      "usage": "luma deploy production (--dry-run | --confirm) [--env-file FILE] [--project-name NAME] [--wait-timeout SECONDS]",
+      "documentationAnchor": "README.md#get-luma"
+    },
+    {
+      "id": "backup.production",
+      "tokens": [
+        "backup",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Back up this server's database, volumes, configuration, keys, and secrets.",
+      "usage": "luma backup production [--output DIR] [--project-name NAME]",
+      "documentationAnchor": "README.md#back-up-and-restore"
+    },
+    {
+      "id": "restore.production",
+      "tokens": [
+        "restore",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Restore a backup onto a stopped or fresh server of its release, then deploy it unless it was taken before this release's setup.",
+      "usage": "luma restore production --from DIR [--confirm] [--project-name NAME]",
+      "documentationAnchor": "README.md#back-up-and-restore"
+    },
+    {
+      "id": "update.production",
+      "tokens": [
+        "update",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Check the update source for a newer Luma release and, when there is one, install it with a backup first and a rollback if --auto verification fails.",
+      "usage": "luma update production [--check | --auto]",
+      "documentationAnchor": "README.md#update-luma"
+    },
+    {
+      "id": "reset-password.production",
+      "tokens": [
+        "reset-password",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Give the first operator a new one-time password in the first-login file.",
+      "usage": "luma reset-password production [--confirm] [--project-name NAME]",
+      "documentationAnchor": "README.md#reset-a-lost-password"
+    },
+    {
+      "id": "registry.login",
+      "tokens": [
+        "registry",
+        "login"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Authenticate Docker to GHCR; only a private fork needs this.",
+      "usage": "luma registry login --username GITHUB_USER",
+      "documentationAnchor": "README.md#get-luma"
+    },
+    {
+      "id": "release.publish",
+      "tokens": [
+        "release",
+        "publish"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Build, sign, and publish one tagged release: images, Compose application, Pin release, operator archive, and the signed checksums.",
+      "usage": "luma release publish --version X.Y.Z [--pin-version YYYY-MM-DD.N --pin-version-code INTEGER] [--notes FILE|-] [--confirm]",
+      "documentationAnchor": "README.md#publish-a-release"
+    },
+    {
+      "id": "release.keygen",
+      "tokens": [
+        "release",
+        "keygen"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Create the maintainer's release signing key pair once and record its public key in the checkout.",
+      "usage": "luma release keygen",
+      "documentationAnchor": "README.md#publish-a-release"
+    },
+    {
+      "id": "setup.local",
+      "tokens": [
+        "setup",
+        "local"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Initialize the local product configuration.",
+      "usage": "luma setup local",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "setup.contributor",
+      "tokens": [
+        "setup",
+        "contributor"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Initialize a contributor workspace.",
+      "usage": "luma setup contributor",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "onboard.production",
+      "tokens": [
+        "onboard",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Guide one resumable production setup, safe dry-run, confirmed deployment, verification, and Center handoff with stage-specific recovery.",
+      "usage": "luma onboard production [--pin-release-archive FILE] [--update-source URL]",
+      "documentationAnchor": "README.md#get-luma"
+    },
+    {
+      "id": "setup.production",
+      "tokens": [
+        "setup",
+        "production"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Guide a newcomer through, or noninteractively generate, a complete portable production configuration.",
+      "usage": "luma setup production --guided [--pin-release-archive FILE] [--update-source URL] | luma setup production (--domain HOST | --duckdns-subdomain NAME --duckdns-token-stdin) --acme-email EMAIL --operator-email EMAIL [--public-ip IPV4|auto] [--pin-release-archive FILE] [--update-source URL] [--auto-updates on|off] [options]",
+      "documentationAnchor": "README.md#get-luma"
+    },
+    {
+      "id": "setup.pin",
+      "tokens": [
+        "setup",
+        "pin"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Initialize the host prerequisites for Pin setup.",
+      "usage": "luma setup pin",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "setup.status",
+      "tokens": [
+        "setup",
+        "status"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Validate setup from current artifacts without stored progress state.",
+      "usage": "luma setup status [--json]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "config.get",
+      "tokens": [
+        "config",
+        "get"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Read one non-secret configuration setting.",
+      "usage": "luma config get NAME [--json]",
+      "documentationAnchor": "README.md#configuration"
+    },
+    {
+      "id": "config.set",
+      "tokens": [
+        "config",
+        "set"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Set one supported configuration setting outside the repository.",
+      "usage": "luma config set NAME VALUE | luma config set NAME --stdin",
+      "documentationAnchor": "README.md#configuration"
+    },
+    {
+      "id": "config.check",
+      "tokens": [
+        "config",
+        "check"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Validate configuration names, scopes, and dependencies.",
+      "usage": "luma config check [--json]",
+      "documentationAnchor": "README.md#configuration"
+    },
+    {
+      "id": "pki.init",
+      "tokens": [
+        "pki",
+        "init"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Plan or confirm creation of new device identity PKI.",
+      "usage": "luma pki init device-user [--confirm]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "pki.import",
+      "tokens": [
+        "pki",
+        "import"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Plan or confirm import of existing device identity PKI.",
+      "usage": "luma pki import device-user --cert FILE --key FILE [--confirm]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "support-bundle",
+      "tokens": [
+        "support-bundle"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Create a locally redacted diagnostic bundle.",
+      "usage": "luma support-bundle [--output FILE] [--json]",
+      "documentationAnchor": "README.md#troubleshooting"
+    },
+    {
+      "id": "stock.decompile",
+      "tokens": [
+        "stock",
+        "decompile"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Decompile the stock Humane apps into a local reference outside the source tree.",
+      "usage": "luma stock decompile (--from-device SERIAL) or (--apk-dir DIR)",
+      "documentationAnchor": "README.md#stock-reference"
+    },
+    {
+      "id": "version",
+      "tokens": [
+        "version"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Show CLI and contract version information.",
+      "usage": "luma version [--json]",
+      "documentationAnchor": "README.md#for-developers"
+    },
+    {
+      "id": "pin.activate",
+      "tokens": [
+        "pin",
+        "activate"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Activate one exact Pin against the configured backend.",
+      "usage": "luma pin activate --serial SERIAL --credential-file FILE --edge-ipv4 A.B.C.D [--confirm]",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.activate.status",
+      "tokens": [
+        "pin",
+        "activate",
+        "status"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": true,
+      "summary": "Inspect activation state for one exact Pin.",
+      "usage": "luma pin activate status --serial SERIAL",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.network",
+      "tokens": [
+        "pin",
+        "network"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": true,
+      "summary": "Inspect network readiness for one exact Pin.",
+      "usage": "luma pin network --serial SERIAL",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.network.qr",
+      "tokens": [
+        "pin",
+        "network",
+        "qr"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Prepare network onboarding from a Wi-Fi QR code.",
+      "usage": "luma pin network qr [--open]",
+      "documentationAnchor": "README.md#connect-a-pin"
+    },
+    {
+      "id": "pin.dock.check",
+      "tokens": [
+        "pin",
+        "dock",
+        "check"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": true,
+      "summary": "Inspect the docked Pin against the supported firmware and power gates.",
+      "usage": "luma pin dock check --serial SERIAL",
+      "documentationAnchor": "README.md#keep-root-access-after-reboot"
+    },
+    {
+      "id": "pin.dock.build",
+      "tokens": [
+        "pin",
+        "dock",
+        "build"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Build the dock helper in its pinned toolchain.",
+      "usage": "luma pin dock build [--ndk PATH] [--profile ID]",
+      "documentationAnchor": "README.md#keep-root-access-after-reboot"
+    },
+    {
+      "id": "pin.dock.run",
+      "tokens": [
+        "pin",
+        "dock",
+        "run"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Start a temporary dock session on one exact Pin; confirm interactively or use --yes.",
+      "usage": "luma pin dock run --serial SERIAL [--yes] [--min-battery N]",
+      "documentationAnchor": "README.md#keep-root-access-after-reboot"
+    },
+    {
+      "id": "pin.dock.verify",
+      "tokens": [
+        "pin",
+        "dock",
+        "verify"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": true,
+      "summary": "Check whether the temporary dock session is active on one exact Pin.",
+      "usage": "luma pin dock verify --serial SERIAL",
+      "documentationAnchor": "README.md#keep-root-access-after-reboot"
+    },
+    {
+      "id": "pin.dock.report",
+      "tokens": [
+        "pin",
+        "dock",
+        "report"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "local-mutation",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Write a redacted dock-session report from a private run directory.",
+      "usage": "luma pin dock report RUN_DIR --output FILE",
+      "documentationAnchor": "README.md#keep-root-access-after-reboot"
+    },
+    {
+      "id": "pin.dock.follow",
+      "tokens": [
+        "pin",
+        "dock",
+        "follow"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "device-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": true,
+      "summary": "Restore the temporary dock session once per boot while one exact Pin is connected.",
+      "usage": "luma pin dock follow --serial SERIAL --confirm [--min-battery N] [--ndk PATH] [--interval SECONDS]",
+      "documentationAnchor": "README.md#keep-root-access-after-reboot"
+    },
+    {
+      "id": "config.path",
+      "tokens": [
+        "config",
+        "path"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Print the active external configuration path.",
+      "usage": "luma config path [--json]",
+      "documentationAnchor": "README.md#configuration"
+    },
+    {
+      "id": "config.list",
+      "tokens": [
+        "config",
+        "list"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "List settings without revealing their values.",
+      "usage": "luma config list [--group local|production|provider|pin] [--json]",
+      "documentationAnchor": "README.md#configuration"
+    },
+    {
+      "id": "config.template",
+      "tokens": [
+        "config",
+        "template"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "read-only",
+      "confirmationRequired": false,
+      "exactSerialRequired": false,
+      "summary": "Print a scoped, secret-free configuration template.",
+      "usage": "luma config template [--group local|production|provider|pin]",
+      "documentationAnchor": "README.md#configuration"
+    }
+  ],
+  "journeys": [
+    {
+      "id": "local",
+      "label": "Try the local product",
+      "commandIds": [
+        "setup.local",
+        "init",
+        "doctor.local",
+        "dev.center",
+        "dev.down",
+        "stack.up",
+        "stack.status",
+        "setup.status"
+      ],
+      "steps": [
+        {
+          "id": "choose",
+          "title": "Choose the local journey",
+          "commandId": "setup.local",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "initialize",
+          "title": "Initialize external state",
+          "commandId": "init",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "check",
+          "title": "Check prerequisites",
+          "commandId": "doctor.local",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "start",
+          "title": "Start the stack",
+          "commandId": "stack.up",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "verify",
+          "title": "Verify service health",
+          "commandId": "stack.status",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        }
+      ]
+    },
+    {
+      "id": "contributor",
+      "label": "Prepare a contributor workspace",
+      "commandIds": [
+        "setup.contributor",
+        "doctor.local",
+        "check.center",
+        "check.cosmos",
+        "check.platform",
+        "check.changed",
+        "test",
+        "pin.check",
+        "support-bundle",
+        "version"
+      ],
+      "steps": [
+        {
+          "id": "prepare",
+          "title": "Prepare the contributor workspace",
+          "commandId": "setup.contributor",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "check",
+          "title": "Check host prerequisites",
+          "commandId": "doctor.local",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "test",
+          "title": "Run repository gates",
+          "commandId": "test",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        },
+        {
+          "id": "source",
+          "title": "Run Pin source gates",
+          "commandId": "pin.check",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#connect-a-pin"
+        },
+        {
+          "id": "verify",
+          "title": "Record tool versions",
+          "commandId": "version",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#for-developers"
+        }
+      ]
+    },
+    {
+      "id": "production",
+      "label": "Deploy Cosmos",
+      "commandIds": [
+        "setup.production",
+        "config.check",
+        "doctor.production",
+        "deploy.production"
+      ],
+      "steps": [
+        {
+          "id": "prepare",
+          "title": "Prepare production operations",
+          "commandId": "setup.production",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#get-luma"
+        },
+        {
+          "id": "configure",
+          "title": "Validate protected configuration",
+          "commandId": "config.check",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#configuration"
+        },
+        {
+          "id": "preflight",
+          "title": "Run production preflight",
+          "commandId": "doctor.production",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#get-luma"
+        },
+        {
+          "id": "deploy",
+          "title": "Deploy Cosmos directly",
+          "commandId": "deploy.production",
+          "centerRoute": null,
+          "surface": "cli",
+          "verification": "cli",
+          "documentationAnchor": "README.md#get-luma"
+        }
+      ]
+    },
+    {
+      "id": "pin",
+      "label": "Connect a Pin",
+      "commandIds": [
+        "pin.network",
+        "pin.network.qr",
+        "pin.release.acquire",
+        "pin.install",
+        "pin.activate",
+        "pin.activate.status",
+        "support-bundle"
+      ],
+      "steps": [
+        {
+          "id": "connect",
+          "title": "Connect your Pin",
+          "summary": "Place your Pin on a USB interposer, then choose it in the browser.",
+          "commandId": null,
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
+          "verification": "center",
+          "documentationAnchor": "README.md#connect-a-pin"
+        },
+        {
+          "id": "network",
+          "title": "Network & time",
+          "summary": "Center turns on the Pin's Wi-Fi, joins your network over USB, and checks the Pin's clock.",
+          "commandId": "pin.network",
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
+          "verification": "center",
+          "documentationAnchor": "README.md#connect-a-pin"
+        },
+        {
+          "id": "install",
+          "title": "Install Luma",
+          "summary": "Center installs and checks the Luma release published on your server.",
+          "commandId": "pin.install",
+          "centerRoute": "/settings/pin/install",
+          "surface": "center",
+          "verification": "physical",
+          "documentationAnchor": "README.md#connect-a-pin"
+        },
+        {
+          "id": "services",
+          "title": "Required services",
+          "summary": "Set up the assistant and speech. Every other service is optional.",
+          "commandId": null,
+          "centerRoute": "/settings/account/services",
+          "surface": "center",
+          "verification": "center",
+          "documentationAnchor": "README.md#configure-services-in-center"
+        },
+        {
+          "id": "activate",
+          "title": "Connect to your Luma",
+          "summary": "Center points the Pin at your Luma server and pairs it with your account.",
+          "commandId": "pin.activate",
+          "centerRoute": "/settings/pin/provision",
+          "surface": "center",
+          "verification": "physical",
+          "documentationAnchor": "README.md#connect-a-pin"
+        },
+        {
+          "id": "passcode",
+          "title": "Pin passcode",
+          "summary": "Finish the Pin's own setup when needed. A Pin that is already set up keeps its current passcode.",
+          "commandId": null,
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
+          "verification": "physical",
+          "documentationAnchor": "README.md#connect-a-pin"
+        },
+        {
+          "id": "confirm",
+          "title": "Try it",
+          "summary": "Ask your Pin a question, then confirm that it heard, answered, and responded to your touch.",
+          "commandId": null,
+          "centerRoute": "/settings/pin/setup",
+          "surface": "center",
+          "verification": "physical",
+          "documentationAnchor": "README.md#connect-a-pin"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "name": "LUMA_CONFIG_VERSION",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_RELEASE_ID",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_RELEASE_VERSION",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_RELEASE_TAG",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_PIN_RELEASE_VERSION",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_PIN_RELEASE_VERSION_CODE",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_RELEASE_PUBLISHED_AT",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_COMPOSE_APPLICATION",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_CENTER_PORT",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_PUBLIC_ORIGIN",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_PUBLIC_DOMAIN",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_ACME_EMAIL",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_TRAEFIK_EXTRA_NETWORKS",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_UPDATE_SOURCE",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_AUTO_UPDATES",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OIDC_ISSUER",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_CAPTURE_SHARE_BASE_URL",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_ONBOARDING_ENDPOINT",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_CAPTURE_UPLOAD_BASE_URL",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_PG_PASSWORD",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_DATABASE_URL",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "GRAFANA_ADMIN_PASSWORD",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_MUSICBRAINZ_BASE_URL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SHOPPING_VISUAL_SEARCH_URL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SHOPPING_ALLOWED_HOSTS",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SHOPPING_API_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_AUTH_MODE",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_EDGE_TOKEN",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "AUTH_SESSION_SECRET",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_MUSIC_GATEWAY_ORIGIN",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "TIDAL_CLIENT_ID",
+      "group": "provider",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "TIDAL_CLIENT_SECRET",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "TIDAL_SCOPES",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "TIDAL_COUNTRY_CODE",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "APPLE_MUSIC_DEVELOPER_TOKEN",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SHARE_TOKEN_SECRET",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_ADMIN_TOKEN",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_REMOTE_TTS_ENABLED",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_AZURE_SPEECH_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_AZURE_SPEECH_REGION",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_AZURE_SPEECH_VOICE",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_SPOTIFY_ADAPTER_URL",
+      "group": "pin",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_DEVICE_EDGE_IPV4",
+      "group": "pin",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_IDENTITY_ENABLED",
+      "group": "local",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "KEYCLOAK_CLIENT_ID",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "KEYCLOAK_CLIENT_SECRET",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "KEYCLOAK_SCOPES",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "KEYCLOAK_ADMIN",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "KEYCLOAK_ADMIN_PASSWORD",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_FIRST_OPERATOR_EMAIL",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "LUMA_FIRST_OPERATOR_ID",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_ENROLLMENT_USER_ID",
+      "group": "pin",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OPAQUE_SEED",
+      "group": "pin",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OPERATOR_EMAILS",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_KID_SCOPE",
+      "group": "production",
+      "sensitivity": "identity",
+      "home": "runtime.env"
+    },
+    {
+      "name": "SEARXNG_SECRET",
+      "group": "production",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SEARXNG_BASE_URL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COMPOSE_PROFILES",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_LLM_BASE_URL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_LLM_API_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_LLM_MODEL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_LLM_REASONING_EFFORT",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_LLM_MAX_TOKENS",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_SERPAPI_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_GOOGLE_MAPS_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_PIRATE_WEATHER_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_WOLFRAM_APP_ID",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_PPLX_API_KEY",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_PPLX_MODEL",
+      "group": "provider",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OPEN_FOOD_FACTS_USERNAME",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    },
+    {
+      "name": "COSMOS_OPEN_FOOD_FACTS_PASSWORD",
+      "group": "provider",
+      "sensitivity": "secret",
+      "home": "runtime.env"
+    }
+  ]
+}

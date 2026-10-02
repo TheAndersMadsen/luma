@@ -1,0 +1,328 @@
+/*
+ * The provenance vocabulary, drawn.
+ *
+ * OURS, NOT RECOVERED. Four states and one sentence stem each, so "live",
+ * "you have none yet", "this backend never had that" and "it isn't answering
+ * right now" look the same on the faithful pages, in Settings, and in the
+ * operator-only settings. Before this file the app had twelve phrasings for absence,
+ * four status vocabularies, two switch geometries and two off-palette hexes.
+ *
+ * The one absolute rule: anything that failed is NEVER the caption colour.
+ */
+
+/* ---------------------------------------------------------- StatusChip -- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  width: max-content;
+  max-width: 100%;
+  padding: 5px 11px;
+  border: 1px solid var(--luma-colors-iron-base);
+  border-radius: 100px;
+  background: transparent;
+  font-family: var(--luma-font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--luma-colors-crater-base);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--luma-status-off);
+}
+
+.chipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A sentence, not a word, the loud "your backend isn't answering" case wraps
+   rather than truncating, because truncating it would hide the whole point. */
+.chipLabelWrap {
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+}
+
+/* tones, chip */
+.toneLive {
+  color: var(--luma-status-live);
+  border-color: rgba(0, 255, 224, 0.3);
+}
+
+.toneLive .dot {
+  background: var(--luma-status-live);
+  box-shadow: 0 0 8px rgba(0, 255, 224, 0.5);
+}
+
+.toneDegraded {
+  color: var(--luma-status-warning);
+  border-color: rgba(235, 125, 35, 0.35);
+}
+
+.toneDegraded .dot {
+  background: var(--luma-status-warning);
+}
+
+/* absence is hollow, it is not a failure and must never read as one */
+.toneAbsent {
+  color: var(--luma-colors-crater-base);
+  border-color: var(--luma-colors-lunar-grey-dark-200);
+}
+
+.toneAbsent .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--luma-colors-crater-grey-base);
+}
+
+.toneOff {
+  color: var(--luma-status-off);
+  border-color: var(--luma-colors-lunar-grey-dark-200);
+}
+
+.toneOff .dot {
+  background: var(--luma-status-off);
+}
+
+/* variant="tag", the inline marker idiom (hidden network, override, source) */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.06);
+  font-family: var(--luma-font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--luma-colors-crater-base);
+}
+
+.tag.toneLive {
+  background: rgba(0, 255, 224, 0.12);
+  color: var(--luma-status-live);
+}
+
+.tag.toneDegraded {
+  background: rgba(235, 125, 35, 0.14);
+  color: var(--luma-status-warning);
+}
+
+.tag.toneAbsent {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--luma-colors-lunar-grey-dark-200);
+  color: var(--luma-colors-crater-base);
+}
+
+.tag.toneOff {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--luma-status-off);
+}
+
+/* ---------------------------------------------------------- SourceBadge -- */
+
+.sourceBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(520px, 100%);
+}
+
+/* The badge's chip may shrink, its sentence is the point, its width is not.
+   But it must never be crushed into a column of one-word-per-line text, which
+   is what an unbounded `min-width: 0` in a tight flex row produced on a phone. */
+.sourceBadgeChip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/*
+ * Two phrasings, one chosen by width. Above the toolbar's breakpoint there is
+ * room for the whole sentence. Below it the chip states the fact in two words
+ * and keeps the sentence in its title. The page-level StatusMessage next to the
+ * affected content always carries the full wording, so nothing is only-in-a-tooltip.
+ */
+.badgeLabelFull {
+  display: inline;
+}
+
+.badgeLabelShort {
+  display: none;
+}
+
+@media (max-width: 1071px) {
+  .badgeLabelFull {
+    display: none;
+  }
+  .badgeLabelShort {
+    display: inline;
+    white-space: nowrap;
+  }
+}
+
+.badgeDismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--luma-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-duration) ease-out;
+}
+
+.badgeDismiss:hover {
+  color: var(--luma-colors-white);
+}
+
+/* -------------------------------------------------------- StatusMessage -- */
+
+.statusMessage {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: var(--luma-radius-control);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: var(--luma-font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--luma-colors-apollo-base);
+}
+
+.statusMessageInline {
+  padding: 8px 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+.statusMark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--luma-status-off);
+}
+
+.statusBody {
+  flex: 1;
+  min-width: min(calc(100% - 18px), 180px);
+}
+
+.statusDanger {
+  color: var(--luma-status-danger);
+}
+
+.statusDanger .statusMark {
+  background: var(--luma-status-danger);
+}
+
+.statusWarning {
+  color: var(--luma-status-warning);
+}
+
+.statusWarning .statusMark {
+  background: var(--luma-status-warning);
+}
+
+.statusInfo {
+  color: var(--luma-colors-crater-base);
+}
+
+.statusInfo .statusMark {
+  background: var(--luma-colors-crater-base);
+}
+
+.statusRetry {
+  composes: buttonQuietSmall from "./controls.module.css";
+  margin-left: auto;
+}
+
+/* -------------------------------------------------------------- Switch -- */
+
+/*
+ * One geometry: the privacy pane's 46x28 track with a 22px white knob. The
+ * console's 22x13 track with a 9px black knob is gone, flipping a feature flag
+ * and flipping a privacy toggle both write a boolean the wearer's device reads,
+ * so they are the same control.
+ */
+.switchRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--luma-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+  cursor: pointer;
+}
+
+.switchRow:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.switchTrack {
+  position: relative;
+  flex: none;
+  display: block;
+  width: 46px;
+  height: 28px;
+  border-radius: 100px;
+  background: var(--luma-colors-lunar-grey-dark-200);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.switchKnob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--luma-colors-white);
+  transition: transform var(--transition-duration) ease-out;
+}
+
+.switchOn .switchTrack {
+  background: var(--luma-colors-beam-base);
+}
+
+.switchOn .switchKnob {
+  transform: translateX(18px);
+}
+
+.switchOn.switchRow {
+  color: var(--luma-colors-white);
+}
+
+.switchLabel {
+  white-space: nowrap;
+}

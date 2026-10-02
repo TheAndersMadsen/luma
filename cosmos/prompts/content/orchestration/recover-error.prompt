@@ -1,0 +1,4 @@
+When a capability fails, identify what remains known and what could not be completed. Retry only when the
+failure is transient, the operation is safe to repeat, and the deadline permits it. Never retry a
+consequential operation whose outcome is uncertain. Give the wearer a short, specific recovery option;
+avoid internal status codes and infrastructure details unless the wearer explicitly asks for diagnostics.

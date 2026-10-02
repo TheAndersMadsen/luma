@@ -1,0 +1,44 @@
+{
+  "name": "Luma",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm@sha256:73d85a96694a2cadca1ba3fcb5721f2312a64f1d571dd86f6c77e10a708931dc",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.0": {
+      "version": "28.5.2",
+      "moby": false,
+      "dockerDashComposeVersion": "none",
+      "installDockerBuildx": true,
+      "installDockerComposeSwitch": false
+    },
+    "ghcr.io/devcontainers/features/node:2.1.0": {
+      "version": "22.14.0",
+      "npmVersion": "none",
+      "pnpmVersion": "none",
+      "nvmVersion": "0.40.3"
+    },
+    "ghcr.io/devcontainers/features/rust:1.5.1": {
+      "version": "1.91.1",
+      "profile": "minimal",
+      "components": "rustfmt,clippy"
+    },
+    "ghcr.io/devcontainers/features/sshd:1.1.0": {
+      "version": "latest"
+    }
+  },
+  "mounts": [
+    "source=luma-cache-${devcontainerId},target=/workspace-cache,type=volume",
+    "source=luma-private-${devcontainerId},target=/workspace-private,type=volume"
+  ],
+  "containerEnv": {
+    "RUSTUP_HOME": "/usr/local/rustup",
+    "CARGO_HOME": "/workspace-private/cargo",
+    "CARGO_TARGET_DIR": "/workspace-cache/cargo-target",
+    "GRADLE_USER_HOME": "/workspace-private/gradle",
+    "NPM_CONFIG_CACHE": "/workspace-cache/npm",
+    "NPM_CONFIG_USERCONFIG": "/workspace-private/npm/npmrc",
+    "LUMA_CONFIG_DIR": "/workspaces/.luma/config",
+    "LUMA_SECRETS_DIR": "/workspaces/.luma/secrets",
+    "LUMA_DATA_DIR": "/workspaces/.luma/data"
+  },
+  "postCreateCommand": "sudo chown -R root:root /usr/local/rustup /usr/local/cargo && sudo chmod -R go-w /usr/local/rustup /usr/local/cargo && sudo chown -R vscode:vscode /workspace-cache /workspace-private && sudo chmod 0750 /workspace-cache && sudo chmod 0700 /workspace-private && mkdir -p /workspace-cache/cargo-target /workspace-cache/npm /workspace-private/cargo /workspace-private/gradle /workspace-private/npm /workspaces/.luma/config /workspaces/.luma/secrets /workspaces/.luma/data && chmod 0700 /workspace-private/cargo /workspace-private/gradle /workspace-private/npm /workspaces/.luma /workspaces/.luma/config /workspaces/.luma/secrets /workspaces/.luma/data",
+  "remoteUser": "vscode"
+}

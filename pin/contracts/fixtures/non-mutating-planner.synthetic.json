@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "provenance": "synthetic",
+  "evidence": "implemented",
+  "purpose": "Independently authored negative controls for the deterministic native-action planner.",
+  "cases": [
+    {
+      "id": "greeting-neutral",
+      "category": "greeting",
+      "input": "Good afternoon, assistant. It is nice to meet you.",
+      "expected_native_action": null
+    },
+    {
+      "id": "assistant-role",
+      "category": "assistant_identity",
+      "input": "Describe your role in a single sentence.",
+      "expected_native_action": null
+    },
+    {
+      "id": "capability-overview",
+      "category": "general_capability",
+      "input": "List the categories of questions you are designed to help answer.",
+      "expected_native_action": null
+    },
+    {
+      "id": "capability-domain",
+      "category": "domain_capability",
+      "input": "Explain whether you can compare the ingredients in two recipes.",
+      "expected_native_action": null
+    },
+    {
+      "id": "capability-follow-up",
+      "category": "capability_follow_up",
+      "input": "Name another kind of assistance that is available.",
+      "expected_native_action": null
+    },
+    {
+      "id": "statement-non-imperative",
+      "category": "non_imperative_statement",
+      "input": "The blue triangle is a placeholder in this demonstration.",
+      "expected_native_action": null
+    },
+    {
+      "id": "nonce-statement",
+      "category": "nonce_input",
+      "input": "Velvetquartz signal seven.",
+      "expected_native_action": null
+    },
+    {
+      "id": "stable-public-fact",
+      "category": "stable_public_fact",
+      "input": "Which ocean covers the greatest area on Earth?",
+      "expected_native_action": null
+    },
+    {
+      "id": "public-person-fact",
+      "category": "public_person_fact",
+      "input": "What field of study is Ada Lovelace associated with?",
+      "expected_native_action": null
+    },
+    {
+      "id": "creative-copy",
+      "category": "creative_request",
+      "input": "Invent a two-line slogan for a quiet library.",
+      "expected_native_action": null
+    },
+    {
+      "id": "general-knowledge",
+      "category": "general_knowledge",
+      "input": "Why do many leaves change colour during autumn?",
+      "expected_native_action": null
+    },
+    {
+      "id": "ambiguous-reference",
+      "category": "ambiguous_input",
+      "input": "Perhaps the silver option, somehow.",
+      "expected_native_action": null
+    }
+  ]
+}

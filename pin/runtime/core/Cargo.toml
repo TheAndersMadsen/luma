@@ -1,0 +1,102 @@
+[package]
+name = "humane-server"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone gRPC server for Humane AI Pin"
+
+[[bin]]
+name = "humane-server"
+path = "src/main.rs"
+
+[dependencies]
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-stream = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+async-stream = "0.3"
+toml = "0.8"
+toml_edit = "0.22"
+futures = "0.3"
+base64 = "0.22"
+bytes = "1"
+hmac = "0.12"
+sha2 = "0.10"
+rcgen = "0.14"
+aes-gcm = "0.10"
+rand = "0.10"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+mime_guess = "2"
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+axum = { version = "0.8", features = ["http2", "multipart"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "native-tls", "stream", "query", "http2"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+dotenvy = "0.15"
+librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
+# Direct dep (it is otherwise only transitive through -playback) so the audio
+# diagnostics can read a track's Spotify normalisation header without playing
+# it: `AudioFile` + `AudioDecrypt` are public `Read + Seek`.
+librespot-audio = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-discovery = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots", "with-libmdns"] }
+librespot-metadata = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
+libc = "0.2"
+# Optional so the default build (and release) stays lean. The iroh remote-center
+# integration is opt-in. It has been migrated to the iroh 1.0.2 API and builds +
+# tests cleanly under `--features iroh` (Endpoint::id/addr, iroh-tickets
+# EndpointTicket, Connection::remote_id). This completes the
+# `#[cfg(feature = "iroh")]` gate the integration already began
+# (see the `#[cfg(not(feature = "iroh"))]` fallback in main.rs). Nothing here
+# rewrites that integration's logic. It is only conditionally compiled.
+iroh = { version = "1.0", optional = true }
+# The endpoint ticket type moved out of core `iroh` into `iroh-tickets` in the
+# 1.0 line. The connector needs it to hand a NodeId+addr ticket to the Mac
+# helper. Same optionality/feature as the rest of the iroh integration.
+iroh-tickets = { version = "1.0", optional = true }
+# iroh's error type is built with `n0-error`, so the custom `Resolver` in
+# `remote_center::system_dns` needs it to construct a `DnsError`. Already
+# resolved as a transitive dependency of iroh at the same 1.0 version. Naming it
+# here adds no new package to the lock. Same optionality as the rest.
+n0-error = { version = "1.0", optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android requires openssl to be embedded
+openssl = { version = "*", features = ["vendored"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+tempfile = "3"
+tonic = { version = "0.14", features = ["tls-ring"] }
+
+[patch.crates-io]
+# librespot-core's vergen-gitcl 1.0.8 requires `vergen ^9.0.6` but only compiles
+# with 9.0.x: vergen 9.1.0 broke semver by dropping vergen-lib 0.1.6 compat
+# (`Build: vergen_lib::entries::Add` unsatisfied). The concurrent iroh feature
+# pulls vergen-gitcl 9.1.0, which hard-requires vergen =9.1.0, so cargo unified
+# both onto 9.1.0 and librespot's build script stopped compiling. This vendored
+# copy of gitcl 1.0.8 pins its vergen dep to =9.0.6 so the two vergen versions
+# coexist (9.0.6 for librespot, 9.1.0 for iroh). Only the 1.0.8 requirement is
+# patched. Iroh's 9.1.0 still resolves from the registry unchanged.
+vergen-gitcl = { path = "vendor/vergen-gitcl-patched" }
+
+
+[features]
+# iroh remote-center integration. Off by default in Cargo. The release APK and
+# `./luma pin check` enable it. At runtime it stays off until
+# `server.iroh_remote_center_enabled` is set.
+iroh = ["dep:iroh", "dep:iroh-tickets", "dep:n0-error"]

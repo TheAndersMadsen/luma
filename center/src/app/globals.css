@@ -1,0 +1,199 @@
+/*
+ * Center design tokens.
+ *
+ * Luma is an independent, unaffiliated project and this file contains no
+ * third-party source. The custom properties below are Center's own visual
+ * system: colour, spacing, type, and motion. See TRADEMARKS.md.
+ */
+
+@font-face {
+  font-family: "Luma Sans";
+  src: url("/fonts/InterVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* neutrals */
+  --luma-colors-black: #000;
+  --luma-colors-eclipse-base: #0f0f0f;
+  --luma-colors-eclipse-500: #0f0f0f7f;
+  --luma-colors-penumbra-200: #131414;
+  --luma-colors-penumbra-base: #1f2121;
+  --luma-colors-lunar-grey-dark-base: #161717;
+  --luma-colors-lunar-grey-dark-200: #3d4141;
+  --luma-colors-iron-base: #505355;
+  --luma-colors-crater-grey-base: #727679;
+  --luma-colors-crater-grey-200: #56595b;
+  --luma-colors-crater-grey-50: #a5a7a7;
+  --luma-colors-crater-base: #a9abab;
+  --luma-colors-apollo-base: #e2e2e0;
+  --luma-colors-apollo-grey-base: #dededc;
+  --luma-colors-apollo-grey-50: #eaeae9;
+  --luma-colors-lunar-base: #f5f5f5;
+  --luma-colors-lunar-grey-base: #f9f9f9;
+  --luma-colors-lunar-grey-200: #f0f0f0;
+  --luma-colors-solar-base: #fff;
+  --luma-colors-white: #fff;
+
+  /* accent */
+  --luma-colors-beam-base: #00ffe0;
+  --luma-colors-beam-10: #d2fff8;
+  --luma-colors-beam-200: #005e59;
+  --luma-colors-beam-dark: #3d4141;
+  --luma-colors-laser-base: #004d43;
+  --luma-colors-marine: #008576;
+
+  /* buttons */
+  --luma-colors-button-background-dark-primary-hover: #00ddc2;
+  --luma-colors-button-background-dark-primary-active: #00a793;
+  --luma-colors-button-background-dark-primary-disabled: #4ee8d5;
+  --luma-colors-button-background-dark-secondary-base: #2e3131;
+  --luma-colors-button-background-dark-secondary-hover: #3d4141;
+  --luma-colors-button-background-light-secondary-base: #f4f6f6;
+
+  /* status */
+  --luma-colors-yellow-100: #f7ea48;
+  --luma-colors-orange-100: #eb7d23;
+  --luma-colors-red-10: #ffeaea;
+  --luma-colors-red-50: #ff8e81;
+  --luma-colors-red-100: #ff4834;
+  --luma-colors-red-150: #e70500;
+  --luma-colors-red-200: #9f0300;
+  --luma-colors-led-world-phone: #ff41f0;
+
+  /* typography */
+  --luma-font-sans: "Luma Sans", system-ui, sans-serif;
+
+  /* spacing, 8px scale */
+  --luma-spacing-base-1: 8px;
+  --luma-spacing-base-2: 16px;
+  --luma-spacing-base-3: 24px;
+  --luma-spacing-base-4: 32px;
+  --luma-spacing-base-5: 40px;
+  --luma-spacing-base-6: 48px;
+  --luma-spacing-base-7: 56px;
+  --luma-spacing-base-8: 64px;
+
+  /* effects */
+  --outline-shadow: inset 0 0 0 1px hsla(0, 0%, 100%, 0.04);
+  --focused-outline-shadow: inset 0 0 0 1px hsla(0, 0%, 100%, 0.12);
+  --menu-drop-shadow: 0 4px 32px 0 rgba(0, 0, 0, 0.4);
+  --transition-duration: 200ms;
+
+  /* layout */
+  --header-height: 80px;
+  --footer-height: 80px;
+  --toolbarHeight: 104px;
+  --main-elements-gap: 30px;
+  --header-footer-elements-gap: 20px;
+  --sys-layout-sidebar-width: 260px;
+  --cell-size: 240px;
+  --gap-size: 16px;
+  --text-secondary: #a9abab;
+  --luma-text-muted: #a5a7a7;
+  --luma-motion-fast: 150ms;
+  --luma-motion-standard: 200ms;
+}
+
+/*
+ * Project-resolved tokens: one value each for radius, divider, status, and
+ * motion, so the same decision is not re-made per component. The
+ * reduced-motion rule at the end of this file flattens all motion.
+ *
+ *   radii, surface 16 (a panel), raised 20 (a floating panel), control 12
+ *             (an input or small button).
+ *   divider, one hairline value: a line between two rows.
+ *   status, danger and warning map onto the red-100 / orange-100 scale. A
+ *             failure is never rendered in the caption colour.
+ *   motion, two tiers: feedback 300ms for a control answering the pointer
+ *             (hover, focus, a toggle settling) and transition 600ms for a
+ *             larger state change (a dialog or overlay arriving).
+ */
+:root {
+  --luma-radius-surface: 16px;
+  --luma-radius-raised: 20px;
+  --luma-radius-control: 12px;
+
+  --luma-divider: rgba(255, 255, 255, 0.06);
+
+  --luma-status-danger: var(--luma-colors-red-100);
+  --luma-status-warning: var(--luma-colors-orange-100);
+  --luma-status-live: var(--luma-colors-beam-base);
+  --luma-status-off: var(--luma-colors-crater-grey-base);
+
+  --luma-motion-feedback: 300ms;
+  --luma-motion-transition: 600ms;
+  --transition-duration: var(--luma-motion-feedback);
+  --luma-motion-fast: var(--luma-motion-feedback);
+  --luma-motion-standard: var(--luma-motion-feedback);
+}
+
+@media (min-width: 1072px) {
+  :root {
+    --toolbarHeight: 148px;
+    --gap-size: 24px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+::selection {
+  color: var(--luma-colors-eclipse-base);
+  background: var(--luma-colors-beam-base);
+}
+
+body {
+  background: var(--luma-colors-black);
+  color: var(--luma-colors-white);
+  font-family: var(--luma-font-sans);
+  font-weight: 500;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--luma-colors-beam-base);
+  outline-offset: 3px;
+}

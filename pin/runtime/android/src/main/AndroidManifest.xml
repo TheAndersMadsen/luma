@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sharedUserId="android.uid.system"
+    tools:ignore="Deprecated">
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!--
+      DO NOT DECLARE SIGNATURE|PRIVILEGED PERMISSIONS HERE.
+
+      This APK installs to /data/app and shares android.uid.system, so it already
+      HOLDS the system UID's permissions at runtime — Settings.Global writes in
+      CosmosIdentityProvider and SettingsGlobalBridgeServer work without any
+      declaration. Naming one here adds nothing and is fatal: this firmware
+      enforces the privapp allowlist, and PermissionManagerService.systemReady()
+      throws on a privileged permission held by a package that is not in the
+      platform's allowlist — which this package, living in /data/app, can never
+      be. system_server then dies before boot completes, every boot.
+
+      That is not hypothetical. `WRITE_SECURE_SETTINGS` was declared here and
+      boot-looped a provisioned Pin: `IllegalStateException: Signature|privileged
+      permissions not in privapp-permissions allowlist: {com.penumbraos.server
+      (/data/app/com.penumbraos.server-injected): WRITE_SECURE_SETTINGS}`.
+      Recovery needed racing `cmd package uninstall` against the crash loop,
+      because adbd cannot run as root on a production build. The sibling hook
+      modules contain the same warning for READ_PRIVILEGED_PHONE_STATE and REBOOT.
+
+      platform/deploy/acceptance/device-manifest-permissions.test.mjs fails if a
+      signature|privileged permission reappears in ANY manifest under pin/.
+    -->
+
+    <queries>
+        <package android:name="${tierAPackageDialer}" />
+        <package android:name="${tierAPackageMessages}" />
+        <package android:name="${tierAPackageMusic}" />
+        <package android:name="${tierAPackagePhotography}" />
+        <package android:name="${tierAPackageFood}" />
+        <package android:name="${tierAPackageKrypto}" />
+        <package android:name="${tierAPackageIronman}" />
+        <!-- Boot-time compatibility-package presence observation (content-free). -->
+        <package android:name="com.penumbraos.hook" />
+        <package android:name="com.penumbraos.hook.injector" />
+        <package android:name="com.penumbraos.systeminjector" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:directBootAware="true"
+        android:label="Luma Device Services"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false">
+
+        <receiver
+            android:name=".BootReceiver"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".ServerService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
+            The stock music process binds explicitly to this narrow Binder
+            bridge. SpotifyBridgeService verifies the caller UID on every
+            transaction and exposes no HTTP credential to the music process.
+        -->
+        <service
+            android:name=".SpotifyBridgeService"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true" />
+
+        <!-- Explicit Binder-only import of finalized stock fitness files. -->
+        <service
+            android:name=".FitnessBridgeService"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true" />
+
+        <!-- In-memory receipt of successful stock Messages database commits. -->
+        <service
+            android:name=".MessageStatusBridgeService"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true" />
+
+        <!--
+            Ironman-only receipt emitted after stock FeatureFlagManager has
+            synchronously applied and read back a complete server snapshot.
+        -->
+        <service
+            android:name=".FeatureFlagApplyAckBridgeService"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true" />
+
+        <provider
+            android:name=".UsbMaintenanceProvider"
+            android:authorities="com.penumbraos.server.maintenance"
+            android:directBootAware="true"
+            android:enabled="true"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:permission="android.permission.DUMP" />
+
+        <!--
+            Privileged-maintenance, write-only import of a clone DeviceAttestation
+            credential. Key bytes are validated and imported into Device Services'
+            AndroidKeyStore namespace. Activation also publishes a bounded one-shot
+            handoff for Ironman's separate namespace; provisioning deletes it only
+            after a successful import and read-back. No read/export API exists.
+        -->
+        <provider
+            android:name=".CosmosIdentityProvider"
+            android:authorities="com.penumbraos.server.cosmosidentity"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            android:permission="android.permission.DUMP" />
+
+        <provider
+            android:name=".PersistentConfigVaultProvider"
+            android:authorities="com.penumbraos.server.configvault"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="false"
+            android:grantUriPermissions="false"
+            android:process="system" />
+
+    </application>
+</manifest>

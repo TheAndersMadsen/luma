@@ -1,0 +1,302 @@
+/*
+ * Memories, the root view. Card slots follow the recovered contract exactly:
+ * 1 photo, 1 Ai Mic, 2 music, 3 notes, 1 call, 1 health.
+ */
+
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--gap-size);
+  max-width: 1400px;
+  margin: 0 auto;
+  padding-top: 8px;
+  align-items: start;
+}
+
+.viewControls {
+  width: fit-content;
+  display: flex;
+  gap: 4px;
+  margin: 0 auto 16px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.viewControls button {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  color: var(--luma-text-muted);
+  font-size: 14px;
+}
+
+.viewControls button[aria-pressed="true"] {
+  color: var(--luma-colors-white);
+  background: var(--luma-colors-lunar-grey-dark-200);
+}
+
+.timeline {
+  max-width: 820px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 auto;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--luma-radius-surface);
+  overflow: hidden;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.timelineItem {
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.timelineItem:last-child {
+  border-bottom: none;
+}
+
+.timelineLink {
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 18px 22px;
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.timelineLink:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.timelineMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--luma-text-muted);
+  font-size: 12px;
+}
+
+.timelineTitle {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.timelineDetail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--luma-text-muted);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.card {
+  border-radius: 16px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 190px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--luma-colors-crater-base);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+}
+
+.cardTimestamp {
+  margin-top: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+}
+
+/* photo tile, spans two columns and two rows, like the original */
+.photoCard {
+  grid-column: span 2;
+  grid-row: span 2;
+  position: relative;
+  min-height: 400px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.photoImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photoMissing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--luma-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: center;
+  /* An eclipse placeholder rather than a flat void when a frame can't render. */
+  background:
+    radial-gradient(120% 90% at 30% 20%, rgba(0, 255, 224, 0.06), transparent 55%),
+    linear-gradient(160deg, var(--luma-colors-penumbra-base, #1f2121), var(--luma-colors-eclipse-base, #0f0f0f));
+}
+
+.photoCaption {
+  position: absolute;
+  left: 22px;
+  bottom: 20px;
+  right: 22px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.7);
+}
+
+/* Ai Mic card */
+.aiCard {
+  grid-column: span 2;
+}
+
+.aiRequest {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--luma-colors-white);
+}
+
+.aiResponse {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--luma-colors-crater-base);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* note cards, yellow */
+.noteCard {
+  background: var(--luma-colors-yellow-100);
+  color: var(--luma-colors-black);
+}
+
+.noteCard .cardHead {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.noteCard .cardTimestamp {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.noteTitle {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.noteText {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0.78;
+}
+
+/* music cards */
+.musicRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.albumArt {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  flex: none;
+  background: var(--luma-colors-lunar-grey-dark-200);
+}
+
+.trackTitle {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--luma-colors-white);
+}
+
+.trackArtist {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--luma-colors-crater-base);
+}
+
+.serviceTag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+}
+
+/* call card */
+.callName {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+/* health tile, "Coming soon" */
+.healthCard {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.healthTitle {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.comingSoon {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--luma-colors-crater-base);
+}
+
+@media (max-width: 1200px) {
+  .dashboardGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .dashboardGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .photoCard,
+  .aiCard {
+    grid-column: span 1;
+  }
+  .photoCard {
+    grid-row: auto;
+    min-height: 320px;
+  }
+}

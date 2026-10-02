@@ -1,0 +1,1536 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.aibus;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "humane/common.proto";
+import "humane/common/encryption.proto";
+import "humane/common/food.proto";
+
+enum AudioFormat {
+  RIFF_16KHZ_16BIT_MONO_PCM = 0;
+  RAW_16KHZ_16BIT_MONO_PCM = 1;
+  RAW_24KHZ_16BIT_MONO_PCM = 2;
+  AUDIO_24KHZ_160KBITRATE_MONO_MP3 = 3;
+}
+
+enum BrandHint {
+  BRAND_HINT_UNKNOWN = 0;
+  BRAND_HINT_UNBRANDED = 1;
+  BRAND_HINT_BRANDED = 2;
+}
+
+enum Capability {
+  INTENT = 0;
+  TRANSCRIPTION = 1;
+  ANNOTATION = 2;
+  COMPOSITION = 3;
+  SUMMARIZATION = 4;
+  PERSONAL_INFO = 5;
+  GENERAL_INFO = 6;
+  MIND = 7;
+  AIDJ = 8;
+  SPEECH_SYNTHESIS = 10;
+}
+
+enum FoodFeedbackRequestType {
+  UNSPECIFIED = 0;
+  IMAGE_RECOGNITION = 1;
+  NUTRITION = 2;
+}
+
+enum FoodIdentificationEngine {
+  UNKNOWN_ENGINE = 0;
+  CALORIE_MAMA = 1;
+  GOOGLE_VISION_NUTRITIONIX = 2;
+}
+
+enum GeoLocateResponseStatus {
+  GEOLOCATE_RESPONSE_STATUS_UNSPECIFIED = 0;
+  GEOLOCATE_RESPONSE_STATUS_SUCCESS = 1;
+  GEOLOCATE_RESPONSE_STATUS_BAD_REQUEST = 2;
+  GEOLOCATE_RESPONSE_STATUS_INTERNAL_ERROR = 3;
+  GEOLOCATE_RESPONSE_STATUS_NOT_FOUND = 4;
+}
+
+enum ImageHint {
+  IMAGE_HINT_UNKNOWN = 0;
+  IMAGE_HINT_FOOD = 1;
+  IMAGE_HINT_GEMINI = 2;
+  IMAGE_HINT_GPT4V = 3;
+}
+
+enum MessageSourceType {
+  EMAIL = 0;
+  MESSAGE = 1;
+  TWITTER = 2;
+  SLACK = 3;
+}
+
+enum MessageType {
+  UNSPECIFIED_MESSAGE_TYPE = 0;
+  SMS = 1;
+  MMS = 2;
+}
+
+enum ModelType {
+  ADA = 0;
+  BABBAGE = 1;
+  CURIE = 2;
+  DAVINCI = 3;
+  CURIE_OLD = 4;
+  DAVINCI_OLD = 5;
+  DAVINCI_NEW = 6;
+}
+
+enum NavigationManeuver {
+  NAVIGATION_ACTION_UNSPECIFIED = 0;
+  NAVIGATION_ACTION_TURN_SLIGHT_LEFT = 1;
+  NAVIGATION_ACTION_TURN_SHARP_LEFT = 2;
+  NAVIGATION_ACTION_TURN_LEFT = 3;
+  NAVIGATION_ACTION_TURN_SLIGHT_RIGHT = 4;
+  NAVIGATION_ACTION_TURN_SHARP_RIGHT = 5;
+  NAVIGATION_ACTION_KEEP_RIGHT = 6;
+  NAVIGATION_ACTION_KEEP_LEFT = 7;
+  NAVIGATION_ACTION_UTURN_LEFT = 8;
+  NAVIGATION_ACTION_UTURN_RIGHT = 9;
+  NAVIGATION_ACTION_TURN_RIGHT = 10;
+  NAVIGATION_ACTION_GO_STRAIGHT = 11;
+  NAVIGATION_ACTION_RAMP_LEFT = 12;
+  NAVIGATION_ACTION_RAMP_RIGHT = 13;
+  NAVIGATION_ACTION_MERGE = 14;
+  NAVIGATION_ACTION_FORK_LEFT = 15;
+  NAVIGATION_ACTION_FORK_RIGHT = 16;
+  NAVIGATION_ACTION_FERRY = 17;
+  NAVIGATION_ACTION_FERRY_TRAIN = 18;
+  NAVIGATION_ACTION_ROUNDABOUT_LEFT = 19;
+  NAVIGATION_ACTION_ROUNDABOUT_RIGHT = 20;
+}
+
+enum NearbySearchResultStatus {
+  NEARBY_SEARCH_RESULT_STATUS_UNSPECIFIED = 0;
+  NEARBY_SEARCH_RESULT_STATUS_SUCCESS = 1;
+  NEARBY_SEARCH_RESULT_STATUS_INTERNAL_ERROR = 2;
+  NEARBY_SEARCH_RESULT_STATUS_BAD_REQUEST = 3;
+}
+
+enum OpenAIProvider {
+  AZURE = 0;
+  OPENAI = 1;
+}
+
+enum SpeechSource {
+  SOURCE_UNSPECIFIED = 0;
+  SOURCE_GOOGLE_SPEECH_SYNTHESIS = 1;
+  SOURCE_RESEMBLE_SPEECH_SYNTHESIS = 2;
+  SOURCE_MICROSOFT_SPEECH_SYNTHESIS = 3;
+}
+
+enum SynapseSource {
+  DEVICE = 0;
+  SERVER = 1;
+}
+
+enum SynapseUser {
+  SYSTEM = 0;
+  USER = 1;
+  ASSISTANT = 2;
+}
+
+message AIRequest {
+  google.protobuf.Timestamp timeout = 2;
+  Capability capability = 3;
+  oneof capabilityrequest {
+    AudioProcessingRequest audio_processing_request = 4;
+    OpenAICompletionRequest completion_request = 6;
+    OpenAIChatRequest chat_request = 7;
+  }
+}
+
+message AIResponse {
+  AudioProcessingResponse audio_processing_response = 2;
+  OpenAICompletionResponse completion_response = 4;
+  OpenAIChatResponse chat_response = 5;
+}
+
+message ActionBasedInterstitialRequest {
+  repeated string action_strings = 1;
+}
+
+message ActionBasedInterstitialResponse {
+  string interstitial = 1;
+}
+
+message ActionExecutionTestRequest {
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    MODE_WEATHER = 1;
+    MODE_SERP_API = 2;
+    MODE_WOLFRAM = 3;
+    MODE_WIKIPEDIA = 4;
+    MODE_GPT3_5 = 5;
+    MODE_NOTES = 6;
+    MODE_LIST = 7;
+    MODE_SEMANTIC_SEARCH = 8;
+    MODE_PPLX_API = 9;
+  }
+  ActionExecutionTestRequest.Mode mode = 1;
+}
+
+message ActionExecutionTestResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message AnalyzeFoodImageRequest {
+  repeated humane.common.food.FoodImage images = 1;
+}
+
+message AnalyzeFoodImageResponse {
+  repeated humane.common.food.FoodBoundingBox food_bounding_boxes = 1;
+}
+
+message AnalyzeImageRequest {
+  string base_64_encoded_image = 1;
+  string request = 2;
+  bytes image_data = 3;
+  repeated ImageHint image_hints = 4;
+  string utterance = 5;
+  // MAP on the wire, not bytes: `AnalyzeImageRequest.java:645-646` lists
+  // `IfThenDefaultEntryHolder.defaultEntry` for field 6 with descriptor char
+  // '2' (FieldType.MAP = 50), and `AnalyzeImageRequest.java:237` pins the entry
+  // to `MapEntryLite.newDefaultInstance(STRING, "", STRING, "")`.
+  map<string, string> if_then = 6;
+}
+
+message AnalyzeImageResponse {
+  string observation = 1;
+  NestedAnalyzeImageResponse nested_analyze_image_response = 2;
+}
+
+message AnswersResponse {
+  string question = 1;
+  string answer = 2;
+}
+
+message ApplicationSummary {
+  string application = 1;
+  string summary = 2;
+}
+
+message Audio {
+  bytes audio = 1;
+  AudioFormat format = 2;
+}
+
+message AudioData {
+  bytes audio_bytes = 1;
+  string text = 2;
+  bytes audio_context = 3;
+}
+
+message AudioProcessingRequest {
+  GoogleTranscribeRequest google_transcribe_request = 1;
+  GoogleTranslateRequest google_translate_request = 2;
+  GoogleSpeechRequest google_speech_request = 3;
+  ResembleSpeechRequest resemble_speech_request = 4;
+}
+
+message AudioProcessingResponse {
+  AudioData audio_data = 1;
+  string translated_text = 2;
+}
+
+message CalendarEvent {
+  string title = 1;
+  string location = 2;
+  string description = 3;
+  CalendarEventDate starttime = 4;
+  CalendarEventDate endtime = 5;
+  repeated string recurrencerule = 6;
+  repeated EventAttendee attendees = 7;
+  ConferenceData meetinginfo = 8;
+  string status = 9;
+  string calendarid = 10;
+  string eventid = 11;
+}
+
+message CalendarEventDate {
+  google.protobuf.Timestamp timestamp = 1;
+  string timezone = 2;
+}
+
+message CanTranslateRequest {
+  humane.common.Locale from = 1;
+  humane.common.Locale to = 2;
+}
+
+message CanTranslateResponse {
+  bool is_supported = 1;
+}
+
+message CellTower {
+  int32 cell_id = 1;
+  int32 new_radio_cell_id = 2;
+  int32 location_area_code = 3;
+  int32 mobile_country_code = 4;
+  int32 mobile_network_code = 5;
+  int32 age = 6;
+  double signal_strength = 7;
+  double timing_advance = 8;
+}
+
+message ChatCompletionError {
+  string message = 1;
+  string code = 2;
+  int32 status = 3;
+}
+
+message ChatCompletionMessage {
+  string role = 1;
+  string content = 2;
+  repeated ToolCall tool_calls = 3;
+  string name = 4;
+  string tool_call_id = 5;
+}
+
+message ChatCompletionRequest {
+  repeated ChatCompletionMessage messages = 1;
+  int32 max_tokens = 2;
+  string stop = 3;
+  string tag = 4;
+  repeated Tool tools = 5;
+  string tool_choice = 6;
+  bool stream = 7;
+  ToolSetVersion tool_set_version = 8;
+  Audio audio_bytes = 9;
+}
+
+message ChatCompletionResponse {
+  repeated Choice choices = 1;
+  ChatCompletionUsage usage = 2;
+  ChatCompletionError error = 3;
+}
+
+message ChatCompletionUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message Choice {
+  ChatCompletionMessage message = 1;
+  string stop_reason = 2;
+}
+
+message CompletionChoice {
+  string text = 1;
+  int32 index = 2;
+  string finish_reason = 3;
+}
+
+message CompletionError {
+  string message = 1;
+  string code = 2;
+  int32 status = 3;
+}
+
+message CompletionRequest {
+  string model = 1;
+  string prompt = 2;
+  int32 max_tokens = 3;
+  repeated string stop = 4;
+  string tag = 5;
+}
+
+message CompletionResponse {
+  repeated CompletionChoice choices = 1;
+  CompletionUsage usage = 2;
+  CompletionError error = 3;
+}
+
+message CompletionUsage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message ConferenceData {
+  string uri = 1;
+  string pincode = 2;
+  string accesscode = 3;
+}
+
+message ConversationSummarizationRequest {
+  repeated MessageForSummarization messages_from_users = 1;
+  // `setSingleSender(true)` / `setSingleSender(false)`, a bool on the wire
+  // (NotificationSummarizer.java:275,279). `bytes` fails the decode outright.
+  bool singlesender = 2;
+  string id = 3;
+  repeated string participants = 4;
+  repeated MessageForSummarization conversation_history = 5;
+}
+
+message CreateNewCalendarEventsRequest {
+  repeated CalendarEvent calendareventstocreate = 1;
+}
+
+message CreateNewCalendarEventsResponse {
+  repeated string createdeventids = 1;
+  string calendarid = 2;
+}
+
+message EncryptedAIRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedAIResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedActionBasedInterstitialRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedActionBasedInterstitialResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAnalyzeFoodImageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedAnalyzeFoodImageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedAnalyzeImageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedAnalyzeImageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedCanTranslateRequest {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedCanTranslateResponse {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedChatCompletionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedChatCompletionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedCompletionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedCompletionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedFoodIdentifyRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedFoodIdentifyResponse {
+  humane.common.encryption.EncryptedData best_response = 1;
+  repeated humane.common.encryption.EncryptedData alternate_responses = 2;
+}
+
+message EncryptedFunctionCall {
+  humane.common.encryption.EncryptedData function_call = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedFunctionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedGeoLocateRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedGeoLocateResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedGetFoodItemRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedGetFoodItemResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedLoadingMessageRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedLoadingMessageResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedMessageCompositionRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedMessageCompositionResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedNavigationDirectionsRequest {
+  humane.common.encryption.EncryptedData location = 1;
+  humane.common.encryption.EncryptedData request = 2;
+}
+
+message EncryptedNavigationDirectionsResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedNearbySearchRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedNearbySearchResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedReverseGeocodeRequest {
+  humane.common.encryption.EncryptedData location = 1;
+}
+
+message EncryptedReverseGeocodeResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedSmartPlaylistRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedSmartPlaylistResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedSummarizationNetworkRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedSummarizationNetworkResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedSynapseUnderstandingRequest {
+  humane.common.encryption.EncryptedData request = 1;
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedSynapseUnderstandingResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedTranslateConversationRequest {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateConversationResponse {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateRequest {
+  humane.common.encryption.EncryptedData request = 1;
+}
+
+message EncryptedTranslateResponse {
+  humane.common.encryption.EncryptedData response = 1;
+}
+
+message EncryptedTranslateTextRequest {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedTranslateTextResponse {
+  humane.common.encryption.EncryptedData data = 1;
+}
+
+message EncryptedWeatherRequest {
+  humane.common.encryption.EncryptedData location = 2;
+}
+
+message EncryptedWeatherResponse {
+  humane.common.encryption.EncryptedData response = 2;
+}
+
+message EventAttendee {
+  string email = 1;
+  bool is_optional = 2;
+  string display_name = 3;
+  string response_status = 4;
+}
+
+message FoodFeedbackItem {
+  string item_name = 2;
+  string barcode = 3;
+  string item_id = 4;
+}
+
+message FoodFeedbackRequest {
+  string third_party_request_id = 1;
+  string text = 2;
+  FoodFeedbackRequestType feedback_issue = 3;
+  repeated FoodFeedbackItem food_items = 4;
+}
+
+message FoodFeedbackResponse {
+}
+
+message FoodIdentifyRequest {
+  repeated bytes image_data = 1;
+  string request_uuid = 2;
+  int32 current_width = 3;
+  int32 current_height = 4;
+  FoodImageAdjustment image_adjustment = 5;
+  FoodIdentificationEngine engine = 6;
+  bool fallback_to_previous_context = 7;
+  string text = 8;
+  bool debug_mode = 9;
+}
+
+message FoodIdentifyResponse {
+  string item_name = 1;
+  string barcode = 2;
+  string serving_size = 3;
+  repeated NutritionInfo nutrient = 4;
+  repeated string ingredients = 5;
+  string request_uuid = 6;
+  string brand = 7;
+  string debug_image_s3_location = 8;
+  bool is_previous = 9;
+  string item_id = 10;
+  string third_party_request_id = 11;
+  string debug_image_blob_store_location = 12;
+}
+
+message FoodImageAdjustment {
+  bool allow_resize = 1;
+  int32 width = 3;
+  int32 height = 4;
+}
+
+message FoodImageResponse {
+  repeated humane.common.food.FoodBoundingBox food_bounding_boxes = 1;
+}
+
+message Function {
+  string name = 1;
+  string description = 2;
+  repeated FunctionParameter parameters = 3;
+  repeated string is_required = 4;
+}
+
+message FunctionCall {
+  string name = 1;
+  string arguments = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  bytes reversegeocodedlocation = 4;
+  string time_zone = 5;
+  string utterance = 6;
+  humane.common.encryption.LocationEnvelope location = 7;
+  bool is_locked = 8;
+}
+
+message FunctionParameter {
+  string name = 1;
+  string type = 2;
+  string description = 3;
+  repeated string enums = 4;
+}
+
+message FunctionResponse {
+  string response = 1;
+}
+
+message GenericChatRequest {
+  string raw_question = 1;
+}
+
+message GenericChatResponse {
+  string text = 1;
+  bytes chatid = 2;
+}
+
+message GenericCompletion {
+  string question = 1;
+  string target = 2;
+  string answer = 3;
+}
+
+message GenericCompletionRequest {
+  string text = 1;
+  string raw_question = 2;
+  string offset_date_time = 3;
+  string target = 4;
+  repeated GenericCompletion history = 5;
+}
+
+message GenericCompletionResponse {
+  string text = 1;
+}
+
+message GenericImageResponse {
+  string observation = 1;
+}
+
+message GeoLocateRequest {
+  int32 home_mobile_country_code = 1;
+  int32 home_mobile_network_code = 2;
+  string radio_type = 3;
+  string carrier = 4;
+  bool consider_ip = 5;
+  repeated CellTower cell_towers = 6;
+  repeated WifiAccessPoint wifi_access_points = 7;
+}
+
+message GeoLocateResponse {
+  Location location = 1;
+  double radius_accuracy = 2;
+  GeoLocateResponseStatus status = 3;
+}
+
+message GetCalendarEventsRequest {
+  string calendarid = 1;
+  int32 maxcount = 2;
+  repeated string eventids = 3;
+}
+
+message GetCalendarEventsResponse {
+  repeated CalendarEvent events = 1;
+}
+
+message GetFoodItemRequest {
+  string text = 1;
+  BrandHint brand_hint = 2;
+}
+
+message GetFoodItemResponse {
+  humane.common.food.FoodItem best_food_item = 1;
+  repeated humane.common.food.FoodItem alternate_food_items = 2;
+}
+
+message GoogleSpeechRequest {
+  AudioData audio_data = 1;
+}
+
+message GoogleTranscribeRequest {
+  AudioData audio_data = 1;
+}
+
+message GoogleTranslateRequest {
+  AudioData audio_data = 1;
+}
+
+message InitializedCalendarResponse {
+  string calendarid = 1;
+}
+
+message IntermediateEvent {
+  SynapseChatTurn event = 1;
+  string agent = 2;
+  bool requires_response = 3;
+}
+
+message Interstitial {
+  string interstitial = 1;
+}
+
+message LoadingMessageRequest {
+  string utterance = 1;
+  bool is_unlocked = 2;
+  repeated SynapseChatTurn turns = 3;
+}
+
+message LoadingMessageResponse {
+  string loading_message = 1;
+  string verbal_message = 2;
+}
+
+message Location {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+message MessageCompositionRequest {
+  MessageSourceType type = 1;
+  string text = 2;
+  bytes userid = 3;
+  bytes targetid = 4;
+  ModelType model_type = 5;
+  OpenAIProvider provider = 6;
+}
+
+message MessageCompositionResponse {
+  MessageSourceType type = 1;
+  string formal = 2;
+  string casual = 3;
+}
+
+message MessageForSummarization {
+  string message = 1;
+  bytes userid = 2;
+  string timestamp_seconds = 3;
+  bool sent_by_self = 4;
+}
+
+message UploadAttachmentRequest {
+  string filename = 1;
+}
+
+message UploadAttachmentResponse {
+  string url = 1;
+}
+
+message BackupMessagesRequest {
+  repeated Message messages = 1;
+}
+
+message BackupMessagesResponse {
+  repeated Message messages = 1;
+}
+
+message QueryMessagesRequest {
+  google.protobuf.Timestamp start_time = 1;
+  google.protobuf.Timestamp end_time = 2;
+  string user_phone_number = 3;
+}
+
+message QueryMessagesResponse {
+  repeated Message messages = 1;
+}
+
+message Message {
+  string user_id = 1;
+  string user_phone_number = 2;
+  MessageType type = 3;
+  humane.common.encryption.EncryptedData encrypted_message_data = 4;
+  repeated MessageAttachment attachments = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  string device_message_id = 7;
+}
+
+message MessageData {
+  repeated string peer_phone_numbers = 1;
+  string sender_phone_number = 2;
+  string message_text = 3;
+}
+
+message MessageAttachment {
+  string mime_type = 1;
+  string bucket = 2;
+  string asset_key = 3;
+}
+
+message MissedCallForSummarization {
+  string caller = 1;
+  string timestamp_seconds = 2;
+}
+
+message MissedCallSummarizationRequest {
+  repeated MissedCallForSummarization missed_calls = 1;
+  string id = 2;
+}
+
+message NavigationDirectionsRequest {
+  string destination = 1;
+}
+
+message NavigationDirectionsResponse {
+  string summary = 1;
+  repeated NavigationStep steps = 2;
+  NavigationDistance total_distance = 3;
+  NavigationDuration total_duration = 4;
+}
+
+message NavigationDistance {
+  string text = 1;
+  int32 value = 2;
+}
+
+message NavigationDuration {
+  string text = 1;
+  int32 value = 2;
+}
+
+message NavigationStep {
+  string instruction = 1;
+  NavigationDistance distance = 2;
+  NavigationDuration duration = 3;
+  Location start_location = 4;
+  Location end_location = 5;
+  NavigationManeuver maneuver = 6;
+}
+
+message NearbyPlace {
+  string name = 1;
+  string formatted_address = 2;
+  repeated string place_types = 3;
+  string place_id = 4;
+  string phone_number = 5;
+  string place_description = 6;
+  string description_language = 7;
+  string website_url = 8;
+  float rating = 9;
+  int32 user_ratings_total = 10;
+  Location location = 11;
+  bool open_now = 12;
+}
+
+message NearbySearchRequest {
+  string text_query = 1;
+  Location location = 2;
+  double radius_accuracy = 3;
+}
+
+message NearbySearchResponse {
+  repeated NearbyPlace nearby_places = 1;
+  NearbySearchResultStatus status = 2;
+}
+
+message NestedAnalyzeImageResponse {
+  oneof responseoneof {
+    GenericImageResponse generic_image_response = 1;
+    FoodImageResponse food_image_response = 2;
+  }
+}
+
+message NotificationCategories {
+  enum Category {
+    UNKNOWN = 0;
+    JUNK = 1;
+    INFORMATIONAL = 2;
+    TIME_SENSITIVE = 3;
+  }
+  repeated NotificationCategories.Category categories = 1;
+}
+
+message NotificationForSummarization {
+  string app_name = 1;
+  string title = 2;
+  string message = 3;
+  string timestamp_seconds = 5;
+  string app_id = 6;
+  string subtitle = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+message NotificationSummarizationRequest {
+  repeated NotificationForSummarization notification = 1;
+  string id = 2;
+}
+
+message NotificationsForSummarization {
+  repeated NotificationForSummarization notifications = 1;
+}
+
+message NutritionInfo {
+  humane.common.food.NutrientType nutrient_type = 1;
+  float value = 2;
+}
+
+message OpenAIChatRequest {
+  ModelType model_type = 3;
+  OpenAIProvider provider = 4;
+  oneof completiontype {
+    GenericChatRequest generic_chat = 1;
+    SmartPlaylistRequest smart_playlist_request = 2;
+  }
+}
+
+message OpenAIChatResponse {
+  oneof completiontype {
+    GenericChatResponse generic_response = 1;
+    SmartPlaylistResponse smart_playlist_response = 2;
+  }
+}
+
+message OpenAICompletionRequest {
+  ModelType model_type = 3;
+  OpenAIProvider provider = 4;
+  AudioProcessingRequest audio_processing_request = 6;
+  oneof completiontype {
+    GenericCompletionRequest generic_completion = 1;
+    MessageCompositionRequest message_composition = 2;
+    SummarizationNetworkRequest summarization_request = 5;
+    SmartEditRequest smart_edit_request = 7;
+  }
+}
+
+message OpenAICompletionResponse {
+  oneof completiontype {
+    GenericCompletionResponse generic_completion = 1;
+    MessageCompositionResponse message_composition = 2;
+    AnswersResponse answers_completion = 3;
+    SummarizationNetworkResponse summarization_response = 4;
+    SmartEditResponse smart_edit_response = 5;
+  }
+}
+
+message ResembleSpeechRequest {
+  AudioData audio_data = 1;
+}
+
+message ReverseGeocodeResponse {
+  string street_number = 1;
+  string street_name = 2;
+  string municipality = 3;
+  string country_subdivision = 4;
+  string country = 5;
+  string postal_code = 6;
+}
+
+message Run {
+  repeated SynapseChatTurn events = 1;
+}
+
+// THE ONE DIVERGENCE THE OTHER TREE WON, out of the nine that changed bytes:
+// pin/runtime/core/proto/humane/aibus/aibus.proto declares
+// `humane.aibus.RunState.agent_to_runs (1)` as `map<string, Runs>`, which is
+// what the field name says and what the sibling `Runs` message exists to hold.
+// `bytes` was this file's placeholder for a type the reconstruction could not
+// resolve, it carried 28 bare bytes fields to the pin copy's 4, and a
+// placeholder loses to a declaration that fits the surrounding types.
+//
+// What the placeholder cost: a map encodes as repeated length-delimited MapEntry
+// submessages, so a singular `bytes` field decodes without error and keeps only
+// the LAST entry's raw bytes, discarding every other agent's runs in silence.
+// Nothing observed that, because the shipped device never sends
+// `StreamingUnderstandRequest.initial_run_state` and Cosmos accepts and skips it
+// (cosmos/crates/cosmos/src/assistant/bidi.rs), so the field has never carried a
+// live map. That is why this was a safe Cosmos-side change to land: the decode
+// it corrects has no traffic behind it today, and it stops being safe the moment
+// a client seeds a run.
+message RunState {
+  map<string, Runs> agent_to_runs = 1;
+}
+
+message Runs {
+  repeated Run runs = 1;
+}
+
+message SearchMemoryItem {
+  string uuid = 1;
+}
+
+message SearchRequest {
+  string text_query = 1;
+}
+
+message SearchResponse {
+  repeated SearchMemoryItem memories = 1;
+}
+
+message ServerFunction {
+  string name = 1;
+  string version = 2;
+}
+
+message ServerStatefulUnderstandRequest {
+  enum ResponseFormat {
+    RESPONSE_FORMAT_UNKNOWN = 0;
+    RESPONSE_FORMAT_TEXT = 1;
+    RESPONSE_FORMAT_AUDIO_BYTES = 2;
+  }
+  ServerStatefulUnderstandRequest.ResponseFormat response_format = 3;
+  oneof userrequest {
+    string transcription = 1;
+    Audio audio_bytes = 2;
+  }
+}
+
+message ServerStatefulUnderstandResponse {
+  oneof response {
+    string text = 1;
+    Audio audio_bytes = 2;
+  }
+}
+
+message Session {
+  repeated SynapseChatTurn turn = 1;
+}
+
+message SmartEditRequest {
+  string message = 1;
+  string edit_request = 2;
+  string selection = 3;
+  OpenAIProvider provider = 6;
+}
+
+message SmartEditResponse {
+  string text = 1;
+  string command = 2;
+}
+
+message SmartPlaylistRequest {
+  string topic = 1;
+  int32 max_track_count = 2;
+  repeated SongInfo playback_history = 3;
+  OpenAIProvider provider = 6;
+}
+
+message SmartPlaylistResponse {
+  repeated SongInfo playlist = 1;
+  string error = 2;
+  string artist = 3;
+  string album = 4;
+}
+
+message SongInfo {
+  string song = 1;
+  repeated string artist = 2;
+  string isrc = 3;
+}
+
+message SpeechConfig {
+  AudioFormat audio_format = 1;
+  SpeechSource speech_source = 2;
+  string voice_name = 3;
+}
+
+message StreamingUnderstandRequest {
+  oneof content {
+    RunState initial_run_state = 1;
+    SynapseChatTurn observation = 2;
+    SynapseUnderstandingRequest understanding_request = 3;
+  }
+}
+
+message StreamingUnderstandResponse {
+  oneof content {
+    IntermediateEvent intermediate_event = 1;
+    Interstitial interstitial = 2;
+  }
+}
+
+message SummarizationNetworkRequest {
+  repeated ConversationSummarizationRequest conversation_group = 1;
+  MessageSourceType type = 2;
+  ModelType model_type = 5;
+  repeated MissedCallSummarizationRequest missed_call_group = 6;
+  repeated NotificationSummarizationRequest notifications_group = 7;
+}
+
+message SummarizationNetworkResponse {
+  repeated SummarizationResponse summary_group = 1;
+}
+
+message SummarizationResponse {
+  string summary = 1;
+  bool failed = 2;
+  string id = 3;
+}
+
+message SummarizeNotificationsRequest {
+  NotificationsForSummarization notifications = 2;
+}
+
+message SummarizeNotificationsResponse {
+  repeated ApplicationSummary summaries = 1;
+}
+
+message SynapseActionContent {
+  string thought = 1;
+  string action = 2;
+  string input = 3;
+  bytes device_payload = 4;
+  SynapseSource source = 5;
+}
+
+message SynapseActionDefinition {
+  string name = 1;
+  string parameter_definition = 2;
+  string description = 3;
+}
+
+message SynapseAnswer {
+  string answer = 1;
+  string thought = 2;
+  string ssml = 3;
+}
+
+message SynapseChatTurn {
+  SynapseUser user = 1;
+  google.protobuf.Timestamp timestamp = 4;
+  string identifier = 8;
+  string parent_identifier = 9;
+  oneof content {
+    SynapseUserRequestContent user_request = 2;
+    SynapseTaoContent tao = 3;
+    SynapseActionContent action = 5;
+    SynapseObservationContent observation = 6;
+    SynapseInterpretationContent interpretation = 7;
+    SynapseEndContent end = 10;
+    SynapseMessageContent message = 11;
+    SynapseSpeechContent speech = 12;
+  }
+}
+
+message SynapseDeviceContext {
+  repeated SynapsePreviousAction previous_actions = 1;
+  google.protobuf.Timestamp current_timestamp = 2;
+  repeated SynapseChatTurn turns = 3;
+  SynapseUserSituation situation = 4;
+  bool is_locked = 5;
+  string reverse_geocoded_location = 6;
+}
+
+message SynapseDisambiguation {
+  string question = 1;
+  string thought = 2;
+}
+
+message SynapseEndContent {
+}
+
+message SynapseEvaluationExample {
+  SynapseUnderstandingRequest request = 1;
+  SynapseUnderstandingResponse response = 2;
+  SynapseEvaluationMetadata metadata = 6;
+  repeated string tags = 7;
+  repeated string tao_actions_completed = 8;
+  repeated string expected_tao_actions = 9;
+  oneof expectation {
+    SynapseAnswer expected_answer = 3;
+    SynapseInterpretation expected_interpretation = 4;
+    SynapseNoAnswerExplanation expected_no_answer_explanation = 5;
+  }
+}
+
+message SynapseEvaluationExamples {
+  repeated SynapseEvaluationExample examples = 1;
+}
+
+message SynapseEvaluationMetadata {
+  double latency = 1;
+}
+
+message SynapseFailure {
+  string message = 1;
+}
+
+message SynapseHeartbeat {
+}
+
+message SynapseInterpretation {
+  string interpretation = 1;
+  string thought = 2;
+}
+
+message SynapseInterpretationContent {
+  string thought = 1;
+  string interpretation = 2;
+}
+
+message SynapseMessageContent {
+  string content = 1;
+}
+
+message SynapseNoAnswerExplanation {
+  string explanation = 1;
+  string thought = 2;
+}
+
+message SynapseObservationContent {
+  string observation = 1;
+  bool is_final = 2;
+  string action_name = 3;
+  SynapseSource source = 4;
+}
+
+message SynapsePreviousAction {
+  string utterance = 1;
+  string action = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message SynapseSpeechContent {
+  Audio speech = 1;
+  string speech_transcription = 2;
+  SpeechSource source = 3;
+}
+
+message SynapseTaoContent {
+  string thought = 1;
+  string action = 2;
+  string observation = 3;
+}
+
+message SynapseUnderstandingRequest {
+  string utterance = 1;
+  repeated string previous_answers = 2;
+  SynapseDeviceContext device_context = 3;
+  repeated SynapseActionDefinition action_definitions = 4;
+  repeated Session example_sessions = 5;
+  bool single_shot = 6;
+  bool send_actions_and_observations_separately = 7;
+  repeated string excluded_tools = 8;
+  ToolSetVersion tool_set_version = 9;
+  Location location = 10;
+  SpeechConfig speech_config = 11;
+}
+
+message SynapseUnderstandingResponse {
+  string response = 1;
+  bool is_final = 2;
+  oneof body {
+    SynapseAnswer answer = 3;
+    SynapseNoAnswerExplanation no_answer_explanation = 4;
+    SynapseFailure failure = 5;
+    SynapseHeartbeat heartbeat = 6;
+    SynapseInterpretation interpretation = 7;
+    SynapseChatTurn turn = 8;
+    SynapseDisambiguation disambiguation = 9;
+  }
+}
+
+message SynapseUserRequestContent {
+  enum VisionRequested {
+    UNSPECIFIED = 0;
+    VISION = 1;
+    NO_VISION = 2;
+  }
+  string request = 1;
+  double transcription_confidence = 2;
+  repeated string immutable_tokens = 3;
+  bool is_verbal = 4;
+  SynapseUserRequestContent.VisionRequested vision_requested = 5;
+  Audio audio_bytes = 6;
+  string repaired_request = 7;
+  bytes image_data = 8;
+}
+
+message SynapseUserSituation {
+  google.protobuf.Timestamp timestamp = 1;
+  string location_string = 2;
+  string time_zone_id = 3;
+  float latitude = 4;
+  float longitude = 5;
+  Location location = 6;
+  string ocr_text = 7;
+}
+
+message TextToSpeechRequest {
+  string text = 1;
+  SpeechConfig speech_config = 2;
+}
+
+message TextToSpeechResponse {
+  Audio speech = 1;
+  string speech_transcription = 2;
+  SpeechSource source = 3;
+}
+
+message Tool {
+  oneof content {
+    Function function = 1;
+    ServerFunction server_function = 2;
+  }
+}
+
+message ToolCall {
+  string id = 1;
+  string type = 2;
+  FunctionCall function = 3;
+}
+
+message ToolSetVersion {
+  string set_name = 1;
+  int32 version = 2;
+}
+
+message TranscriptionRepairTestRequest {
+  string transcription = 1;
+  repeated string immutable_tokens = 2;
+}
+
+message TranscriptionRepairTestResponse {
+  bool success = 1;
+  string error_message = 2;
+  string corrected_transcription = 3;
+}
+
+message TranslateConversationConfig {
+  humane.common.Locale device_locale = 1;
+  humane.common.Locale conversation_locale = 2;
+  repeated humane.common.Locale additional_conversation_locales = 3;
+  humane.common.encryption.EncryptedData location = 4;
+  SpeechConfig speech_config = 5;
+}
+
+message TranslateConversationRequest {
+  TranslateConversationConfig config = 1;
+  Audio audio = 2;
+  bool is_locked = 3;
+  bool has_secure_lock = 4;
+}
+
+message TranslateConversationResponse {
+  string transcript = 1;
+  humane.common.Locale transcript_locale = 2;
+  string translation = 3;
+  humane.common.Locale translation_locale = 4;
+  Audio speech = 5;
+}
+
+message TranslateRequest {
+  string text = 1;
+  humane.common.Locale from = 2;
+  humane.common.Locale to = 3;
+  bool include_audio = 4;
+}
+
+message TranslateResponse {
+  string text = 1;
+  bytes audio = 2;
+}
+
+message TranslateTextRequest {
+  string text = 1;
+  humane.common.Locale from = 2;
+  humane.common.Locale to = 3;
+  SpeechConfig speech_config = 4;
+  bool is_locked = 5;
+  bool has_secure_lock = 6;
+}
+
+message TranslateTextResponse {
+  string translation = 1;
+  humane.common.Locale locale = 2;
+  Audio speech = 3;
+}
+
+message UploadFileRequest {
+  enum UploadUseCase {
+    UNSET = 0;
+    INTENT_DEBUGGING = 1;
+    LOW_POWER_HAND_TRACKING = 2;
+  }
+  UploadFileRequest.UploadUseCase use_case = 1;
+}
+
+message UploadFileResponse {
+  string url = 1;
+  string s3_key = 2;
+  string bucket_name = 3;
+}
+
+message VisualSearchRequest {
+  repeated bytes image_data = 1;
+}
+
+message VisualSearchResponse {
+  string title = 1;
+  float price_usd = 2;
+  string deep_link = 3;
+  float star_rating = 4;
+}
+
+message WeatherResponse {
+  bool has_precipitation = 1;
+  string precipitation_type = 2;
+  double temperature_fahrenheit = 3;
+  double temperature_celsius = 4;
+  string weather_text = 5;
+  int32 weather_icon = 6;
+  int32 u_v_index = 7;
+}
+
+message WifiAccessPoint {
+  string mac_address = 1;
+  double signal_strength = 2;
+  int32 age = 3;
+  int32 channel = 4;
+  double signal_to_noise_ratio = 5;
+}
+
+service AIBusService {
+  rpc ActionExecutionTest (ActionExecutionTestRequest) returns (ActionExecutionTestResponse);
+  rpc AnalyzeImage (AnalyzeImageRequest) returns (AnalyzeImageResponse);
+  rpc BidirectionalStreamingUnderstand (stream StreamingUnderstandRequest) returns (stream StreamingUnderstandResponse);
+  rpc EncryptedActionBasedInterstitial (EncryptedActionBasedInterstitialRequest) returns (EncryptedActionBasedInterstitialResponse);
+  rpc EncryptedAnalyzeFoodImage (EncryptedAnalyzeFoodImageRequest) returns (EncryptedAnalyzeFoodImageResponse);
+  rpc EncryptedAnalyzeImage (EncryptedAnalyzeImageRequest) returns (EncryptedAnalyzeImageResponse);
+  rpc EncryptedChatCompletion (EncryptedChatCompletionRequest) returns (EncryptedChatCompletionResponse);
+  rpc EncryptedCompletion (EncryptedCompletionRequest) returns (EncryptedCompletionResponse);
+  rpc EncryptedFunctionExecution (EncryptedFunctionCall) returns (EncryptedFunctionResponse);
+  rpc EncryptedGeoLocate (EncryptedGeoLocateRequest) returns (EncryptedGeoLocateResponse);
+  rpc EncryptedGetFoodItem (EncryptedGetFoodItemRequest) returns (EncryptedGetFoodItemResponse);
+  rpc EncryptedLoadingMessage (EncryptedLoadingMessageRequest) returns (EncryptedLoadingMessageResponse);
+  rpc EncryptedNavigationDirections (EncryptedNavigationDirectionsRequest) returns (EncryptedNavigationDirectionsResponse);
+  rpc EncryptedNearbySearch (EncryptedNearbySearchRequest) returns (EncryptedNearbySearchResponse);
+  rpc EncryptedReverseGeocode (EncryptedReverseGeocodeRequest) returns (EncryptedReverseGeocodeResponse);
+  rpc EncryptedSmartPlaylist (EncryptedSmartPlaylistRequest) returns (EncryptedSmartPlaylistResponse);
+  rpc EncryptedStreamAIBus (stream EncryptedAIRequest) returns (stream EncryptedAIResponse);
+  rpc EncryptedUnderstand (EncryptedSynapseUnderstandingRequest) returns (stream EncryptedSynapseUnderstandingResponse);
+  rpc EncryptedWeather (EncryptedWeatherRequest) returns (EncryptedWeatherResponse);
+  rpc FunctionExecution (FunctionCall) returns (FunctionResponse);
+  rpc ServerStatefulUnderstand (ServerStatefulUnderstandRequest) returns (ServerStatefulUnderstandResponse);
+  rpc TranscriptionRepairTest (TranscriptionRepairTestRequest) returns (TranscriptionRepairTestResponse);
+  rpc Translate (EncryptedTranslateRequest) returns (EncryptedTranslateResponse);
+  rpc Understand (SynapseUnderstandingRequest) returns (stream SynapseUnderstandingResponse);
+  rpc UploadFile (UploadFileRequest) returns (UploadFileResponse);
+}
+
+service AmazonShoppingService {
+  rpc VisualSearch (VisualSearchRequest) returns (VisualSearchResponse);
+}
+
+service CompositionService {
+  rpc CategorizeNotifications (NotificationsForSummarization) returns (NotificationCategories);
+  rpc EncryptedComposeMessage (EncryptedMessageCompositionRequest) returns (EncryptedMessageCompositionResponse);
+  rpc EncryptedSummarizeMessages (EncryptedSummarizationNetworkRequest) returns (EncryptedSummarizationNetworkResponse);
+  rpc SummarizeNotifications (SummarizeNotificationsRequest) returns (SummarizeNotificationsResponse);
+}
+
+service DeviceMessagesService {
+  rpc BackupMessages (BackupMessagesRequest) returns (BackupMessagesResponse);
+  rpc QueryMessages (QueryMessagesRequest) returns (QueryMessagesResponse);
+  rpc UploadAttachment (UploadAttachmentRequest) returns (UploadAttachmentResponse);
+}
+
+service FoodService {
+  rpc EncryptedIdentifyFood (EncryptedFoodIdentifyRequest) returns (EncryptedFoodIdentifyResponse);
+  rpc Feedback (FoodFeedbackRequest) returns (FoodFeedbackResponse);
+}
+
+service SpeechService {
+  rpc CanTranslate (EncryptedCanTranslateRequest) returns (EncryptedCanTranslateResponse);
+  rpc StreamingTextToSpeech (TextToSpeechRequest) returns (stream TextToSpeechResponse);
+  rpc TextToSpeech (TextToSpeechRequest) returns (TextToSpeechResponse);
+  rpc TranslateConversation (stream EncryptedTranslateConversationRequest) returns (stream EncryptedTranslateConversationResponse);
+  rpc TranslateText (EncryptedTranslateTextRequest) returns (EncryptedTranslateTextResponse);
+}
+
+// Stock declares these five rpcs lowerCamel (TestAutomationServiceGrpc and
+// WebSearchServiceGrpc pass "createNewCalendarEvents" / "search" to
+// generateFullMethodName). The rpc name is the route, so keep the case.
+service TestAutomationService {
+  rpc createNewCalendarEvents (CreateNewCalendarEventsRequest) returns (CreateNewCalendarEventsResponse);
+  rpc deleteAllCalendarEvents (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc getCalendarEvents (GetCalendarEventsRequest) returns (GetCalendarEventsResponse);
+  rpc initializeCalendar (google.protobuf.Empty) returns (InitializedCalendarResponse);
+}
+
+service WebSearchService {
+  rpc search (SearchRequest) returns (SearchResponse);
+}

@@ -1,0 +1,152 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+
+FROM --platform=$BUILDPLATFORM rust:1.91.1-bookworm@sha256:c1e5f19e773b7878c3f7a805dd00a495e747acbdc76fb2337a4ebf0418896b33 AS build
+ARG BUILDARCH
+ARG TARGETARCH
+
+WORKDIR /workspace/cosmos
+
+# Compile on the build host instead of running rustc through QEMU. The latter
+# currently crashes when an ARM64 host builds the AMD64 release image.
+RUN set -eux; \
+    case "${BUILDARCH}" in amd64|arm64) ;; *) echo "unsupported build architecture: ${BUILDARCH}" >&2; exit 1 ;; esac; \
+    case "${TARGETARCH}" in \
+      amd64) rust_target=x86_64-unknown-linux-gnu; cross_packages='gcc-x86-64-linux-gnu libc6-dev-amd64-cross' ;; \
+      arm64) rust_target=aarch64-unknown-linux-gnu; cross_packages='gcc-aarch64-linux-gnu libc6-dev-arm64-cross' ;; \
+      *) echo "unsupported Cosmos architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    rustup target add "${rust_target}" --toolchain 1.91.1; \
+    if [ "${BUILDARCH}" != "${TARGETARCH}" ]; then \
+      rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
+      printf '%s\n' \
+        'Types: deb' \
+        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+        'Suites: bookworm bookworm-updates' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        > /etc/apt/sources.list.d/debian.sources; \
+      apt-get update; \
+      apt-get install --no-install-recommends --yes ${cross_packages}; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+
+COPY Cargo.toml Cargo.lock ./
+# `[patch.crates-io]` redirects voprf to a vendored copy (opaque-ke 2.0.0 pins a
+# prerelease that no longer compiles), so the build stage needs it too.
+COPY vendor ./vendor
+COPY crates ./crates
+# Compose supplies only the canonical shared wire tree as a named context. It is
+# placed beside Cosmos so the container build has the same relative layout as
+# the source workspace without widening the ordinary Cosmos build context.
+COPY --from=wire_contracts . /workspace/contracts/wire
+# Schema migrations are compiled into the Cosmos binary with `include_str!`.
+# Keep them in the build image only; runtime applies the embedded bytes.
+COPY migrations ./migrations
+# `assistant::prompts` embeds these with `include_str!`, so they must exist at
+# COMPILE time. They are not needed in the runtime image — the text ends up
+# inside the binary — but a build stage without them fails to compile, which is
+# why the registry sat unwired.
+COPY prompts ./prompts
+
+RUN --mount=type=cache,id=cosmos-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cosmos-target-${TARGETARCH},target=/workspace/cosmos/target \
+    set -eux; \
+    if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
+      cargo build --locked --release --bin cosmos; \
+      artifact=/workspace/cosmos/target/release/cosmos; \
+    else \
+      case "${TARGETARCH}" in \
+        amd64) \
+          rust_target=x86_64-unknown-linux-gnu; \
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc; \
+          export CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc; \
+          export AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar \
+          ;; \
+        arm64) \
+          rust_target=aarch64-unknown-linux-gnu; \
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc; \
+          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc; \
+          export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
+          ;; \
+      esac; \
+      cargo build --locked --release --bin cosmos --target "${rust_target}"; \
+      artifact="/workspace/cosmos/target/${rust_target}/release/cosmos"; \
+    fi; \
+    install -m 0755 "${artifact}" /cosmos
+
+# Codex subscription support uses OpenAI's official app-server binary. Keep
+# Download the integrity-pinned native bundle from @openai/codex@0.149.1;
+# only the exact target-architecture vendor bundle is copied across. The layer is shared by every Cosmos workload,
+# while only ai-bus starts it after an operator chooses Codex in Center.
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS codex
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+        amd64) package=codex-linux-x64; target=x86_64-unknown-linux-musl; integrity='Of5fGYgr7tAMsyj6vhXb4/RM/UoA3Zq8BLegUBDC09UNy1XTLGYP/2XD+UX8z3qh0NDwxYdCjFIWdDNijKZggQ==' ;; \
+        arm64) package=codex-linux-arm64; target=aarch64-unknown-linux-musl; integrity='OqxUfZ1TVvHd18zHPKK/8ZRlpk8Vy11mg5CMHaLxNWldTbwVImDKtSLWT+m8m4NM5Sz4PbjtZMrVT/RfpBW/mQ==' ;; \
+        *) echo "unsupported Codex architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    bun --no-env-file -e ' \
+      const [platform, expected] = process.argv.slice(1); \
+      const response = await fetch(`https://registry.npmjs.org/@openai/codex/-/codex-0.149.1-${platform}.tgz`, { signal: AbortSignal.timeout(120000) }); \
+      if (!response.ok) throw new Error(`Codex download failed: ${response.status}`); \
+      const bytes = Buffer.from(await response.arrayBuffer()); \
+      if (require("node:crypto").createHash("sha512").update(bytes).digest("base64") !== expected) throw new Error("Codex archive integrity mismatch"); \
+      require("node:fs").writeFileSync("/tmp/codex.tgz", bytes); \
+    ' "${package#codex-}" "$integrity"; \
+    tar -xzf /tmp/codex.tgz -C /tmp; \
+    install -d /opt/codex; \
+    cp -a "/tmp/package/vendor/$target/." /opt/codex/; \
+    rm -rf /tmp/codex.tgz /tmp/package
+
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
+
+# Match the immutable 2026-08-03 base-image snapshot. Both dated archives expose
+# signed Release files at this timestamp; HTTP avoids needing CA roots before
+# the image installs ca-certificates, while apt still verifies Debian signatures.
+# A digest-pinned base with mutable suites would resolve different package bytes.
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+        'Types: deb' \
+        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+        'Suites: bookworm bookworm-updates' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        '' \
+        'Types: deb' \
+        'URIs: http://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
+        'Suites: bookworm-security' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        'Check-Valid-Until: no' \
+        > /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install --no-install-recommends --yes \
+        ca-certificates \
+        curl \
+        socat \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /cosmos /usr/local/bin/cosmos
+COPY --from=codex --chown=65532:65532 /opt/codex /opt/codex
+
+# Durable-state mountpoint (`COSMOS_STATE_DIR`). It must exist in the image AND be
+# owned by the runtime uid: Docker seeds a fresh named volume from the image
+# directory's ownership, so without this the volume would be created root-owned
+# and the nonroot process could not write its channel-key snapshot — the fix
+# would be inert at runtime while every test still passed.
+RUN install -d -o 65532 -g 65532 -m 0700 /var/lib/cosmos
+
+USER 65532:65532
+WORKDIR /app
+
+EXPOSE 50051 8080
+
+STOPSIGNAL SIGTERM
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:8080/readyz"]
+
+ENTRYPOINT ["/usr/local/bin/cosmos"]

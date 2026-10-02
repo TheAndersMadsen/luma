@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "authorship": "clean-room-independent",
+  "scope": "operator-owned Luma Cosmos runtime only",
+  "prompts": [
+    {
+      "id": "cosmos.system.core",
+      "version": "1.0.0",
+      "path": "prompts/content/system/core.prompt",
+      "sha256": "e6873eda1baba3b3cfb00637461060808b5d98a9725b4fd3f44f35535af63fb0",
+      "evidence_grade": "chosen",
+      "lifecycle": "candidate",
+      "intended_behavior": "Establish the Cosmos assistant's truthfulness, authorization, confidentiality, and untrusted-data baseline."
+    },
+    {
+      "id": "cosmos.system.spoken_output",
+      "version": "1.0.0",
+      "path": "prompts/content/system/spoken-output.prompt",
+      "sha256": "fd593acc8691d6d7ca0d5602d6829ce2713bd58898a9576ac0d3c5926933dcfe",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Produce concise, listenable answers while preserving material detail."
+    },
+    {
+      "id": "cosmos.safety.privacy",
+      "version": "1.0.0",
+      "path": "prompts/content/safety/privacy.prompt",
+      "sha256": "2207f09a268b1fa5aa11969b52561097ee06580836bc7d64fd138076bcea385a",
+      "evidence_grade": "chosen",
+      "lifecycle": "candidate",
+      "intended_behavior": "Minimize private-context use and prevent cross-account or diagnostic disclosure."
+    },
+    {
+      "id": "cosmos.safety.untrusted_content",
+      "version": "1.0.0",
+      "path": "prompts/content/safety/untrusted-content.prompt",
+      "sha256": "47be4ba5ce8e431e7b0d87ce2ed65967432da00cdacc7028cc0faa1210ad8b55",
+      "evidence_grade": "chosen",
+      "lifecycle": "candidate",
+      "intended_behavior": "Keep retrieved or user-supplied content from becoming control-plane authority."
+    },
+    {
+      "id": "cosmos.orchestration.plan_turn",
+      "version": "1.0.0",
+      "path": "prompts/content/orchestration/plan-turn.prompt",
+      "sha256": "98873bc91e265c99fbbde812e8cbefe5e3f73051f0f518d0108c0dd9cefd74ce",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Choose the minimum typed capabilities and order them safely within the turn deadline."
+    },
+    {
+      "id": "cosmos.orchestration.synthesize_result",
+      "version": "1.0.0",
+      "path": "prompts/content/orchestration/synthesize-result.prompt",
+      "sha256": "ced40c4ae2ba0036f553cc95071c1fd6eb7073a358f6705554baa3c6324c58f3",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Convert confirmed capability observations into one faithful wearer-facing result."
+    },
+    {
+      "id": "cosmos.orchestration.recover_error",
+      "version": "1.0.0",
+      "path": "prompts/content/orchestration/recover-error.prompt",
+      "sha256": "05b6b2ab198557837fb4bb5807a45ee818200f1a6854970e6d6bad46848afeca",
+      "evidence_grade": "chosen",
+      "lifecycle": "candidate",
+      "intended_behavior": "Handle partial failures and retries without duplicate effects or false success."
+    },
+    {
+      "id": "cosmos.orchestration.confirm_action",
+      "version": "1.0.0",
+      "path": "prompts/content/orchestration/confirm-action.prompt",
+      "sha256": "289f9995252062ab51c42718bc8fcfffe0cef0bdd13565ff417b714c4504b272",
+      "evidence_grade": "chosen",
+      "lifecycle": "candidate",
+      "intended_behavior": "Require scoped confirmation for consequential external mutations."
+    },
+    {
+      "id": "cosmos.orchestration.loading_message",
+      "version": "1.0.0",
+      "path": "prompts/content/orchestration/loading-message.prompt",
+      "sha256": "970b7341c34261d8f9c9d95ba26838307177e1e282f54a25c8241a4c98c63360",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Give brief truthful progress narration during a meaningful wait."
+    },
+    {
+      "id": "cosmos.capability.weather",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/weather.prompt",
+      "sha256": "e9b483d00079fb1c4c774bdd463100251875fd4704d5ba6f9436c825013d34b0",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Resolve weather context and present decision-relevant observations, forecasts, and alerts."
+    },
+    {
+      "id": "cosmos.capability.location",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/location.prompt",
+      "sha256": "688680ca28ef814fc8ac058cb7e50b32606c06edd8b2ec976541b667039531c9",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Use the least precise authorized location and preserve fix-quality uncertainty."
+    },
+    {
+      "id": "cosmos.capability.nearby_search",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/nearby-search.prompt",
+      "sha256": "27e883a985437b6450e59d7cce62d608afd89907f10b862b1b0f8eadaa785acc",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Return a small relevant nearby set without inventing freshness or attributes."
+    },
+    {
+      "id": "cosmos.capability.navigation",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/navigation.prompt",
+      "sha256": "edf528d1d5de9ebab1d350a3e98b546772c12767e6fb67d4a3179b654ab96673",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Resolve route intent and summarize confirmed directions and disruptions."
+    },
+    {
+      "id": "cosmos.capability.music",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/music.prompt",
+      "sha256": "39561c6bb1e212674f619583150239d815c85ef48d021060ef552417620deb18",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Map music intent to supported catalog and playback actions without false playback claims."
+    },
+    {
+      "id": "cosmos.capability.smart_playlist",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/smart-playlist.prompt",
+      "sha256": "f4af38e74896a21d2eb0194006a1dadc1dd63f977ef72265abbac86e7b3de7eb",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Build a catalog-backed playlist from explicit taste and content constraints."
+    },
+    {
+      "id": "cosmos.capability.web_grounding",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/web-grounding.prompt",
+      "sha256": "8cc016bcd964256314284e49733d9d30ffd144d9a6974181f0fffb4508d8e7c6",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Ground current or source-specific answers in authoritative retrieved material."
+    },
+    {
+      "id": "cosmos.capability.translation",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/translation.prompt",
+      "sha256": "bb9f8c94f8e75dc0a6de565a0da7bd85732788316ac5d5fb71b983e3f5859ec0",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Translate faithfully while preserving meaning, material formatting, and privacy."
+    },
+    {
+      "id": "cosmos.capability.tts",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/tts.prompt",
+      "sha256": "00daf1d16ef12a2bfc3d90ca735a03efe13dfa69b228e9e001f9c5fc7ce90bb2",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Prepare factual text for natural speech without reading control data."
+    },
+    {
+      "id": "cosmos.capability.vision",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/vision.prompt",
+      "sha256": "75bb7474a30d8cdc41aa8ed3da1dcd43ce75b788735fbd022492681334282cc0",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Answer visual questions from supported image evidence without sensitive-trait inference."
+    },
+    {
+      "id": "cosmos.capability.composition",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/composition.prompt",
+      "sha256": "416525e1cf59a6b017e1d74eae594c4779f4228434da689fb7217851003a72a5",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Draft audience-appropriate text while separating drafting from transmission."
+    },
+    {
+      "id": "cosmos.capability.food",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/food.prompt",
+      "sha256": "14fb43bbf5fec383c344ebe165dca4d64622bb4b181337fe3c428191592635cc",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Preserve serving, ingredient, allergen, and uncertainty context in food answers."
+    },
+    {
+      "id": "cosmos.capability.upload",
+      "version": "1.0.0",
+      "path": "prompts/content/capabilities/upload.prompt",
+      "sha256": "f51254600d475ca5a077050dc5668c15f2ae8acb39458f8c06cc06418db73672",
+      "evidence_grade": "derived",
+      "lifecycle": "candidate",
+      "intended_behavior": "Restrict uploads to authorized artifacts, destinations, and retention scopes."
+    }
+  ],
+  "prompt_sets": [
+    {
+      "id": "cosmos.default_turn",
+      "members": [
+        "cosmos.system.core",
+        "cosmos.safety.privacy",
+        "cosmos.safety.untrusted_content",
+        "cosmos.system.spoken_output",
+        "cosmos.orchestration.plan_turn",
+        "cosmos.orchestration.synthesize_result",
+        "cosmos.orchestration.recover_error",
+        "cosmos.orchestration.confirm_action",
+        "cosmos.orchestration.loading_message"
+      ]
+    }
+  ]
+}

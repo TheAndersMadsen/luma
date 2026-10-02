@@ -1,0 +1,15 @@
+{
+  "name": "luma",
+  "private": true,
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "bun": "1.4.2",
+    "pnpm": "12.6.0"
+  },
+  "scripts": {
+    "setup:local": "pnpm install --frozen-lockfile --prod=false && bun --no-env-file ./luma setup contributor",
+    "dev": "bun --no-env-file ./luma dev center",
+    "check": "bun --no-env-file ./luma check changed --base HEAD",
+    "test": "bun --no-env-file ./luma test"
+  }
+}

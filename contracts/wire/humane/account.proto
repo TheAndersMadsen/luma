@@ -1,0 +1,216 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.account;
+
+import "google/protobuf/empty.proto";
+import "humane/common/encryption.proto";
+import "humane/common/food.proto";
+
+enum AiMicFeedbackCategory {
+  AI_MIC_FEEDBACK_CATEGORY_UNSPECIFIED = 0;
+  AI_MIC_FEEDBACK_CATEGORY_OTHER = 1;
+  AI_MIC_FEEDBACK_CATEGORY_WRONG_TRANSCRIPTION = 2;
+  AI_MIC_FEEDBACK_CATEGORY_WRONG_ANSWER = 3;
+  AI_MIC_FEEDBACK_CATEGORY_INACCURATE_ANSWER = 4;
+  AI_MIC_FEEDBACK_CATEGORY_INAPPROPRIATE_OR_OFFENSIVE_ANSWER = 5;
+  AI_MIC_FEEDBACK_CATEGORY_DANGEROUS_OR_HARMFUL_ANSWER = 6;
+  AI_MIC_FEEDBACK_CATEGORY_UNSPECIFIED_POSITIVE = 7;
+  AI_MIC_FEEDBACK_CATEGORY_UNSPECIFIED_NEGATIVE = 8;
+}
+
+enum AuthorizationType {
+  AUTHORIZATION_TYPE_UNSPECIFIED = 0;
+  AUTHORIZATION_TYPE_WEP = 1;
+  AUTHORIZATION_TYPE_WPA = 2;
+  AUTHORIZATION_TYPE_OPEN = 3;
+  AUTHORIZATION_TYPE_WPA2 = 4;
+  AUTHORIZATION_TYPE_WPA3_PERSONAL = 5;
+}
+
+enum FeedbackType {
+  FEEDBACK_TYPE_UNSPECIFIED = 0;
+  FEEDBACK_TYPE_AI_MIC = 1;
+}
+
+enum OverallFeedbackCategory {
+  OVERALL_FEEDBACK_CATEGORY_UNSPECIFIED = 0;
+  OVERALL_FEEDBACK_CATEGORY_POSITIVE = 1;
+  OVERALL_FEEDBACK_CATEGORY_NEGATIVE = 2;
+}
+
+enum RestrictionType {
+  UNDEFINED = 0;
+  ALLERGY = 1;
+  INTOLERANCE = 2;
+  DIET = 3;
+}
+
+enum Severity {
+  UNKNOWN = 0;
+  MILD = 1;
+  MODERATE = 2;
+  SEVERE = 3;
+}
+
+enum SubscriptionStatusCode {
+  SUBSCRIPTION_STATUS_CODE_UNSPECIFIED = 0;
+  SUBSCRIPTION_STATUS_CODE_ACTIVE = 1;
+  SUBSCRIPTION_STATUS_CODE_AVAILABLE = 2;
+  SUBSCRIPTION_STATUS_CODE_SUSPENDED = 3;
+  SUBSCRIPTION_STATUS_CODE_PAUSED = 4;
+  SUBSCRIPTION_STATUS_CODE_BLOCKED = 5;
+  SUBSCRIPTION_STATUS_CODE_NOT_CONFIGURED = 7;
+  SUBSCRIPTION_STATUS_CODE_INACTIVE = 8;
+}
+
+enum UnauthorizedStatusCode {
+  UNAUTHORIZED_STATUS_CODE_UNSPECIFIED = 0;
+  UNAUTHORIZED_STATUS_CODE_DEVICE_LOST_OR_STOLEN = 1;
+  UNAUTHORIZED_STATUS_CODE_BLOCKED = 2;
+}
+
+message AccountInfo {
+  string preferred_name = 1;
+  string pronunciation = 2;
+}
+
+message AiMicFeedbackData {
+  AiMicFeedbackCategory category = 1;
+  string request = 2;
+  string response = 3;
+  string notable_event_uuid = 4;
+}
+
+message DailyIntakeGoals {
+  repeated NutrientGoal nutrient_goals = 1;
+}
+
+message EncryptedGetFoodRestrictionsResponse {
+  repeated humane.common.encryption.EncryptedData secure_restrictions = 1;
+}
+
+message EncryptedSetFoodRestrictionsRequest {
+  repeated humane.common.encryption.EncryptedData secure_restrictions = 1;
+}
+
+message EncryptedSetFoodRestrictionsResponse {
+  repeated humane.common.encryption.EncryptedData secure_restrictions = 1;
+}
+
+message FeedbackData {
+  oneof feedbackdata {
+    AiMicFeedbackData ai_mic_feedback_data = 1;
+  }
+}
+
+message FoodRestriction {
+  string uuid = 1;
+  string name = 2;
+  RestrictionType restriction_type = 3;
+  Severity severity = 4;
+}
+
+message GetDailyIntakeGoalsRequest {
+}
+
+message GetDailyIntakeGoalsResponse {
+  DailyIntakeGoals goals = 1;
+}
+
+message GetFoodRestrictionsRequest {
+}
+
+message ListSecureWifiConfigsRequest {
+}
+
+// Sealed envelopes, not plaintext. That the deployed backend returns them is
+// NOT the evidence, Cosmos compiles this tree, so its answer only restates
+// which proto it was built with. What decided it is the field set: the
+// device-loopback copy of this same message
+// (pin/runtime/core/proto/humane/account/account.proto) declared field 1 as
+// `repeated WifiConfig configs` over {ssid, psk, security_type, hidden,
+// priority, eap_method, phase2_method, ca_certificate, identity,
+// anonymous_identity, password, domain}, an Android WifiConfiguration /
+// wpa_supplicant entry wearing a stock name, not a stock Humane message. On
+// 2026-08-12 that copy was corrected to this declaration and the invented
+// message deleted with it, so the two servers answering
+// /humane.account.WifiConfigService/ListSecureWifiConfigs now agree about
+// field 1. The verdict is `medium` confidence and rests on that field-set
+// argument alone: no recovered artifact names humane.account.WifiConfig, and
+// the `WifiConfig` below, the shape this response would seal if the handler
+// ever returned rows, is this tree's own reconstruction.
+// See contracts/wire-divergence.json.
+message ListSecureWifiConfigsResponse {
+  repeated humane.common.encryption.EncryptedData secure_wifi_configs = 1;
+}
+
+message NutrientGoal {
+  string uuid = 1;
+  humane.common.food.NutrientType type = 2;
+  humane.common.food.NutrientUnit unit = 3;
+  bool is_min_set = 4;
+  float min_value = 5;
+  bool is_max_set = 6;
+  float max_value = 7;
+}
+
+message PersonalDetailsRequest {
+  string user_id = 1;
+}
+
+message PersonalDetailsResponse {
+  AccountInfo account_info = 1;
+  humane.common.encryption.EncryptedData secure_bio_data = 2;
+}
+
+message SetDailyIntakeGoalsRequest {
+  DailyIntakeGoals goals = 1;
+}
+
+message SetDailyIntakeGoalsResponse {
+  DailyIntakeGoals goals = 1;
+}
+
+message SubscriptionStatus {
+  SubscriptionStatusCode status_code = 1;
+  string message = 2;
+}
+
+message UnauthorizedStatus {
+  repeated UnauthorizedStatusCode status_codes = 1;
+}
+
+message UserFeedback {
+  FeedbackType type = 1;
+  string user_id = 2;
+  string event_time_iso_format = 3;
+  FeedbackData data = 4;
+  string user_comments = 5;
+  OverallFeedbackCategory overall_category = 6;
+}
+
+message WifiConfig {
+  string uuid = 1;
+  AuthorizationType authorization_type = 2;
+  string network_ssid = 3;
+  string password = 4;
+  bool hidden = 5;
+}
+
+service FoodPreferencesService {
+  rpc EncryptedGetFoodRestrictions (GetFoodRestrictionsRequest) returns (EncryptedGetFoodRestrictionsResponse);
+  rpc EncryptedSetFoodRestrictions (EncryptedSetFoodRestrictionsRequest) returns (EncryptedSetFoodRestrictionsResponse);
+  rpc GetUserDailyIntakeGoals (GetDailyIntakeGoalsRequest) returns (GetDailyIntakeGoalsResponse);
+  rpc SetUserDailyIntakeGoals (SetDailyIntakeGoalsRequest) returns (SetDailyIntakeGoalsResponse);
+}
+
+service UserInformationService {
+  rpc GetUserPersonalDetails (google.protobuf.Empty) returns (PersonalDetailsResponse);
+}
+
+service WifiConfigService {
+  rpc ListSecureWifiConfigs (ListSecureWifiConfigsRequest) returns (ListSecureWifiConfigsResponse);
+}

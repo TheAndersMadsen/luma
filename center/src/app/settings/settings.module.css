@@ -1,0 +1,684 @@
+/* Settings, SysLayout with sidebar + NavBase, layout_settingsPageHeader, InfoRow */
+
+.sysLayout {
+  display: grid;
+  grid-template-columns: var(--sys-layout-sidebar-width) minmax(0, 640px);
+  gap: 40px;
+  justify-content: center;
+  max-width: 988px;
+  margin: 0 auto;
+  padding: 24px 24px calc(140px + env(safe-area-inset-bottom));
+}
+
+.sysLayoutSidebar {
+  position: sticky;
+  top: calc(var(--toolbarHeight) + 24px);
+  align-self: start;
+  max-height: calc(100dvh - var(--toolbarHeight) - 128px - env(safe-area-inset-bottom));
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.settingsOverview {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1020px;
+}
+
+.settingsWelcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: -10px 0 28px;
+}
+
+.settingsWelcome > p {
+  color: var(--luma-text-muted);
+  font-size: 17px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.settingsWelcome .settingsSearch {
+  width: min(100%, 320px);
+  margin: 0;
+  flex: none;
+}
+
+.settingsSearch button {
+  background: none;
+  color: var(--luma-text-muted);
+  min-width: 36px;
+  min-height: 44px;
+  font-size: 25px;
+}
+
+.pinOverview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  border: 1px solid var(--luma-divider);
+  border-radius: 24px;
+  background: linear-gradient(115deg, #172824 0%, var(--luma-colors-penumbra-base) 65%);
+  margin-bottom: 32px;
+  overflow: hidden;
+}
+
+.pinOverviewLink {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 30px;
+}
+
+.pinOverviewLink:hover {
+  background: rgb(255 255 255 / 3%);
+}
+
+.pinArtwork {
+  position: relative;
+  flex: none;
+  width: 58px;
+  height: 60px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #eef3ed, #979f98);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 35%), 0 6px 20px rgb(0 0 0 / 22%);
+  transform: rotate(-7deg);
+}
+
+.pinArtwork > span {
+  position: absolute;
+  top: 9px;
+  left: 8px;
+  right: 8px;
+  height: 14px;
+  border-radius: 7px 7px 5px 5px;
+  background: #252d2c;
+}
+
+.pinArtwork > span::after {
+  content: "";
+  position: absolute;
+  right: 6px;
+  top: 3.5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #35464b;
+  border: 1px solid #81928d;
+}
+
+.pinOverviewText,
+.setupShortcut {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.pinOverviewText > strong { font-size: 24px; font-weight: 500; }
+.pinOverviewText > span { color: var(--luma-text-muted); font-size: 13px; line-height: 1.6; }
+.pinOverviewText small { color: var(--luma-colors-beam-base); font-size: 13px; margin-top: 5px; }
+.onlineDot, .neutralDot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 7px; background: var(--luma-text-muted); vertical-align: middle; }
+.onlineDot { background: var(--luma-colors-beam-base); }
+.setupShortcut { padding: 30px; border-left: 1px solid var(--luma-divider); justify-content: center; }
+.setupShortcut strong { font-size: 16px; font-weight: 500; }
+.setupShortcut > span { color: var(--luma-text-muted); font-size: 13px; line-height: 1.5; }
+.setupShortcut a { color: var(--luma-colors-beam-base); font-size: 14px; padding: 10px 0 2px; min-height: 40px; }
+
+.settingsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; }
+.settingsCategory, .advancedSettings { min-width: 0; border: 1px solid var(--luma-divider); border-radius: 18px; background: var(--luma-colors-penumbra-base); overflow: hidden; }
+.categoryIntro { padding: 22px 24px 16px; border-bottom: 1px solid var(--luma-divider); }
+.categoryIntro h2 { margin: 0 0 5px; font-size: 19px; font-weight: 500; }
+.categoryIntro p { margin: 0; color: var(--luma-text-muted); font-size: 13px; line-height: 1.5; }
+.settingsCategory .additionRowTitle, .advancedSettings .additionRowTitle { font-size: 15px; }
+.settingsCategory .additionRowDesc, .advancedSettings .additionRowDesc { font-size: 13px; font-weight: 400; line-height: 1.5; }
+.settingsCategory .settingsIndexRow { min-height: 88px; }
+.settingsIndexAction svg { transform: rotate(180deg); }
+.advancedSettings { grid-column: 1 / -1; background: transparent; }
+.advancedSettings > summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 24px; cursor: pointer; list-style: none; }
+.advancedSettings > summary::-webkit-details-marker { display: none; }
+.advancedSettings > summary > span:first-child { display: grid; gap: 5px; }
+.advancedSettings strong { font-size: 17px; font-weight: 500; }
+.advancedSettings small { color: var(--luma-text-muted); font-size: 13px; line-height: 1.5; }
+.disclosureMark { font-size: 24px; font-weight: 300; color: var(--luma-text-muted); transition: transform 150ms; }
+.advancedSettings[open] .disclosureMark { transform: rotate(45deg); }
+.advancedSettings[open] > summary { border-bottom: 1px solid var(--luma-divider); }
+.advancedSettings > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.searchCaption { color: var(--luma-text-muted); font-size: 14px; margin: 0 0 20px; }
+.navHome { color: var(--luma-text-muted); padding: 8px 14px; font-size: 13px; }
+.navAdvanced > summary { padding: 12px 14px; cursor: pointer; color: var(--luma-text-muted); font-size: 14px; }
+.navAdvanced[open] > summary { margin-bottom: 8px; }
+
+/* Each pane is its own article (role="article") within the detail column. */
+.article {
+  min-width: 0;
+  width: 100%;
+}
+
+/* layout_settingsPageHeader, the pane's own header: back control + pane title. */
+.settingsPageHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 0 28px;
+}
+
+.settingsPageHeaderLeftButton {
+  flex: none;
+}
+
+.settingsPageHeaderTitleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settingsPageHeaderTitle {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.settingsPageHeaderSubtitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+}
+
+/* footer id="footer-nav", the bottom system bar restored on Settings pages. */
+.footerNav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 22px 26px;
+  pointer-events: none;
+  z-index: 20;
+  color: var(--luma-colors-white);
+}
+
+.footerNav::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--luma-colors-black) 20%, transparent);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.footerNav > * > * {
+  pointer-events: auto;
+}
+
+.footerNavLeft {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.footerNavCenter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.footerNavRight {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* NavBase */
+.navContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.categoryHeader {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+  color: var(--luma-text-muted);
+  padding: 0 12px;
+}
+
+.groupLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.navLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  min-height: 44px;
+  border-radius: 12px;
+  color: var(--luma-colors-crater-base);
+  transition: background-color var(--transition-duration) ease-out,
+    color var(--transition-duration) ease-out;
+}
+
+.navLink:hover {
+  background: var(--luma-colors-penumbra-base);
+  color: var(--luma-colors-white);
+}
+
+.active {
+  background: var(--luma-colors-penumbra-base);
+  color: var(--luma-colors-white);
+}
+
+.linkLabel {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.arrowIcon {
+  opacity: 0.5;
+  transform: rotate(180deg);
+}
+
+/* content sections */
+.section {
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+  margin-bottom: var(--gap-size);
+  overflow: hidden;
+}
+
+.sectionHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.sectionAction {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-beam-base);
+}
+
+/* InfoRow */
+.infoRowRoot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.infoRowRoot:last-child {
+  border-bottom: none;
+}
+
+.titleInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+  min-width: 200px;
+}
+
+.infoToggleButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--luma-colors-crater-base);
+  background: transparent;
+  line-height: 1;
+  transition: color var(--transition-duration) ease-out;
+}
+
+.infoToggleButton:hover {
+  color: var(--luma-colors-white);
+}
+
+.descWrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.description {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+  /* A long unbreakable value (a wearer's email address) must wrap, not push
+     the row wider than the pane and get clipped by the section's overflow. */
+  overflow-wrap: anywhere;
+}
+
+.infoContent {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--luma-colors-crater-base);
+  background: var(--luma-colors-penumbra-200);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.rowAction {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-beam-base);
+  flex: none;
+}
+
+.muted {
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--luma-text-muted);
+  /* Same as .description: this class also carries real contact emails and
+     organisation names, which must wrap rather than clip. */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Absence, in prose. OURS, NOT RECOVERED.
+ *
+ * `.muted` also carries REAL data, ContactsView renders a contact's actual
+ * email addresses and organisation in it, so "this backend holds no
+ * counterpart for that" and a real value were typographically identical. This
+ * class is only ever an absence: dimmer than `.muted`, never used for anything
+ * the backend actually returned.
+ *
+ * A single row VALUE uses <AbsentValue> from @/components/Status, which brings
+ * its own leading marker. This is the sentence-length form, for a pane whose
+ * whole body is an absence and whose recovered rationale must stay visible and
+ * verbatim rather than hiding in a title attribute.
+ */
+.absent {
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--luma-text-muted);
+  max-width: 640px;
+}
+
+/*
+ * A pane body that is loading, failed or empty, on the InfoRow row rhythm.
+ * (Whole-section loading uses <SectionSkeleton>, which draws its own surface.)
+ */
+.stateRow {
+  padding: 18px 24px;
+}
+
+/* The action that resolves an empty state, where one exists (e.g. clear a filter). */
+.stateAction {
+  composes: buttonQuietSmall from "../../components/controls.module.css";
+  margin-left: 12px;
+  vertical-align: middle;
+}
+
+/* Contacts, the All / Trusted tabs. */
+.tabRow {
+  display: flex;
+  gap: 6px;
+}
+
+.tabButton {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-crater-base);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--transition-duration) ease-out;
+  min-height: 44px;
+  padding-inline: 10px;
+}
+
+.tabButton:hover {
+  color: var(--luma-colors-white);
+}
+
+.tabButtonActive {
+  color: var(--luma-colors-beam-base);
+}
+
+/* The recovered VoyagerField pill, for the Contacts search input. */
+.searchField {
+  composes: fieldSearch from "../../components/controls.module.css";
+}
+
+/* Compact tags for real status or access labels such as "Operators only". */
+.additionTag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--luma-colors-crater-base);
+}
+
+.additionTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.additionNote {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+  max-width: 640px;
+}
+
+/* A settings row: label and description on the left, control on the right. */
+.additionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.additionRow:last-child {
+  border-bottom: none;
+}
+
+.additionRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.additionRowTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+}
+
+.additionRowDesc {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--luma-colors-crater-base);
+  max-width: 520px;
+}
+
+.additionLink {
+  composes: buttonQuiet from "../../components/controls.module.css";
+  flex: none;
+}
+
+.settingsSearch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-bottom: var(--gap-size);
+  padding: 0 18px;
+  border-radius: 999px;
+  color: var(--luma-text-muted);
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--outline-shadow);
+}
+
+.settingsSearch:focus-within {
+  box-shadow: var(--focused-outline-shadow), 0 0 0 2px var(--luma-colors-beam-base);
+}
+
+.settingsSearch input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--luma-colors-white);
+  background: transparent;
+  font: inherit;
+}
+
+.settingsSearch input::placeholder {
+  color: var(--luma-text-muted);
+}
+
+.settingsIndexRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 72px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+  transition: background-color var(--transition-duration) ease-out;
+}
+
+.settingsIndexRow:last-child {
+  border-bottom: none;
+}
+
+.settingsIndexRow:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.settingsIndexAction {
+  flex: none;
+  color: var(--luma-colors-beam-base);
+}
+
+.settingsNoResults {
+  margin: 0;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--luma-text-muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * GONE: `.valueAction` and the eight `.mfa*` rules.
+ *
+ * They styled two surfaces this pane does not have, the Login row's Update
+ * action and the Multi-factor authentication section, and had no call site
+ * anywhere in the tree. Both belong to Keycloak's own account console, which is
+ * where they live in this deployment. There is no account-write path in this BFF
+ * for either of them, so rendering the markup would have shipped controls that
+ * do nothing. Recovered CSS for a surface we deliberately do not render is a
+ * standing invitation to render it, so it goes with the decision that removed
+ * the markup. Restore both together, if a write path ever exists.
+ */
+
+@media (max-width: 767px) {
+  .settingsWelcome { flex-direction: column; align-items: stretch; gap: 20px; }
+  .settingsWelcome .settingsSearch { width: 100%; }
+  .pinOverview { grid-template-columns: minmax(0, 1fr); }
+  .pinOverviewLink { padding: 24px; }
+  .setupShortcut { border-left: 0; border-top: 1px solid var(--luma-divider); padding: 20px 24px; }
+  .settingsGrid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .advancedSettings > div { grid-template-columns: minmax(0, 1fr); }
+  .sysLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sysLayoutSidebar {
+    display: none;
+  }
+  .infoRowRoot {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 560px) {
+  .additionRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .additionLink {
+    max-width: 100%;
+  }
+  .sectionHeader {
+    align-items: flex-start;
+  }
+  .sysLayout {
+    padding: 18px 16px calc(112px + env(safe-area-inset-bottom));
+  }
+  .settingsPageHeader {
+    padding-bottom: 20px;
+  }
+  .settingsPageHeaderTitle {
+    font-size: 26px;
+  }
+  .settingsIndexRow {
+    gap: 16px;
+    padding: 16px 18px;
+  }
+}

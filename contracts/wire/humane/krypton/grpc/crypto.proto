@@ -1,0 +1,44 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.krypton.grpc.crypto;
+
+import "humane/krypton/grpc/key.proto";
+
+message Asset {
+  int32 domain = 1;
+  int32 obj_id = 2;
+  bytes metadata = 3;
+  bytes primary_data = 4;
+}
+
+message AuxiliaryData {
+  int32 domain = 1;
+  int32 obj_id = 2;
+  bytes metadata = 3;
+}
+
+message CiphertextEnvelope {
+  bytes kid = 1;
+  humane.krypton.grpc.key.Algo algo = 2;
+  bytes aad = 3;
+  bytes iv = 4;
+  bytes auth_tag = 5;
+  bytes ciphertext = 6;
+}
+
+message Plaintext {
+  bytes aad = 1;
+  bytes data = 2;
+}
+
+message SecureAsset {
+  bytes header = 1;
+  bytes aad = 2;
+  bytes cek = 3;
+  bytes iv = 4;
+  bytes auth_tag = 5;
+  bytes ciphertext = 6;
+}

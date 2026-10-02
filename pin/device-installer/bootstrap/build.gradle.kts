@@ -1,0 +1,142 @@
+import java.io.File
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+fun secretProperty(propertyName: String, environmentName: String): String? =
+    providers.gradleProperty(propertyName)
+        .orElse(providers.environmentVariable(environmentName))
+        .orNull
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+
+fun externalRegularFile(rawPath: String, label: String): File {
+    val selected = File(rawPath)
+    if (!selected.isAbsolute) throw GradleException("$label must be an absolute external path")
+    val canonical = selected.canonicalFile
+    if (canonical.toPath().startsWith(rootProject.projectDir.canonicalFile.toPath())) {
+        throw GradleException("$label must live outside the Luma source tree")
+    }
+    if (!canonical.isFile) throw GradleException("$label is missing or is not a regular file")
+    return canonical
+}
+
+val debugSigningStoreFile = providers.gradleProperty("debugSigningStoreFile")
+    .orElse(providers.environmentVariable("LUMA_PIN_DEBUG_SIGNING_STORE_FILE"))
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+    ?.let { externalRegularFile(it, "Pin debug signing store") }
+val pinSigningStorePath = secretProperty("pinSigningStoreFile", "PIN_SIGNING_STORE_FILE")
+val pinSigningStorePassword = secretProperty("pinSigningStorePassword", "PIN_SIGNING_STORE_PASSWORD")
+val pinSigningKeyAlias = secretProperty("pinSigningKeyAlias", "PIN_SIGNING_KEY_ALIAS")
+val pinSigningKeyPassword = secretProperty("pinSigningKeyPassword", "PIN_SIGNING_KEY_PASSWORD")
+val pinSigningValues = listOf(
+    pinSigningStorePath,
+    pinSigningStorePassword,
+    pinSigningKeyAlias,
+    pinSigningKeyPassword,
+)
+val hasCompletePinSigning = pinSigningValues.all { it != null }
+val hasPartialPinSigning = pinSigningValues.any { it != null } && !hasCompletePinSigning
+if (hasPartialPinSigning) {
+    throw GradleException(
+        "Pin signing is incomplete. Supply all four external PIN_SIGNING_* values.",
+    )
+}
+
+val configuredVersionCode = providers.gradleProperty("versionCode").orNull
+    ?.trim()
+    ?.toIntOrNull()
+val configuredVersionName = providers.gradleProperty("versionName").orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+
+android {
+    namespace = "com.penumbraos.systeminjector.exploit"
+    compileSdk = 34
+
+    signingConfigs {
+        debugSigningStoreFile?.let { debugStore ->
+            create("externalDebug") {
+                storeFile = debugStore
+                storePassword = "abxdroppedapk"
+                keyAlias = "abxdroppedapk"
+                keyPassword = "abxdroppedapk"
+            }
+        }
+        if (hasCompletePinSigning) {
+            create("externalCompatibility") {
+                storeFile = externalRegularFile(
+                    checkNotNull(pinSigningStorePath),
+                    "Pin compatibility signing store",
+                )
+                storePassword = checkNotNull(pinSigningStorePassword)
+                keyAlias = checkNotNull(pinSigningKeyAlias)
+                keyPassword = checkNotNull(pinSigningKeyPassword)
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId = "com.penumbraos.systeminjector.exploit"
+        minSdk = 31
+        targetSdk = 32
+        versionCode = configuredVersionCode ?: 1
+        versionName = configuredVersionName ?: "1.0"
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfigs.findByName("externalCompatibility")?.let { signingConfig = it }
+        }
+        getByName("debug") {
+            signingConfigs.findByName("externalDebug")?.let { signingConfig = it }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+
+    lint {
+        disable += "ExpiredTargetSdkVersion"
+    }
+}
+
+val pinReleasePackagingTasks = setOf(
+    "assembleRelease",
+    "bundleRelease",
+    "installRelease",
+    "packageRelease",
+)
+
+gradle.taskGraph.whenReady {
+    val packagesPinRelease = allTasks.any { task ->
+        task.project == project && task.name in pinReleasePackagingTasks
+    }
+    if (packagesPinRelease) {
+        check(hasCompletePinSigning) {
+            "Refusing to package a Pin release without all four external PIN_SIGNING_* values."
+        }
+        check(configuredVersionCode != null && configuredVersionCode > 1) {
+            "Release builds require an explicit positive -PversionCode greater than 1."
+        }
+        check(configuredVersionName != null && configuredVersionName != "1.0") {
+            "Release builds require an explicit non-default -PversionName."
+        }
+    }
+}
+
+dependencies {
+    implementation(project(":common"))
+    testImplementation("junit:junit:4.13.2")
+}

@@ -1,0 +1,12 @@
+pub mod auth;
+pub mod capture;
+pub mod contacts;
+pub mod events;
+pub mod featureflags;
+pub mod partnerservices;
+pub mod privacy;
+pub mod provisioning;
+pub mod pushrelay;
+pub mod speech;
+pub mod user_info;
+pub mod wifi_config;

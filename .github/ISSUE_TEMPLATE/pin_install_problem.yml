@@ -1,0 +1,67 @@
+name: Pin install or activation problem
+description: Guided setup, the USB installer, activation, or a Pin update stops or fails.
+labels: [bug, pin]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Work through README "Connect a Pin" and the USB entries in "Troubleshooting"
+        first. Do not include your Pin's serial, IMEI, device identity, activation
+        file, passcode, Wi-Fi name or password, or anything from `first-login.txt`.
+  - type: input
+    id: release
+    attributes:
+      label: Release ID and version
+      description: From `https://YOUR_DOMAIN/api/version`, and the Pin release version Center shows under Settings → My Ai Pin, if it got that far.
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where it stops
+      description: The Guided setup stage, as Center names it.
+      options:
+        - Connect your Pin (the browser's USB prompt)
+        - Network & time
+        - Install Luma
+        - Required services
+        - Connect to your Luma (activation)
+        - Pin passcode (Finish setup on this Pin)
+        - Try it (microphone, speaker & gesture check)
+        - A later Pin update (Check for updates)
+        - Somewhere else
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: Exact message Center or the browser shows
+      description: Quote it. If Center offers "Connection help" or "Check again", say what those reported.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Computer and browser
+      description: Operating system, browser and version (desktop Chrome, Chromium, or Edge), USB cable and port, and whether other Android tools (Android Studio, scrcpy, adb) were running.
+    validations:
+      required: true
+  - type: textarea
+    id: pin-state
+    attributes:
+      label: Pin state
+      description: Was the Pin unlocked and fully booted? Fresh, factory-reset, or previously set up with Luma? Did the Pin reconnect as a different device at any point?
+  - type: textarea
+    id: support-bundle
+    attributes:
+      label: Support bundle
+      description: Run `./luma support-bundle` on the server and attach the file it names; it is redacted. For USB-only problems on your computer, say so.
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I removed the serial, device identity, passcode, and Wi-Fi details from everything above
+          required: true
+        - label: I used the same Pin (same serial in Center) for the whole attempt
+          required: true

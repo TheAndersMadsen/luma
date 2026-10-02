@@ -1,0 +1,349 @@
+name: luma
+
+# Canonical application model. Environment-specific policy belongs in
+# platform/compose/development.yaml or platform/compose/production.yaml.
+# LUMA_RELEASE_ID labels the source revision used for a deployment.
+
+x-luma-image-labels: &luma-image-labels
+  dk.andersmadsen.luma.product: Luma
+  dk.andersmadsen.luma.release: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+  org.opencontainers.image.revision: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+
+x-luma-labels: &luma-labels
+  <<: *luma-image-labels
+  dk.andersmadsen.luma.environment: ${LUMA_DEPLOYMENT_ENVIRONMENT:-production}
+
+x-cosmos-environment: &cosmos-environment
+  LUMA_PRODUCT: Luma
+  LUMA_RELEASE_ID: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+  LUMA_DEPLOYMENT_ENVIRONMENT: ${LUMA_DEPLOYMENT_ENVIRONMENT:-production}
+  COSMOS_AUTH_MODE: ${COSMOS_AUTH_MODE:-edge-authenticated}
+  COSMOS_ENVIRONMENT: ${LUMA_DEPLOYMENT_ENVIRONMENT:-production}
+  COSMOS_GRPC_BIND: 127.0.0.1:50051
+  COSMOS_HTTP_BIND: 127.0.0.1:8080
+  COSMOS_LOG_LEVEL: ${COSMOS_LOG_LEVEL:-info}
+  COSMOS_MAX_DECODE_BYTES: ${COSMOS_MAX_DECODE_BYTES:-4194304}
+  COSMOS_MAX_ENCODE_BYTES: ${COSMOS_MAX_ENCODE_BYTES:-4194304}
+  COSMOS_REGION: ${COSMOS_REGION:-eastus}
+  COSMOS_REQUEST_TIMEOUT_MS: ${COSMOS_REQUEST_TIMEOUT_MS:-15000}
+  COSMOS_REVISION: ${LUMA_REVISION:-${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}}
+  COSMOS_SHUTDOWN_GRACE_MS: ${COSMOS_SHUTDOWN_GRACE_MS:-5000}
+  COSMOS_TRUST_DOMAIN: ${COSMOS_TRUST_DOMAIN:-cosmos.local}
+  COSMOS_STATE_DIR: /var/lib/cosmos
+  COSMOS_OIDC_ISSUER: ${COSMOS_OIDC_ISSUER:-}
+  COSMOS_OIDC_JWKS_URI: ${COSMOS_OIDC_JWKS_URI:-}
+  COSMOS_OIDC_AUDIENCE: ${COSMOS_OIDC_AUDIENCE:-}
+
+x-cosmos-service: &cosmos-service
+  # Production consumes a prebuilt image. The development override is the only
+  # place that adds a build section.
+  image: ${LUMA_COSMOS_IMAGE:-ghcr.io/theandersmadsen/luma/cosmos:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}}
+  entrypoint:
+    - /bin/sh
+    - -ec
+  command:
+    - |
+      /usr/local/bin/cosmos &
+      server_pid=$$!
+      socat TCP-LISTEN:15051,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:50051 &
+      grpc_proxy_pid=$$!
+      socat TCP-LISTEN:18080,bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:8080 &
+      http_proxy_pid=$$!
+      stop_all() {
+        kill -TERM "$$server_pid" "$$grpc_proxy_pid" "$$http_proxy_pid" 2>/dev/null || true
+        wait "$$server_pid" "$$grpc_proxy_pid" "$$http_proxy_pid" 2>/dev/null || true
+      }
+      shutdown() {
+        stop_all
+        exit 0
+      }
+      trap shutdown INT TERM
+      while kill -0 "$$server_pid" "$$grpc_proxy_pid" "$$http_proxy_pid" 2>/dev/null; do
+        sleep 1
+      done
+      stop_all
+      exit 1
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  volumes:
+    - cosmos-state:/var/lib/cosmos
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 128
+  mem_limit: 768m
+  stop_grace_period: 7s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        curl --fail --silent --show-error --output /dev/null
+        http://127.0.0.1:18080/readyz
+        && socat -T1 - TCP:127.0.0.1:15051 </dev/null >/dev/null
+    interval: 10s
+    timeout: 3s
+    start_period: 5s
+    retries: 3
+  networks:
+    - cosmos-internal
+
+services:
+  connectivity:
+    <<: *cosmos-service
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: connectivity
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: connectivity-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: connectivity-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: connectivity
+
+  ai-bus:
+    <<: *cosmos-service
+    mem_limit: 1536m
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: ai-bus
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: ai-bus-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: ai-bus-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: ai-bus
+      COSMOS_KID_SCOPE: ${COSMOS_KID_SCOPE:-enforce}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
+      COSMOS_DEMO_ENABLED: ${COSMOS_DEMO_ENABLED:-false}
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
+      COSMOS_CAPTURE_SHARE_BASE_URL: ${COSMOS_CAPTURE_SHARE_BASE_URL:-}
+      COSMOS_SHARE_TOKEN_SECRET: ${COSMOS_SHARE_TOKEN_SECRET:-}
+      COSMOS_CAPTURE_UPLOAD_BASE_URL: ${COSMOS_CAPTURE_UPLOAD_BASE_URL:-http://ai-bus:18080}
+      COSMOS_CAPTURE_STORAGE_DIR: ${COSMOS_CAPTURE_STORAGE_DIR:-/var/lib/cosmos/captures}
+      COSMOS_CAPTURE_MAX_UPLOAD_BYTES: ${COSMOS_CAPTURE_MAX_UPLOAD_BYTES:-33554432}
+      COSMOS_CAPTURE_RETENTION_DAYS: ${COSMOS_CAPTURE_RETENTION_DAYS:-}
+      COSMOS_UPLOAD_PRESIGN_ENDPOINT: ${COSMOS_UPLOAD_PRESIGN_ENDPOINT:-}
+      COSMOS_MUSICBRAINZ_BASE_URL: ${COSMOS_MUSICBRAINZ_BASE_URL:-https://musicbrainz.org}
+      COSMOS_SHOPPING_VISUAL_SEARCH_URL: ${COSMOS_SHOPPING_VISUAL_SEARCH_URL:-}
+      COSMOS_SHOPPING_ALLOWED_HOSTS: ${COSMOS_SHOPPING_ALLOWED_HOSTS:-}
+      COSMOS_SHOPPING_API_KEY: ${COSMOS_SHOPPING_API_KEY:-}
+
+  account:
+    <<: *cosmos-service
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: account
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: account-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: account-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: account
+
+  contacts:
+    <<: *cosmos-service
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: contacts
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: contacts-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: contacts-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: contacts
+
+  feature-flags:
+    <<: *cosmos-service
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: feature-flags
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: feature-flags-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: feature-flags-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: feature-flags
+      COSMOS_BIDIRECTIONAL_STREAMING: ${COSMOS_BIDIRECTIONAL_STREAMING:-0}
+      COSMOS_REMOTE_TTS_ENABLED: ${COSMOS_REMOTE_TTS_ENABLED:-false}
+
+  notable-events:
+    <<: *cosmos-service
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: notable-events
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: notable-events-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: notable-events-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: notable-events
+
+  provisioning:
+    <<: *cosmos-service
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: cosmos
+      dk.andersmadsen.luma.workload: provisioning
+    environment:
+      <<: *cosmos-environment
+      COSMOS_INSTANCE_ID: provisioning-${LUMA_REVISION:-${LUMA_RELEASE_ID}}
+      COSMOS_POD_NAME: provisioning-${LUMA_REVISION:-${LUMA_RELEASE_ID}}-1
+      COSMOS_WORKLOAD: provisioning
+      COSMOS_ENROLLMENT_USER_ID: ${COSMOS_ENROLLMENT_USER_ID:-}
+      COSMOS_OPAQUE_SEED: ${COSMOS_OPAQUE_SEED:-}
+
+  center:
+    image: ${LUMA_CENTER_IMAGE:-ghcr.io/theandersmadsen/luma/center:${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}}
+    user: "1000:1001"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1001
+      - /app/center/.next/cache:size=128m,mode=0750,uid=1000,gid=1001
+    environment:
+      LUMA_PRODUCT: Luma
+      LUMA_RELEASE_ID: ${LUMA_RELEASE_ID:?set LUMA_RELEASE_ID to the immutable release id}
+      LUMA_ENVIRONMENT: ${LUMA_ENVIRONMENT:-development}
+      LUMA_DEPLOYMENT_ENVIRONMENT: ${LUMA_DEPLOYMENT_ENVIRONMENT:-production}
+      LUMA_PUBLIC_ORIGIN: ${LUMA_PUBLIC_ORIGIN:-http://127.0.0.1:4000}
+      # A signed-in browser sends the `cosmos_tokens` set back on every
+      # request, so the Cookie line alone can reach ~12.5 KB. The default
+      # 16 KB cap covers the whole request header block, which also carries the
+      # reverse proxy's forwarded headers, so the default leaves too little room
+      # and answers 431 for a signed-in request.
+      BUN_OPTIONS: --max-http-header-size=65536
+      COSMOS_ENDPOINT_AI_BUS: ai-bus:15051
+      COSMOS_ENDPOINT_NOTABLE_EVENTS: notable-events:15051
+      COSMOS_ENDPOINT_CONTACTS: contacts:15051
+      COSMOS_ENDPOINT_ACCOUNT: account:15051
+      COSMOS_GRPC_ENDPOINT: ai-bus:15051
+      COSMOS_WEBAPI_BASE_URL: http://ai-bus:18080
+      COSMOS_FEATURE_FLAGS_METRICS_URL: http://feature-flags:18080
+      COSMOS_EDGE_TOKEN: ${COSMOS_EDGE_TOKEN:-}
+      COSMOS_ADMIN_TOKEN: ${COSMOS_ADMIN_TOKEN:-}
+      COSMOS_OPERATOR_EMAILS: ${COSMOS_OPERATOR_EMAILS:-}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
+      LUMA_MUSIC_GATEWAY_ORIGIN: ${LUMA_MUSIC_GATEWAY_ORIGIN:-${LUMA_PUBLIC_ORIGIN:-http://127.0.0.1:4000}}
+      TIDAL_CLIENT_ID: ${TIDAL_CLIENT_ID:-}
+      TIDAL_CLIENT_SECRET: ${TIDAL_CLIENT_SECRET:-}
+      TIDAL_SCOPES: ${TIDAL_SCOPES:-}
+      TIDAL_COUNTRY_CODE: ${TIDAL_COUNTRY_CODE:-}
+      TIDAL_STREAM_HOST_SUFFIXES: ${TIDAL_STREAM_HOST_SUFFIXES:-tidal.com,tdlcdn.com,akamaihd.net}
+      APPLE_MUSIC_DEVELOPER_TOKEN: ${APPLE_MUSIC_DEVELOPER_TOKEN:-}
+      KEYCLOAK_BASE_URL: ${KEYCLOAK_BASE_URL:-}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-humane}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-center}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+      KEYCLOAK_SCOPES: ${KEYCLOAK_SCOPES:-openid email profile}
+    depends_on:
+      ai-bus:
+        condition: service_healthy
+      account:
+        condition: service_healthy
+      contacts:
+        condition: service_healthy
+      feature-flags:
+        condition: service_healthy
+      notable-events:
+        condition: service_healthy
+    volumes:
+      - center-data:/data
+    networks:
+      - cosmos-internal
+      - wearer-edge
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: center
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - --no-env-file
+        - -e
+        - fetch('http://127.0.0.1:4000/api/version').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  keycloak:
+    image: ${LUMA_KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858}
+    profiles:
+      - identity
+    restart: unless-stopped
+    init: true
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=60
+    networks:
+      - cosmos-internal
+      - identity-edge
+    mem_limit: 1g
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.component: identity
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000
+          && printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3
+          && grep -q '"status": "UP"' <&3
+      interval: 10s
+      timeout: 5s
+      start_period: 40s
+      retries: 5
+
+networks:
+  cosmos-internal:
+    driver: bridge
+    internal: true
+    labels:
+      <<: *luma-labels
+  wearer-edge:
+    driver: bridge
+    labels:
+      <<: *luma-labels
+  identity-edge:
+    driver: bridge
+    labels:
+      <<: *luma-labels
+
+volumes:
+  cosmos-state:
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.data: cosmos-state
+  center-data:
+    labels:
+      <<: *luma-labels
+      dk.andersmadsen.luma.data: center

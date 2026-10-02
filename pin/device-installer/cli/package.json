@@ -1,0 +1,21 @@
+{
+  "name": "device-installer",
+  "version": "1.0.0",
+  "description": "Install Luma's signed device apps on the Humane AI Pin",
+  "type": "module",
+  "bin": {
+    "device-installer": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "bun --bun tsc",
+    "test": "pnpm run build && bun test --isolate --timeout=30000 dist/*.test.js",
+    "start": "bun --no-env-file dist/index.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "bun": "1.4.2"
+  }
+}

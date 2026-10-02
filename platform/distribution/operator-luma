@@ -1,0 +1,137 @@
+#!/usr/bin/env -S bun --no-env-file
+'use strict';
+
+if (!process.versions.bun || process.versions.bun !== '1.4.2') {
+  process.stderr.write('error: Luma requires Bun 1.4.2. Install the pinned runtime described in README.md.\n');
+  process.exit(126);
+}
+
+const HELP = `Luma operator CLI
+
+Install:  ./luma registry login --username GITHUB_USER
+          ./luma onboard production --pin-release-archive ../luma-pin-*.tar.gz
+Update:   ./luma update production (checks, backs up, installs, verifies)
+          ./luma update production --check (only checks)
+Status:   ./luma setup status (says what to do next)
+
+Configuration lives in ~/.config/luma and ~/.local/share/luma. A server set up
+with LUMA_CONFIG_DIR and LUMA_DATA_DIR needs the same values exported in every
+shell that runs ./luma.
+
+Commands:
+  ./luma setup production --guided [--pin-release-archive FILE]
+  ./luma onboard production [--pin-release-archive FILE] [--update-source URL]
+  ./luma setup production --domain HOST --acme-email EMAIL --operator-email EMAIL [--pin-release-archive FILE] [--profile NAME ...]
+  ./luma setup status [--json]
+  ./luma registry login --username GITHUB_USER
+  ./luma doctor production [options]
+  ./luma deploy production (--dry-run | --confirm) [options]
+  ./luma verify production [options]
+  ./luma backup production [--output DIR] [--project-name NAME]
+  ./luma restore production --from DIR [--confirm] [--project-name NAME]
+  ./luma update production [--check | --auto]
+  ./luma reset-password production [--confirm] [--project-name NAME]
+  ./luma eval assistant production [--repeat N] [--case ID] [--json] [options]
+  ./luma pin release acquire [--archive FILE | --check] [--json]
+  ./luma pin activate --serial SERIAL --credential-file FILE --edge-ipv4 A.B.C.D [--confirm]
+  ./luma pin activate status --serial SERIAL
+  ./luma config path|get|set|check|list|template [options]
+  ./luma support-bundle [options]
+  ./luma version [--json]
+
+Run ./luma COMMAND --help (for example ./luma deploy production --help) for
+what a command does, its options, and whether it changes this server.
+
+The production application is pulled from the digest-pinned OCI reference
+stamped into this operator release. Local development and source builds remain
+available from the repository's full ./luma CLI.`;
+
+// The contract commands this CLI runs; the rest belong to the source checkout.
+const OPERATOR_COMMANDS = new Set([
+  'setup.production', 'setup.status', 'onboard.production', 'registry.login',
+  'doctor.production', 'deploy.production', 'verify.production', 'backup.production',
+  'restore.production', 'update.production', 'reset-password.production', 'eval.assistant.production',
+  'pin.release.acquire', 'pin.activate', 'pin.activate.status',
+  'config.path', 'config.get', 'config.set', 'config.check', 'config.list', 'config.template',
+  'support-bundle', 'version',
+]);
+
+const rawArgs = process.argv.slice(2);
+if (rawArgs.length === 0 || rawArgs.includes('--help') || rawArgs.includes('-h') || rawArgs[0] === 'help') {
+  // A command's own help comes from the bundled command contract; the source
+  // tree, where this file is not beside it, prints only the usage above.
+  let text = HELP;
+  if (require('node:fs').existsSync(require('node:path').join(__dirname, 'platform', 'cli', 'command-spec.js'))) {
+    const { findCommand, renderHelp, requestedHelp } = require('./platform/cli/command-spec');
+    const { tokens } = requestedHelp(rawArgs);
+    const command = tokens.length ? findCommand(tokens)?.command : null;
+    if (command && OPERATOR_COMMANDS.has(command.id)) text = renderHelp(tokens);
+  }
+  process.stdout.write(`${text}\n`);
+  process.exit(0);
+}
+
+const { versionInfo } = require('./platform/cli/command-spec');
+
+if (rawArgs[0] === '--version' || rawArgs[0] === 'version') {
+  const options = rawArgs.slice(1);
+  if ((rawArgs[0] === '--version' && options.length > 0) ||
+      options.length > 1 || (options.length === 1 && options[0] !== '--json')) {
+    process.stderr.write('error: usage: ./luma version [--json] | ./luma --version\n');
+    process.exit(64);
+  }
+  try {
+    const descriptor = versionInfo();
+    process.stdout.write(options[0] === '--json'
+      ? `${JSON.stringify(descriptor)}\n`
+      : `${descriptor.product} ${descriptor.version} (${descriptor.revision})\n`);
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`error: ${error.message}\n`);
+    process.exit(1);
+  }
+}
+
+const {
+  PIN_ACTIVATION_TOOL,
+  PIN_RELEASE_ACQUIRE_TOOL,
+  fail,
+  resolveTool,
+  run,
+} = require('./platform/cli/context');
+const { configCommand } = require('./platform/cli/config');
+const { registryCommand } = require('./platform/cli/registry');
+const { onboardCommand } = require('./platform/cli/onboard');
+const { deployProduction, evaluateAssistant, productionDoctor, verifyProduction } = require('./platform/cli/production');
+const { backupCommand, restoreCommand } = require('./platform/cli/backup');
+const { resetPasswordCommand } = require('./platform/cli/production-setup');
+const { setupCommand } = require('./platform/cli/setup');
+const { updateCommand } = require('./platform/cli/update');
+const { supportBundleCommand } = require('./platform/cli/support-bundle');
+const { runTimedBoundary } = require('./platform/cli/timing');
+
+runTimedBoundary(() => {
+  const args = [...rawArgs];
+  const command = args.shift();
+  if (command === 'setup' && ['production', 'status'].includes(args[0])) setupCommand(args);
+  else if (command === 'onboard') onboardCommand(args);
+  else if (command === 'doctor' && args.shift() === 'production') productionDoctor(args);
+  else if (command === 'deploy') deployProduction(args);
+  else if (command === 'backup') backupCommand(args);
+  else if (command === 'restore') restoreCommand(args);
+  else if (command === 'update') updateCommand(args);
+  else if (command === 'reset-password') resetPasswordCommand(args);
+  else if (command === 'registry') registryCommand(args);
+  else if (command === 'verify') verifyProduction(args);
+  else if (command === 'eval') evaluateAssistant(args);
+  else if (command === 'config') configCommand(args);
+  else if (command === 'support-bundle') supportBundleCommand(args);
+  else if (command === 'pin' && args[0] === 'release' && args[1] === 'acquire') {
+    run(resolveTool('bun'), [PIN_RELEASE_ACQUIRE_TOOL, ...args.slice(2)]);
+  } else if (command === 'pin' && args[0] === 'activate') {
+    run(resolveTool('bun'), [PIN_ACTIVATION_TOOL, ...args.slice(1)]);
+  } else {
+    fail(`unsupported operator command: ${rawArgs.join(' ')}; ./luma --help lists this release's commands ` +
+      '(local development commands such as init, doctor, and setup local belong to the source checkout)', 64);
+  }
+});

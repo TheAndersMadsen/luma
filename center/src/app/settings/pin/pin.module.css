@@ -1,0 +1,266 @@
+/*
+ * The Pin console, the ONE stylesheet the /settings/pin panes add.
+ *
+ * Everything here is written in the --luma-* tokens from globals.css and sits on
+ * the same rhythm as settings.module.css, so a Pin pane is visually
+ * indistinguishable from /settings/account/devices. Structure comes from the
+ * shared idiom: `.section` / `.sectionHeader` / `.additionRow` /
+ * `.additionRowTitle` / `.additionRowDesc` / `.additionLink` in
+ * settings.module.css, and buttons/fields from components/controls.module.css.
+ *
+ * None of the standalone Setup SPA's theme (index.css, penumbra-theme.css,
+ * app-primitives.css, 3,201 lines of a second design system) crosses into
+ * Center. If a Pin pane needs a control that is not here, add it here in
+ * tokens rather than importing that theme.
+ */
+
+/* ------------------------------------------------------------- actions -- */
+
+/* The primary act of a pane: "Connect over USB", "Install", "Save". */
+.button {
+  composes: buttonPrimary from "../../../components/controls.module.css";
+  flex: none;
+}
+
+/* A secondary act that sits next to the primary one. */
+.buttonQuiet {
+  composes: buttonQuiet from "../../../components/controls.module.css";
+  flex: none;
+}
+
+/* Destructive: disconnect, delete, uninstall. */
+.buttonDanger {
+  composes: buttonDanger from "../../../components/controls.module.css";
+  flex: none;
+}
+
+/* Several controls on one row, wrapping on narrow screens. */
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: none;
+}
+
+/* A whole-width band of controls inside a section, on the row rhythm. */
+.actionRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.actionRow:last-child {
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------- text -- */
+
+/*
+ * Device-reported strings: serials, package names, fingerprints, shell output.
+ * They are machine identifiers, and a proportional face makes 0/O and 1/l
+ * ambiguous in exactly the values an operator is asked to compare.
+ */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--luma-colors-apollo-base);
+  overflow-wrap: anywhere;
+}
+
+/* A right-hand row value that is not a control. */
+.value {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+  text-align: right;
+  flex: none;
+  max-width: 55%;
+  overflow-wrap: anywhere;
+}
+
+/* Explanatory prose under a section, never containing data. */
+.note {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+  max-width: 640px;
+}
+
+/* The same, on the section row rhythm. */
+.noteRow {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.noteRow:last-child {
+  border-bottom: none;
+}
+
+/* Reasons a thing cannot be done (e.g. why WebUSB is unavailable). */
+.reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0 0 0 18px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+}
+
+/* --------------------------------------------------------------- rows --- */
+
+/*
+ * A row whose right side is a control rather than a value. Same metrics as
+ * settings.module.css `.additionRow`. Declared here so a Pin pane does not have
+ * to import two stylesheets for one row.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rowTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+}
+
+.rowDesc {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--luma-colors-crater-base);
+  max-width: 520px;
+}
+
+/* --------------------------------------------------------------- forms -- */
+
+/* A stack of labelled fields inside one section row. */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.form:last-child {
+  border-bottom: none;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  color: var(--luma-colors-crater-base);
+}
+
+.fieldInput {
+  composes: field from "../../../components/controls.module.css";
+}
+
+/* What a field means, or what writing it will do. Never an error. */
+.fieldHint {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--luma-text-muted);
+}
+
+/* Two fields side by side where they are read together (key + region). */
+.fieldPair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+/* -------------------------------------------------------------- status -- */
+
+/* A short state caption on the row rhythm ("Checking the Pin…"). */
+.stateRow {
+  padding: 18px 24px;
+}
+
+/* Work in progress, in the caption colour so it cannot read as a value. */
+.busy {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--luma-colors-crater-base);
+}
+
+/* Chips and a title sharing a line. */
+.chipRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------------------------ terminals -- */
+
+/*
+ * Device output: logcat tails, install progress, shell transcripts. Bounded
+ * and scrollable so a chatty device cannot push the pane's controls off screen.
+ */
+.output {
+  margin: 0;
+  padding: 14px 16px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--luma-radius-control);
+  background: var(--luma-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--luma-colors-apollo-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .value {
+    text-align: left;
+    max-width: 100%;
+  }
+  .fieldPair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

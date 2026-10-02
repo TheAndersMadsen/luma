@@ -1,0 +1,16 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.common.auth;
+
+enum AuthenticationType {
+  UNKNOWN = 0;
+  UNAUTHENTICATED = 1;
+  BEARER_TOKEN = 2;
+  DEVICE_USER_CREDENTIAL = 3;
+  ISTIO_SERVICE_MESH = 4;
+  FACTORY_CERTIFICATE = 5;
+  DEVICE_ATTESTATION_CREDENTIAL = 6;
+}

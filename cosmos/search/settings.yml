@@ -1,0 +1,71 @@
+# Non-secret SearXNG policy for Cosmos's private web-search backend.
+# The required SEARXNG_SECRET environment variable overrides this placeholder
+# in memory. Never replace it here with operator credentials.
+use_default_settings:
+  # Load only the engines this private deployment actually exercises. Merely
+  # setting an engine `disabled` still imports and initializes it. The old
+  # configuration therefore logged failures for engines no request could use.
+  engines:
+    keep_only:
+      - bing
+      - github
+      - resulthunter
+      - searchch
+      - yahoo
+      - yandex
+
+server:
+  secret_key: ultrasecretkey
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+  # `all` is not neutral for every upstream. Bing maps it to an arbitrary
+  # market and returned unrelated Polish/Italian pages for English and Danish
+  # queries from the production VPS. English still returns Danish pages for a
+  # Danish query, while keeping product names and current-events searches
+  # relevant.
+  default_lang: en
+  safe_search: 1
+
+# The upstream defaults are unsuitable for this datacenter address: Brave and
+# Google CSE return 429s, DuckDuckGo and Startpage return CAPTCHAs, and Wikidata
+# fails initialization. `keep_only` above prevents an image update from quietly
+# re-enabling them. No single engine answers every query from a VPS either: from
+# production, Bing answered 2 of 5 test queries and returned an empty page,
+# reported as no error, for the rest, while Yandex answered. So four broad-web
+# engines share the work, and results from any of them are a private answer
+# (BROAD_WEB_SEARXNG_ENGINES in cosmos search.rs, which also makes the Center
+# test fail when none of them answers):
+# - Bing and Yandex, both observed answering from the production VPS;
+# - Yahoo, a different front end to Bing's index, and one of the few keyless
+#   engines that searx.space's checks of public, datacenter-hosted SearXNG
+#   instances regularly see answering (Mojeek, Qwant, and Startpage rarely do);
+# - ResultHunter, Brave-backed, measured as a broad-web fallback.
+# Search.ch stays a low-weight independent last resort. Its results alone count
+# as degraded, so SerpApi answers instead when it is configured. Wiby was
+# removed after it repeatedly promoted unrelated and stale pages into the first
+# four results Cosmos gives the assistant. Seznam was removed after its parser
+# threw on ordinary result pages. GitHub is loaded but remains disabled by
+# default for the deterministic deployment probe.
+engines:
+  - name: bing
+    disabled: false
+    weight: 3
+  - name: github
+    disabled: true
+  - name: resulthunter
+    disabled: false
+    weight: 2
+  - name: searchch
+    disabled: false
+    weight: 0.4
+  - name: yahoo
+    disabled: false
+    weight: 2
+  - name: yandex
+    disabled: false
+    weight: 3

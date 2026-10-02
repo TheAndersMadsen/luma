@@ -1,0 +1,38 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.common.encryption;
+
+import "google/protobuf/timestamp.proto";
+
+enum LocationStaleStatus {
+  UNDEFINED = 0;
+  STALE = 1;
+  NOT_STALE = 2;
+}
+
+message EncryptedData {
+  EncryptionInformation encryption_information = 1;
+  bytes data = 2;
+}
+
+message EncryptionInformation {
+  string kid = 1;
+}
+
+message LocationEnvelope {
+  float longitude = 1;
+  float latitude = 2;
+  string human_readable = 3;
+  string full_address = 4;
+  // The device sends the enum, not bytes: `LocationEnvelope.newBuilder()
+  // .setStaleStatus(staleStatus)` with a `LocationStaleStatus`
+  // (QuickActionRouter.java:165-166). Declaring `bytes` made prost hard-fail the
+  // whole LocationEnvelope decode, so every encrypted turn silently lost the
+  // wearer's location, "what's near me" answered blind, with no error anywhere.
+  LocationStaleStatus stalestatus = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  float accuracy = 7;
+}

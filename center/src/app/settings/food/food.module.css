@@ -1,0 +1,78 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 24px;
+  background: var(--luma-colors-penumbra-200);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.restrictionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.row label,
+.restrictionRow label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.field {
+  composes: field from "../../../components/controls.module.css";
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.primaryButton {
+  composes: buttonPrimary from "../../../components/controls.module.css";
+}
+
+.secondaryButton {
+  composes: buttonSecondary from "../../../components/controls.module.css";
+}
+
+.quietButton {
+  composes: buttonQuietSmall from "../../../components/controls.module.css";
+}
+
+.hint {
+  margin: 0;
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+}
+
+@media (max-width: 820px) {
+  .row,
+  .restrictionRow {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.editorFields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}

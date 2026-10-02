@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sharedUserId="android.uid.system"
+    tools:ignore="Deprecated">
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:allowBackup="false"
+        android:label="Device Installer"
+        android:process="system">
+
+        <receiver
+            android:name=".InstallReceiver"
+            android:process="system"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.penumbraos.systeminjector.INSTALL" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".runtimepolicy.BootReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".runtimepolicy.PackageEventReceiver"
+            android:process="system"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_FULLY_REMOVED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name=".StagingProvider"
+            android:authorities="com.penumbraos.systeminjector.staging"
+            android:process="system"
+            android:exported="true" />
+
+    </application>
+
+</manifest>

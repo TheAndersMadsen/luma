@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "capture": {
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "userCreatedAt": "2000-01-01T00:00:00.000Z",
+    "data": {
+      "memoryType": "PHOTO",
+      "uploadComplete": true,
+      "thumbnailCount": 1,
+      "frameCount": 1,
+      "bestFrameIndex": 0,
+      "bestFrameMethod": "synthetic_test"
+    }
+  },
+  "note": {
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "userCreatedAt": "2000-01-01T00:00:00.000Z",
+    "userLastModified": "2000-01-01T00:00:00.000Z",
+    "data": {
+      "note": {
+        "title": "Synthetic test note",
+        "text": "Generated fixture. Not wearer data."
+      }
+    }
+  }
+}

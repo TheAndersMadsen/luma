@@ -1,0 +1,45 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/crypto",
+    "crates/protocol",
+    "crates/cosmos",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+async-stream = "0.3.6"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+axum = { version = "0.7.9", features = ["http2"] }
+cosmos-core = { path = "crates/core" }
+cosmos-protocol = { path = "crates/protocol" }
+h2 = "0.4.8"
+prost = "0.13.4"
+thiserror = "2.0.12"
+tonic-build = "0.12.3"
+tokio = { version = "1.44.2", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1.17", features = ["net"] }
+jsonwebtoken = "9.3"
+tonic = "0.12.3"
+tonic-health = "0.12.3"
+tower = { version = "0.5.2", features = ["util"] }
+tracing = "0.1.41"
+uuid = { version = "1.11.0", features = ["v4"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+# The device's `libopaque.so` is built against opaque-ke 2.0.0, which pins voprf
+# at exactly `=0.4.0-pre.3`. That prerelease predates a change to Rust's
+# lifetime-elision rules and no longer compiles, so it is vendored with the two
+# elided lifetimes named explicitly, a compile fix only, no behavioral change.
+# Staying on this exact version is what keeps our OPAQUE wire bytes compatible
+# with a real Pin.
+[patch.crates-io]
+voprf = { path = "vendor/voprf" }

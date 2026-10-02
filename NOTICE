@@ -1,0 +1,80 @@
+Luma
+Copyright (c) 2026 Anders Madsen
+Licensed under the MIT License (see LICENSE).
+
+================================================================================
+Independence and provenance
+================================================================================
+
+Luma is an independent, community project. It is not affiliated with, authorized
+by, or endorsed by Humane Inc. or HP Inc. It is an original reimplementation
+written for interoperability with Humane Ai Pin hardware that its owners lawfully
+possess, created after the original Humane cloud service was permanently shut
+down on 28 February 2025.
+
+Luma contains no Humane source code, firmware, binaries, APKs, fonts, images, or
+design assets. Where names from the original system appear in this repository —
+the `humane.*` gRPC package, service, and method names; Android package
+identities; the device's own `Build` manufacturer and model strings; and the
+`humane.center/share/...` link path — they appear only because an unmodified Pin
+requires them byte-for-byte to interoperate. They are interface and compatibility
+identifiers, not a claim of origin, source, or endorsement. See TRADEMARKS.md.
+
+Center delegates the Pin's WebUSB ADB authorization to PenumbraOS's remote
+signing service; Luma bundles no ADB private key or certificate of its own.
+
+The `.proto` interface definitions in this repository were written from the
+observable gRPC wire protocol for the sole purpose of interoperability. The
+decompiled stock applications are kept entirely outside the repository and are
+never committed (see CONTRIBUTING.md and AGENTS.md).
+
+================================================================================
+Third-party components
+================================================================================
+
+This repository bundles or vendors the following third-party works, each under
+its own license, retained alongside the code:
+
+- Inter typeface — SIL Open Font License 1.1.
+  (c) The Inter Project Authors. https://github.com/rsms/inter
+  Files: center/public/fonts/InterVariable.woff2
+  License: center/public/fonts/Inter-LICENSE.txt
+
+- PenumbraOS device foundation (device runtime, Device Installer, and the
+  Pin-setup lineage Center's installer flow derives from) —
+  MIT License. (c) Adam Gastineau and the PenumbraOS contributors.
+  https://github.com/PenumbraOS
+  Files: pin/, pin/device-installer/
+  Licenses: pin/LICENSE, pin/device-installer/LICENSE
+
+- GhostLock (vendored dock helper) — Apache License 2.0, incorporating and
+  modifying Apache-2.0 code from NebuSec/CyberMeowfia.
+  Files: pin/ghostlock/
+  License and notices: pin/ghostlock/LICENSE,
+  pin/ghostlock/THIRD_PARTY_NOTICES.md, pin/ghostlock/UPSTREAM.md
+
+- voprf (vendored) — dual MIT / Apache-2.0.
+  Files: cosmos/vendor/voprf/
+  Licenses: cosmos/vendor/voprf/LICENSE-MIT, cosmos/vendor/voprf/LICENSE-APACHE
+
+- vergen-gitcl (patched, vendored) — dual MIT / Apache-2.0.
+  Files: pin/runtime/core/vendor/vergen-gitcl-patched/
+  Licenses: pin/runtime/core/vendor/vergen-gitcl-patched/LICENSE-MIT,
+  pin/runtime/core/vendor/vergen-gitcl-patched/LICENSE-APACHE
+
+- Gradle Wrapper (bundled build launcher), Apache License 2.0.
+  (c) the Gradle authors. https://gradle.org
+  Files: pin/gradlew, pin/gradlew.bat, pin/gradle/wrapper/gradle-wrapper.jar,
+  pin/device-installer/gradlew, pin/device-installer/gradlew.bat,
+  pin/device-installer/gradle/wrapper/gradle-wrapper.jar
+  License: https://www.apache.org/licenses/LICENSE-2.0 (named in the gradlew
+  script headers; no separate copy is in the repository)
+
+The USB interposer that Pin setup asks for (https://github.com/PenumbraOS/interposer)
+is a separate project; this repository links to it and bundles none of it.
+
+Further dependencies are declared in each component's manifest (Cargo.toml,
+package.json, Gradle build files) and carry their own upstream licenses.
+
+"Humane", "Ai Pin", "CosmOS", "HP", "Android", "Qualcomm", and other names and
+marks are the property of their respective owners. See TRADEMARKS.md.

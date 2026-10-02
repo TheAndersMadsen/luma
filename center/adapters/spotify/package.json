@@ -1,0 +1,14 @@
+{
+  "name": "@luma/spotify-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Purpose-scoped Center adapter for the local Ai Pin Spotify API",
+  "type": "module",
+  "engines": {
+    "bun": "1.4.2"
+  },
+  "scripts": {
+    "start": "bun --no-env-file src/server.mjs",
+    "test": "bun test --isolate --timeout=30000 verify/*.test.mjs"
+  }
+}

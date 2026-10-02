@@ -1,0 +1,45 @@
+[llm]
+provider = "echo"
+model = "local-disabled"
+
+[llm.tools]
+enabled = false
+dynamic_tool_count = 8
+max_tool_turns = 12
+tool_concurrency = 2
+
+[llm.memory]
+enabled = false
+path = "./data/assistant-memory.mv2"
+top_k = 5
+snippet_chars = 500
+max_context_chars = 1500
+auto_retrieve = true
+auto_remember = false
+
+[server]
+http_bind_addr = "127.0.0.1:8080"
+grpc_bind_addr = "127.0.0.1:9090"
+public_addr = "..."          # optional, reachable address of the server
+lan_dashboard_enabled = false # set true and restart to expose authenticated HTTP over Wi-Fi
+# admin_token = "..."        # 32-512 visible ASCII chars. PENUMBRA_ADMIN_TOKEN overrides
+
+[storage]
+media_dir = "./media"       # directory for captured photos, videos, and notes
+
+[weather]
+measurement_system = "metric"
+temperature_unit = "celsius"
+
+[spotify]
+# Personal-use experimental integration. Requires Spotify Premium and an
+# explicit acknowledgement in Center before the pairing receiver can start.
+enabled = false
+experimental_acknowledged = false
+device_name = "Ai Pin"
+
+# Typed server overrides for the stock FeatureFlagsService. Missing keys keep
+# firmware defaults. Src/feature_flags.rs owns the exact allowlist.
+[feature_flags.overrides]
+# vision_actions_enabled = true
+# touchcode_timeout_millis = 7500

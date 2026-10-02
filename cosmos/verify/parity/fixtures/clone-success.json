@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic_clone",
+  "scenario_id": "tool-success",
+  "events": [
+    {
+      "event_id": "session-open",
+      "action": "session.open",
+      "status": "ok",
+      "final": false,
+      "semantics": ["acknowledges"],
+      "style": ["neutral", "direct"],
+      "at_ms": 25,
+      "recovery": "none"
+    },
+    {
+      "event_id": "tool-complete",
+      "action": "tool.complete",
+      "status": "ok",
+      "final": false,
+      "semantics": ["uses_tool"],
+      "style": ["no_repetition", "brief"],
+      "at_ms": 340,
+      "recovery": "none"
+    },
+    {
+      "event_id": "response-final",
+      "action": "response.finalize",
+      "status": "ok",
+      "final": true,
+      "semantics": ["answers"],
+      "style": ["final", "conversational"],
+      "at_ms": 620,
+      "recovery": "none"
+    }
+  ]
+}

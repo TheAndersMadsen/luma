@@ -1,0 +1,18 @@
+[package]
+name = "cosmos-crypto"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Clean-room encrypted-envelope implementation for the Cosmos compatibility runtime (AES-GCM + RSA-OAEP, FlatBuffer)."
+
+[dependencies]
+aes-gcm = "0.10.3"
+rsa = { version = "0.9.6", features = ["sha1", "sha2"] }
+sha1 = "0.10.6"
+flatbuffers = "25.12.19"
+rand = "0.8.5"
+thiserror = "2.0.12"
+
+[dev-dependencies]
+rsa = { version = "0.9.6", features = ["sha1", "sha2"] }

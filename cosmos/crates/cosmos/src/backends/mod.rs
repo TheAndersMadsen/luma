@@ -1,0 +1,143 @@
+//! Real external backends, the vendors cosmos's serverside actually called.
+//!
+//! Clean-room compatibility evidence identifies which third-party API sat
+//! behind each surface. This module implements the
+//! adapters for the ones we hold credentials for, mapping each vendor response
+//! onto the **exact** proto the device expects, so a Pin cannot tell our
+//! `EncryptedWeather` or `EncryptedNearbySearch` from cosmos's.
+//!
+//! ## Configuration
+//!
+//! Every backend is keyed by an environment variable and is **absent by
+//! default**. A backend with no key configured does not degrade to a guess: the
+//! caller reports the capability as unavailable, exactly as before. Credentials
+//! are never compiled in, logged, or echoed on the wire.
+//!
+//! | Env var | Backend | Surfaces |
+//! |---|---|---|
+//! | `COSMOS_AZURE_SPEECH_KEY` + `COSMOS_AZURE_SPEECH_REGION` | Azure AI Speech | unary/streaming TTS, translated speech |
+//! | `COSMOS_GOOGLE_MAPS_KEY` | Google Maps Platform (Places, Geocoding, Routes APIs) | nearby search, reverse geocode, directions |
+//! | `COSMOS_SEARXNG_BASE_URL` | Private SearXNG (preferred when configured) | `web_search` (`MODE_SERP_API`) |
+//! | `COSMOS_SERPAPI_KEY` | SerpApi (fallback when SearXNG is absent, unavailable, or empty) | `web_search` (`MODE_SERP_API`) |
+//! | `COSMOS_PIRATE_WEATHER_KEY` | Pirate Weather | weather (`MODE_WEATHER`), and the assistant's daily forecast |
+//! | `COSMOS_WOLFRAM_APP_ID` | Wolfram|Alpha LLM API | `wolfram` (`MODE_WOLFRAM`) |
+//! | `COSMOS_PPLX_API_KEY` | Perplexity | `ask_online` (`MODE_PPLX_API`) |
+//! | _(none)_ | Wikipedia | `wikipedia` (`MODE_WIKIPEDIA`) |
+//! | _(Center only)_ OS3 enabled + session cookie | Rabbit OS3 agent service | `ask_os3` |
+//!
+//! **Implemented, not observed:** private SearXNG is an Luma
+//! deployment choice. Its adapter preserves the observed `web_search` tool
+//! boundary. It is not a claim about Humane's internal search infrastructure.
+//!
+//! **Not a stock surface:** OS3 is an optional Luma addition with no
+//! environment seed. Its credential is an expiring browser session cookie, so
+//! the owner enables it and pastes the cookie in Center, and the assistant is
+//! offered `ask_os3` only while both are present.
+//!
+//! Azure Speech additionally accepts `COSMOS_AZURE_SPEECH_VOICE` (default:
+//! `en-US-AvaMultilingualNeural`).
+//!
+//! ## Fidelity note on weather
+//!
+//! cosmos's `WeatherResponse` is an **AccuWeather** payload (a numeric
+//! `weather_icon`, 1–44). Pirate Weather is **Dark Sky**-shaped and reports a
+//! *string* icon from an 11-value default set, with a documented rare `none` and
+//! future `hail`. Every other field maps exactly. The icon is translated through
+//! a documented table in [`weather`], and that translation is an approximation
+//! between two genuinely different vendors, flagged there rather than passed
+//! off as identical.
+
+pub mod azure_speech;
+pub mod food;
+pub mod music;
+pub mod music_discovery;
+pub mod os3;
+pub mod perplexity;
+pub mod places;
+pub mod search;
+pub mod shopping;
+pub mod weather;
+pub mod wikipedia;
+pub mod wolfram;
+
+use std::sync::OnceLock;
+use std::time::Duration;
+
+static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Shared HTTP client for all outbound vendor calls.
+///
+/// Bounded so a wedged vendor cannot consume the wearer's turn: Cosmos keeps the
+/// whole run inside 70 seconds and caps each model step at 20 seconds, so a tool
+/// call must still resolve well inside either bound.
+pub(crate) fn http() -> reqwest::Client {
+    HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .connect_timeout(Duration::from_secs(4))
+            .build()
+            .unwrap_or_default()
+    })
+    .clone()
+}
+
+/// Read a backend setting from Cosmos's provider authority. Environment values
+/// seed that authority on first boot, before Center has saved a configuration.
+///
+/// Returns `None` when unset or blank, which every caller treats as "this
+/// capability is not hosted here", never as a reason to invent a result.
+pub(crate) fn key(var: &str) -> Option<String> {
+    crate::integrations::value(var)
+}
+
+/// A vendor's refusal of a request, as a [`BackendError`], logged with the
+/// vendor and the status only: never the URL, which carries Wolfram's App ID
+/// and SerpApi's key in its query and Pirate Weather's key in its path.
+///
+/// 401 and 403 are a key the vendor does not accept, which the owner fixes in
+/// Center, so the capability is not connected. Anything else (429, 5xx, a
+/// request the vendor rejects) is an outage.
+pub(crate) fn refused(api: &'static str, status: u16) -> BackendError {
+    if matches!(status, 401 | 403) {
+        tracing::warn!(api, status, "the vendor refused the configured key");
+        BackendError::NotConfigured
+    } else {
+        tracing::warn!(api, status, "the vendor refused the request");
+        BackendError::Unavailable
+    }
+}
+
+/// Why a backend call produced no answer. Deliberately carries no vendor payload
+/// and no credential, only enough for the caller to say something honest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendError {
+    /// No credential configured. The capability is not hosted in this deployment.
+    NotConfigured,
+    /// The vendor was reached but returned nothing usable.
+    NoResult,
+    /// Transport, timeout, or an error status from the vendor.
+    Unavailable,
+}
+
+impl BackendError {
+    /// A phrase safe to fold back into the model's transcript. States the
+    /// limitation plainly. Never implies a result exists.
+    pub fn observation(self, capability: &str) -> String {
+        match self {
+            Self::NotConfigured => {
+                format!("No {capability} backend is connected in this deployment.")
+            }
+            Self::NoResult => format!("The {capability} lookup returned no results."),
+            Self::Unavailable => format!("The {capability} backend could not be reached."),
+        }
+    }
+
+    /// A short constant for metrics and logs.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotConfigured => "not_configured",
+            Self::NoResult => "no_result",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}

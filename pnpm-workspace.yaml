@@ -1,0 +1,14 @@
+packages:
+  - center
+  - center/adapters/spotify
+  - pin/device-installer/cli
+
+overrides:
+  postcss: 8.5.26
+  sharp: 0.35.3
+# All native dependencies ship prebuilt platform packages in the lockfile.
+allowBuilds:
+  esbuild: false
+  sharp: false
+  protobufjs: false
+  core-js-bundle: false

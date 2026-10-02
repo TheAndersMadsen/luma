@@ -1,0 +1,33 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.command {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: var(--luma-radius-control, 8px);
+  background: var(--luma-colors-penumbra-200);
+  color: var(--luma-colors-white);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.copy {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--luma-colors-beam-base);
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.copy:hover {
+  text-decoration: underline;
+}

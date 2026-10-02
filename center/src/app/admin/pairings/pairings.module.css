@@ -1,0 +1,100 @@
+/*
+ * The operator's Pin pairing roster. Written in Center's --luma-* tokens and the
+ * shared controls, like the rest of the operator surfaces.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--luma-spacing-base-3);
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--luma-spacing-base-4) var(--luma-spacing-base-2) var(--luma-spacing-base-6);
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--luma-colors-white);
+}
+
+.back {
+  composes: buttonQuiet from "../../../components/controls.module.css";
+  align-self: flex-start;
+}
+
+.intro {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--luma-text-muted);
+  max-width: 680px;
+}
+
+.roster {
+  composes: surface from "../../../components/controls.module.css";
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--luma-spacing-base-2);
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.pin {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.deviceId {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  color: var(--luma-colors-white);
+}
+
+.account {
+  font-size: 14px;
+  color: var(--luma-text-muted);
+}
+
+.blocked {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--luma-colors-white);
+  max-width: 520px;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--luma-text-muted);
+  cursor: pointer;
+}
+
+.release {
+  composes: buttonDanger from "../../../components/controls.module.css";
+}
+
+.empty {
+  padding: 18px 24px;
+  font-size: 15px;
+  color: var(--luma-text-muted);
+}

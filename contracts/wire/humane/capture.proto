@@ -1,0 +1,463 @@
+// Interface definition for the humane.* gRPC wire protocol the stock Ai Pin speaks.
+// Reverse-engineered for interoperability so an unmodified Pin interoperates;
+// field numbers and message shapes match the wire format. No third-party source included.
+syntax = "proto3";
+
+package humane.capture;
+
+import "google/protobuf/timestamp.proto";
+import "humane/common/encryption.proto";
+
+enum ColorSpace {
+  COLOR_SPACE_UNKNOWN = 0;
+  COLOR_SPACE_SRGB = 1;
+}
+
+enum CreateMemoryResultStatus {
+  UNKNOWN_STATUS = 0;
+  CREATE_SUCCESS = 1;
+  CREATE_FAILURE = 2;
+  CREATE_MEMORY_RESULT_STATUS_INTERNAL_FAILURE = 3;
+  CREATE_MEMORY_RESULT_STATUS_THUMBNAIL_DATA_MISSING = 4;
+  CREATE_MEMORY_RESULT_STATUS_BAD_REQUEST = 5;
+}
+
+enum DeleteMemoryStatus {
+  DELETE_MEMORY_STATUS_UNSPECIFIED = 0;
+  DELETE_MEMORY_STATUS_SUCCESS = 1;
+  DELETE_MEMORY_STATUS_NOT_FOUND = 2;
+  DELETE_MEMORY_STATUS_NOT_AUTHORIZED = 3;
+  DELETE_MEMORY_STATUS_FAILURE = 4;
+}
+
+enum ImageFormat {
+  IMAGE_FORMAT_UNKNOWN = 0;
+  IMAGE_FORMAT_JPEG = 1;
+  IMAGE_FORMAT_YUVNV21 = 2;
+}
+
+enum MediaType {
+  UNKNOWN = 0;
+  PHOTO = 1;
+  AUDIO = 2;
+  VIDEO = 3;
+}
+
+enum MemoryType {
+  MEMORY_TYPE_UNSPECIFIED = 0;
+  MEMORY_TYPE_PHOTO = 1;
+  MEMORY_TYPE_VIDEO = 2;
+  MEMORY_TYPE_NOTE = 3;
+  MEMORY_TYPE_FOOD_LOG = 4;
+}
+
+enum PhotoFileFormat {
+  UNKNOWN_FILE_FORMAT = 0;
+  YUVNV21 = 1;
+  JPEG = 2;
+  RGB = 3;
+}
+
+enum UploadCompletionStatus {
+  UNKNOWN_UPLOAD_COMPLETION_STATUS = 0;
+  UPLOAD_SUCCESS = 1;
+  UPLOAD_FAILURE = 2;
+  UPLOAD_FAILURE_FINAL = 3;
+}
+
+message CalibrationData {
+  bool device_should_upload = 1;
+  string filename = 2;
+}
+
+message CameraIntrinsics {
+  float focal_length = 1;
+  FloatMatrix device_transform = 2;
+  float center_x = 3;
+  float center_y = 4;
+  // PACKED float, not a repeated wrapper message. `CameraIntrinsics.java:518`
+  // gives field 5 the descriptor char '$' (FieldType.FLOAT_LIST_PACKED = 36).
+  repeated float distortion = 5;
+  int32 pixels_wide = 6;
+  int32 pixels_height = 7;
+  string serial = 8;
+}
+
+message CaptureBurst {
+  int64 id = 1;
+  int64 index = 2;
+  repeated CaptureFile files = 3;
+  string uuid = 4;
+}
+
+message CaptureFile {
+  int64 id = 1;
+  int64 index = 2;
+  string filename = 3;
+  string metadata_filename = 4;
+  string secure_filename = 5;
+  string secure_raw_data_filename = 6;
+  string uuid = 7;
+  string imu_data_filename = 8;
+  string video_timing_data_filename = 9;
+}
+
+message CaptureRetryConfig {
+  enum CaptureRetryPolicy {
+    CAPTURE_RETRY_POLICY_UNSPECIFIED = 0;
+    CAPTURE_RETRY_POLICY_LINEAR = 1;
+    CAPTURE_RETRY_POLICY_EXPONENTIAL = 2;
+  }
+  int32 num_retries = 1;
+  int32 retry_interval_seconds = 2;
+  CaptureRetryConfig.CaptureRetryPolicy policy = 3;
+}
+
+message CreateMemoryRequest {
+  oneof request {
+    PhotoMemoryRequest photo_memory_request = 1;
+    VideoMemoryRequest video_memory_request = 2;
+    FoodLogMemoryRequest food_log_memory_request = 3;
+    NoteMemoryRequest note_memory_request = 4;
+  }
+}
+
+message CreateMemoryResponse {
+  CreateMemoryResultStatus status = 1;
+  Memory memory = 2;
+  oneof request {
+    PhotoMemoryResponse photo_memory_response = 3;
+    VideoMemoryResponse video_memory_response = 4;
+    FoodLogMemoryResponse food_log_memory_response = 5;
+    NoteMemoryResponse note_memory_response = 6;
+  }
+}
+
+message DeleteMemoryRequest {
+  int64 memory_id = 1;
+  string memory_uuid = 2;
+}
+
+message DeleteMemoryResponse {
+  DeleteMemoryStatus status = 1;
+}
+
+message DeviceCreateNoteRequest {
+  humane.common.encryption.EncryptedData encrypted_note = 1;
+  humane.common.encryption.EncryptedData encrypted_location = 2;
+}
+
+message DeviceCreateNoteResponse {
+  CreateMemoryResultStatus status = 1;
+  string memory_uuid = 2;
+}
+
+message DeviceDeleteAllNotesRequest {
+}
+
+message DeviceDeleteAllNotesResponse {
+}
+
+message DeviceGetRecentNotesRequest {
+  int32 max_items = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+
+message DeviceGetRecentNotesResponse {
+  repeated DeviceGetSingleNoteResponse note_responses = 1;
+}
+
+message DeviceGetSingleNoteResponse {
+  string memory_uuid = 1;
+  humane.common.encryption.EncryptedData encrypted_note = 2;
+  humane.common.encryption.EncryptedData encrypted_location = 3;
+}
+
+message FloatMatrix {
+  int32 rows = 1;
+  int32 cols = 2;
+  // PACKED float. `FloatMatrix.java:289` gives field 3 the char '$' (36).
+  repeated float data = 3;
+}
+
+message FoodLogMemoryRequest {
+  humane.common.encryption.EncryptedData food_log = 1;
+  google.protobuf.Timestamp device_created_time = 2;
+  string device_local_id = 3;
+}
+
+message FoodLogMemoryResponse {
+}
+
+message GetCaptureConfigRequest {
+}
+
+message GetCaptureConfigResponse {
+  int32 num_photos_per_burst = 1;
+  CaptureRetryConfig create_memory_retry_config = 2;
+  CaptureRetryConfig asset_upload_retry_config = 3;
+  CaptureRetryConfig delete_memory_retry_config = 4;
+}
+
+message GetFoodLogSummaryRequest {
+  google.protobuf.Timestamp start_time = 1;
+}
+
+message GetFoodLogSummaryResponse {
+  humane.common.encryption.EncryptedData food_log_summary = 1;
+}
+
+message GetShareLinkContentsRequest {
+  ShareLinkData share_link_data = 1;
+}
+
+message GetShareLinkContentsResponse {
+  bytes decrypted_thumbnail_bytes = 1;
+}
+
+message GetShareLinkRequest {
+  string memory_uuid = 1;
+}
+
+message GetShareLinkResponse {
+  string share_link = 1;
+}
+
+message ISO {
+  int64 boost = 1;
+  int64 sensitivity = 2;
+}
+
+message ImageMetadata {
+  string photo_filename = 1;
+  string burst_id = 2;
+  string memory_id = 3;
+  google.protobuf.Timestamp rgb_timestamp = 4;
+  int32 resolution_width = 5;
+  int32 resolution_height = 6;
+  // PACKED uint32, not a repeated wrapper message. `ImageMetadata.java:978`
+  // gives field 7 the descriptor char '+' (FieldType.UINT32_LIST_PACKED = 43).
+  repeated uint32 strides = 7;
+  ImageFormat format = 8;
+  ColorSpace color_space = 9;
+  OrientationInfo orientation_info = 10;
+  CameraIntrinsics color_intrinsics = 11;
+  ShutterSpeed shutter_speed = 13;
+  ISO iso = 14;
+  float luminance = 15;
+}
+
+message Memory {
+  string id = 1;
+  string uuid = 2;
+}
+
+message MemoryCreateIntentRequest {
+  enum DelayReason {
+    DELAY_REASON_UNSPECIFIED = 0;
+    DELAY_REASON_POOR_NETWORK = 1;
+  }
+  string device_local_id = 1;
+  MemoryType memory_type = 2;
+  MemoryCreateIntentRequest.DelayReason delay_reason = 3;
+}
+
+message MemoryCreateIntentResponse {
+}
+
+message Note {
+  int64 note_id = 1;
+  string text = 2;
+  bool deleted = 3;
+  google.protobuf.Timestamp modified_at = 4;
+  string title = 5;
+  bool completed = 6;
+  google.protobuf.Timestamp reminder_time = 7;
+  int64 device_local_id = 8;
+  string audio_file_name = 9;
+  int64 memory_id = 10;
+  string memory_uuid = 11;
+  string note_uuid = 12;
+  repeated string tags = 13;
+}
+
+message NoteMemoryRequest {
+  humane.common.encryption.EncryptedData encrypted_note = 1;
+  humane.common.encryption.EncryptedData encrypted_location = 2;
+}
+
+message NoteMemoryResponse {
+}
+
+message OrientationInfo {
+  // SINT32 (zigzag), not int32. `OrientationInfo.java:164` gives field 1 the
+  // descriptor char 0x0f (FieldType.SINT32 = 15). The angle is signed,
+  // read as plain int32, the device's -1 decodes as 1 and every negative tilt
+  // comes back mirrored.
+  sint32 horizon_angle = 1;
+}
+
+message PhotoMemoryRequest {
+  int32 num_bursts = 1;
+  int32 num_pics_per_burst = 2;
+  string lut_name = 3;
+  bytes thumbnail_bytes = 4;
+  PhotoFileFormat format = 5;
+  humane.common.encryption.EncryptionInformation encryption_information = 6;
+  humane.common.encryption.EncryptedData thumbnail = 7;
+  humane.common.encryption.EncryptedData encrypted_location = 8;
+  string device_local_id = 9;
+  repeated humane.common.encryption.EncryptedData thumbnails = 10;
+  google.protobuf.Timestamp device_created_time = 11;
+  // INT32, and the unit is hours. The second wire tree
+  // (pin/runtime/core/proto/humane/capture/capture.proto) declared
+  // humane.capture.PhotoMemoryRequest.gmt_offset (12) sint32 until 2026-08-12
+  // and now agrees with this one, cited by symbol and field number, never by
+  // line, because a line citation between two files that are edited
+  // independently rots into a pointer at some other valid field and then reads
+  // as evidence AGAINST the note it was meant to support.
+  // sint32 is a different varint encoding for the same number,
+  // see contracts/wire-divergence.json. Production settles it: the two real
+  // device captures stored by Cosmos (2026-08-07 and 2026-08-08, both inside
+  // Copenhagen's CEST = UTC+2) decoded through THIS declaration to gmt_offset
+  // 2. Read as sint32 the same varint is +1, i.e. winter time, which the
+  // capture dates rule out. Do not "reconcile" this to sint32.
+  int32 gmt_offset = 12;
+  repeated ImageMetadata photo_metadatas = 13;
+}
+
+message PhotoMemoryResponse {
+  repeated CaptureBurst bursts = 1;
+}
+
+message ReportPhotographyExperienceStatusRequest {
+  enum PhotographyExperienceStatus {
+    PHOTOGRAPHY_EXPERIENCE_STATUS_UNSPECIFIED = 0;
+    PHOTOGRAPHY_EXPERIENCE_STATUS_CAMERA_ACQUISITION_ERROR = 1;
+    PHOTOGRAPHY_EXPERIENCE_STATUS_WRITING_TO_DISK_ERROR = 2;
+    PHOTOGRAPHY_EXPERIENCE_STATUS_CRASH = 3;
+  }
+  ReportPhotographyExperienceStatusRequest.PhotographyExperienceStatus status = 1;
+  string custom_message = 2;
+}
+
+message ReportPhotographyExperienceStatusResponse {
+}
+
+message SaveSharedMemoryRequest {
+  string memory_uuid = 1;
+  string signature = 2;
+  int64 expiry = 3;
+  ShareLinkData share_link_data = 4;
+}
+
+message SaveSharedMemoryResponse {
+  string created_memory_uuid = 1;
+}
+
+message ShareLinkData {
+  string memory_uuid = 1;
+  string signature = 2;
+  int64 expiry = 3;
+}
+
+message ShutterSpeed {
+  int64 exposure_time = 1;
+  int64 frame_duration = 2;
+}
+
+message Tag {
+  string text = 1;
+}
+
+message UploadCompleteRequest {
+  int64 memory_id = 1;
+  UploadCompletionStatus success = 2;
+  string memory_uuid = 3;
+  int32 retry_number = 4;
+  int32 max_retries = 5;
+}
+
+message UploadCompleteResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_PROCESSING_STARTED = 1;
+    STATUS_UPLOAD_INCOMPLETE = 2;
+    STATUS_MEMORY_NOT_FOUND = 3;
+    STATUS_INTERNAL_ERROR = 4;
+    STATUS_BAD_REQUEST = 5;
+    STATUS_ACKNOWLEDGED = 6;
+  }
+  UploadCompleteResponse.Status status = 1;
+}
+
+message UploadRequest {
+  enum UploadType {
+    UNSET = 0;
+    IMAGE = 1;
+    VIDEO = 2;
+    AUDIO = 3;
+    METADATA = 4;
+    BYTES = 5;
+    YUV = 6;
+    IMU_DATA = 7;
+    CALIBRATION_DATA = 8;
+    VIDEO_TIMING_DATA = 9;
+  }
+  string filename = 1;
+  UploadRequest.UploadType upload_type = 2;
+  string mime_encoding = 3;
+}
+
+message UploadResponse {
+  string url = 1;
+}
+
+message VideoMemoryRequest {
+  int32 num_videos = 1;
+  bytes thumbnail_bytes = 2;
+  int32 total_video_duration_sec = 3;
+  humane.common.encryption.EncryptionInformation encryption_information = 4;
+  humane.common.encryption.EncryptedData thumbnail = 5;
+  humane.common.encryption.EncryptedData encrypted_location = 6;
+  string device_local_id = 7;
+  google.protobuf.Timestamp device_created_time = 8;
+  // int32 in hours, same as PhotoMemoryRequest.gmt_offset above. The pin tree
+  // declared humane.capture.VideoMemoryRequest.gmt_offset (9) sint32 too until
+  // 2026-08-12 and now agrees with this one
+  // (pin/runtime/core/proto/humane/capture/capture.proto).
+  //
+  // Note the evidence for this field is weaker than for PhotoMemoryRequest's:
+  // no video memory has ever been stored by this deployment, so no live bytes
+  // bear on it and the int32 reading here is inferred from the sibling message.
+  // See contracts/wire-divergence.json, where it is filed at confidence
+  // `inference` for exactly that reason.
+  int32 gmt_offset = 9;
+}
+
+message VideoMemoryResponse {
+  repeated CaptureBurst bursts = 1;
+  CalibrationData calibration_data = 2;
+}
+
+service CaptureService {
+  rpc CreateMemory (CreateMemoryRequest) returns (CreateMemoryResponse);
+  rpc DeclareMemoryCreateIntent (MemoryCreateIntentRequest) returns (MemoryCreateIntentResponse);
+  rpc DeleteMemory (DeleteMemoryRequest) returns (DeleteMemoryResponse);
+  rpc GetCaptureConfig (GetCaptureConfigRequest) returns (GetCaptureConfigResponse);
+  rpc GetFoodLogSummary (GetFoodLogSummaryRequest) returns (GetFoodLogSummaryResponse);
+  rpc GetMemoryShareLink (GetShareLinkRequest) returns (GetShareLinkResponse);
+  rpc GetShareLinkContents (GetShareLinkContentsRequest) returns (GetShareLinkContentsResponse);
+  rpc ReportPhotographyExperienceStatus (ReportPhotographyExperienceStatusRequest) returns (ReportPhotographyExperienceStatusResponse);
+  rpc SaveSharedMemory (SaveSharedMemoryRequest) returns (SaveSharedMemoryResponse);
+  rpc UploadComplete (UploadCompleteRequest) returns (UploadCompleteResponse);
+  rpc UploadFile (UploadRequest) returns (UploadResponse);
+}
+
+service TestingAutomationService {
+  rpc CreateNote (DeviceCreateNoteRequest) returns (DeviceCreateNoteResponse);
+  rpc DeleteAllNotes (DeviceDeleteAllNotesRequest) returns (DeviceDeleteAllNotesResponse);
+  rpc DeleteMemory (DeleteMemoryRequest) returns (DeleteMemoryResponse);
+  rpc GetRecentNotes (DeviceGetRecentNotesRequest) returns (DeviceGetRecentNotesResponse);
+}

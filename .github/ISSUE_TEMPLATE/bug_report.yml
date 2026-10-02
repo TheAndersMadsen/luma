@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in Center, Cosmos, the CLI, or the Pin apps does not do what the README says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check README "Troubleshooting" first. For a security problem, use private
+        vulnerability reporting (SECURITY.md), not this form. Never paste tokens,
+        passwords, Wi-Fi keys, a Pin serial, or another person's data.
+  - type: input
+    id: release
+    attributes:
+      label: Release ID and version
+      description: From `https://YOUR_DOMAIN/api/version` (the `release` and `version` fields), or the commit for a source checkout.
+      placeholder: "0.3.16, release abc123def456…"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Center (the website)
+        - Cosmos (assistant, services, storage)
+        - CLI, bootstrap, setup, deploy, backup, or restore
+        - Pin apps (Device Services, Compatibility Layer, installer)
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead. Quote the exact message.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Settings → Assistant & voice
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: support-bundle
+    attributes:
+      label: Support bundle
+      description: |
+        Run `./luma support-bundle` on the server (from the release folder) and attach the file it names.
+        It is redacted from a fixed list that leaves out secrets; attach it instead of raw logs.
+        If you cannot run it, say why.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Server (provider, Ubuntu version, amd64 or arm64), browser for Center or USB problems, and providers connected (names only, no keys).
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I looked at README "Troubleshooting" and this is not covered there
+          required: true
+        - label: This report contains no secrets, serials, or personal data
+          required: true

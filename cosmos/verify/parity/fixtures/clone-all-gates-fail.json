@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic_clone",
+  "scenario_id": "tool-success",
+  "events": [
+    {
+      "event_id": "tool-complete",
+      "action": "tool.complete",
+      "status": "retryable_error",
+      "final": true,
+      "semantics": ["reports_failure"],
+      "style": ["error_clear"],
+      "at_ms": 900,
+      "recovery": "retry"
+    },
+    {
+      "event_id": "session-open",
+      "action": "intent.accept",
+      "status": "ok",
+      "final": false,
+      "semantics": ["acknowledges"],
+      "style": ["direct", "neutral"],
+      "at_ms": 25,
+      "recovery": "none"
+    },
+    {
+      "event_id": "response-final",
+      "action": "response.finalize",
+      "status": "ok",
+      "final": false,
+      "semantics": ["answers"],
+      "style": ["final", "conversational"],
+      "at_ms": 1800,
+      "recovery": "none"
+    }
+  ]
+}

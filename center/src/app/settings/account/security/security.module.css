@@ -1,0 +1,48 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+  background: var(--luma-colors-penumbra-200);
+}
+
+.editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 240px;
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.field {
+  composes: field from "../../../../components/controls.module.css";
+  letter-spacing: 0.4em;
+}
+
+.hint {
+  margin: 0;
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.primaryButton {
+  composes: buttonPrimary from "../../../../components/controls.module.css";
+}
+
+.secondaryButton {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.editButton {
+  composes: buttonQuietSmall from "../../../../components/controls.module.css";
+}

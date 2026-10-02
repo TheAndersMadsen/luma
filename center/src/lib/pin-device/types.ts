@@ -1,0 +1,414 @@
+export interface MemoryRecord {
+  uuid: string;
+  memory_type: "photo" | "video" | "food_log" | "note";
+  device_local_id: string;
+  created_at: string;
+  status: "pending" | "uploading" | "complete" | "failed";
+  files: string[];
+  thumbnail_count: number;
+  location?: Location;
+}
+
+export interface Location {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  human_readable?: string;
+  full_address?: string;
+}
+
+export type FitnessSessionFilename =
+  | "activity-tracking-summary.csv"
+  | "activity-tracking-location-data.gpx"
+  | "activity-tracking-sensor-data.csv";
+
+export interface FitnessSessionFile {
+  filename: FitnessSessionFilename;
+  size_bytes: number;
+}
+
+export interface FitnessSessionSummary {
+  splits: string;
+  pace: string;
+  elapsed_time: string;
+  cumulative_distance_km: number;
+  moving_time: string;
+  motion_breakdown: string;
+  step_count: number;
+}
+
+export interface FitnessSession {
+  session_id: string;
+  started_at_ms: number;
+  stopped_at_ms: number;
+  duration_ms: number;
+  files: FitnessSessionFile[];
+  summary?: FitnessSessionSummary;
+}
+
+export interface FitnessSessionsResponse {
+  sessions: FitnessSession[];
+}
+
+export interface HealthInfo {
+  status: string;
+  /** Display name. */
+  name?: string;
+  /** Server software version. */
+  version?: string;
+}
+
+export interface ComponentVersionInfo {
+  role: string;
+  label: string;
+  package_name: string;
+  version_name: string | null;
+}
+
+export interface OsVersionInfo {
+  humane_display_version: string | null;
+  android_release: string | null;
+  android_sdk: string | null;
+  security_patch: string | null;
+}
+
+export interface DeviceVersionSnapshot {
+  components: ComponentVersionInfo[];
+  os: OsVersionInfo;
+}
+
+export interface DeviceInfo {
+  display_name: string;
+  server_port?: number;
+  http_bind_addr?: string;
+  grpc_bind_addr?: string;
+  versions?: DeviceVersionSnapshot;
+}
+
+export interface SetupAcceptanceIdentity {
+  device_serial: string;
+  release_version: string;
+  edge_ipv4: string;
+}
+
+export interface SetupAcceptanceConfirmation extends SetupAcceptanceIdentity {
+  schema_version: 1;
+  release_id: string;
+  confirmed_at_epoch_ms: number;
+}
+
+export interface SetupAcceptanceResponse {
+  schema_version: 1;
+  current: SetupAcceptanceIdentity;
+  confirmation: SetupAcceptanceConfirmation | null;
+}
+
+export interface ConfirmSetupAcceptanceRequest extends SetupAcceptanceIdentity {
+  schema_version: 1;
+  release_id: string;
+  checks: {
+    microphone: true;
+    speaker: true;
+    gesture: true;
+  };
+}
+
+/**
+ * GET /api/settings, as far as Center reads it: the Pin server's own settings
+ * and the diagnostics install gate. The Pin reports more. Center ignores it.
+ */
+export interface Settings {
+  /** True while a persisted listener or Pin-local provider awaits restart. */
+  restart_required?: boolean;
+  server: {
+    /** Explicit wire capability. The secret itself is never returned. */
+    admin_token_auth?: boolean;
+    display_name?: string;
+    /** Expose the authenticated dashboard API on Wi-Fi after restart. */
+    lan_dashboard_enabled?: boolean;
+  };
+  dev?: {
+    apk_install_enabled?: boolean;
+  };
+}
+
+/** Partial update request, only include fields you want to change. */
+export interface UpdateSettingsRequest {
+  server?: {
+    display_name?: string;
+    /** Write-only. Omission leaves the LAN/USB administration token unchanged. */
+    admin_token?: string;
+    /** Takes effect after the server process restarts. */
+    lan_dashboard_enabled?: boolean;
+    /** Write-only. Enables the authenticated Iroh listener after restart. */
+    iroh_remote_center_enabled?: boolean;
+    /** Write-only bridge EndpointIds accepted by the Iroh listener after restart. */
+    iroh_remote_center_allowed_peers?: string[];
+  };
+  dev?: {
+    apk_install_enabled?: boolean;
+  };
+}
+
+export interface IrohTicketResponse {
+  ticket: string;
+  node_id: string;
+}
+
+export type SpotifyStatusState =
+  | "disabled"
+  | "not_configured"
+  | "pairing"
+  | "ready"
+  | "error";
+
+import type { MusicProvider } from "@/lib/contracts/music";
+
+/** Safe, credential-free Spotify runtime status returned by the Pin. */
+export interface SpotifyStatusResponse {
+  active_provider: MusicProvider;
+  enabled: boolean;
+  experimental_acknowledged: boolean;
+  state: SpotifyStatusState;
+  device_name: string;
+  username?: string;
+  engine_ready: boolean;
+  pairing_expires_at?: string;
+  last_error?: string;
+}
+
+/** Spotify pairing settings. Passwords, client secrets, and tokens are never accepted. */
+export interface SpotifySettingsRequest {
+  active_provider?: MusicProvider;
+  enabled: boolean;
+  experimental_acknowledged: boolean;
+  device_name: string;
+}
+
+export type SpotifySearchKind = "track";
+
+export interface SpotifySearchTrack {
+  id: string;
+  title: string;
+  artists: string[];
+  album?: string;
+  duration_ms?: number;
+  explicit?: boolean;
+}
+
+export interface SpotifySearchResponse {
+  items: SpotifySearchTrack[];
+}
+
+export interface SettingsGlobalFeatureGate {
+  key: string;
+  label: string;
+  default: boolean;
+  restart_recommended: boolean;
+  /** False when the backend exposes this gate for status/recovery only. */
+  writable: boolean;
+  warning?: string | null;
+  stored_value?: boolean | null;
+  current_value?: boolean | null;
+  source: "stored" | "default" | "unavailable";
+  available: boolean;
+  error?: string | null;
+}
+
+/**
+ * The part of `GET /api/feature-flags` Center reads: the on-device
+ * Settings.Global gates. The Pin also reports its own cloud-flag assignment set
+ * there, which Center ignores: stock fetches cloud flags from Cosmos
+ * (`FeatureFlagsService.GetFlags`), edited on /settings/account/features.
+ */
+export interface FeatureFlagsResponse {
+  settings_global_gates: SettingsGlobalFeatureGate[];
+  settings_global_note: string;
+}
+
+export interface UpdateFeatureFlagsRequest {
+  /** Settings.Global patch. Bool stores 0/1, null deletes the key. */
+  settings_global: Record<string, boolean | null>;
+}
+
+export type CellularServiceStatus =
+  | "working"
+  | "off"
+  | "error"
+  | "no_service"
+  | "limited"
+  | string;
+
+export type CellularServiceReason =
+  | "validated"
+  | "mobile_data_disabled"
+  | "radio_off"
+  | "network_denied"
+  | "emergency_only"
+  | "out_of_service"
+  | "connected_no_internet"
+  | "no_data_connection"
+  | "searching"
+  | "telephony_unavailable"
+  | "permission_missing"
+  | string;
+
+export type CellularServiceState =
+  | "unknown"
+  | "in_service"
+  | "out_of_service"
+  | "emergency_only"
+  | "power_off"
+  | string;
+
+export type CellularDataConnectionState =
+  | "unknown"
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "suspended"
+  | string;
+
+export interface CellularServiceDetails {
+  operator_name: string | null;
+  network_type: string;
+  service_state: CellularServiceState;
+  signal_level: number | null;
+  signal_dbm: number | null;
+  mobile_data_enabled: boolean;
+  data_connected: boolean;
+  data_connection_state: CellularDataConnectionState;
+  internet_validated: boolean;
+  reject_cause?: number;
+}
+
+export interface CellularServicePayload {
+  status: CellularServiceStatus;
+  reason: CellularServiceReason;
+  message: string;
+  cellular_usable: boolean;
+  details: CellularServiceDetails;
+}
+
+export interface CellularServiceStatusResponse {
+  type:
+    | "cellular.status_result"
+    | "cellular.status_error"
+    | "cellular.status_timeout"
+    | string;
+  request_id?: string | null;
+  payload?:
+    | CellularServicePayload
+    | { message?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+export interface SetEnabledRequest {
+  enabled: boolean;
+}
+
+/**
+ * PUT /api/wifi/set-enabled: the bridge's `wifi.set_enabled_result`, or its
+ * error (502), timeout (504) or internal failure (503) in the same shape.
+ */
+export interface WifiSetEnabledResponse {
+  type:
+    | "wifi.set_enabled_result"
+    | "wifi.set_enabled_error"
+    | "device.toggle_timeout"
+    | "device.toggle_error"
+    | string;
+  request_id?: string | null;
+  payload?: {
+    result?: "success" | string;
+    enabled?: boolean;
+    message?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface EsimEvent {
+  type: string;
+  request_id?: string;
+  action?: string;
+  payload?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface EsimSnapshot {
+  connected: boolean;
+  requests: EsimRequestRecord[];
+}
+
+export interface EsimRequestRecord {
+  request_id: string;
+  action: string;
+  status:
+    | "pending"
+    | "waiting_accept"
+    | "accepted"
+    | "running"
+    | "completed"
+    | "error"
+    | string;
+  accepted: boolean;
+  events: EsimEvent[];
+  final_event: EsimEvent | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface EsimProfile {
+  name?: string;
+  state?: string;
+  iccid: string;
+  service_provider?: string;
+  nickname?: string;
+  protected?: boolean;
+  [key: string]: unknown;
+}
+
+export interface EsimProfilesResult {
+  type?: string;
+  result?: string;
+  count?: number;
+  profiles?: EsimProfile[];
+  payload?: {
+    result?: string;
+    count?: number;
+    profiles?: EsimProfile[];
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface EsimDeviceIdentifiersPayload {
+  result?: string;
+  eid?: string;
+  imei?: string | null;
+  raw_lastintent_result?: string;
+  [key: string]: unknown;
+}
+
+export interface EsimEidResult {
+  type?: "esim.device_identifiers_result" | string;
+  result?: string;
+  eid?: string;
+  imei?: string | null;
+  payload?: EsimDeviceIdentifiersPayload;
+  [key: string]: unknown;
+}
+
+export interface EsimRequestAcceptedResponse {
+  request_id: string;
+}
+
+export type EsimOperationStatus = "idle" | "pending" | "success" | "error";
+
+export type StreamEvent =
+  | { type: "memory_created"; memory: MemoryRecord }
+  | { type: "memory_completed"; uuid: string }
+  | { type: "memory_failed"; uuid: string }
+  | { type: "memory_deleted"; uuid: string }
+  | { type: "heartbeat" };

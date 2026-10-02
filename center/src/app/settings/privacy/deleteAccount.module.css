@@ -1,0 +1,39 @@
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 24px 22px;
+}
+
+.confirm label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 320px;
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.field {
+  composes: field from "../../../components/controls.module.css";
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.dangerButton {
+  composes: buttonDanger from "../../../components/controls.module.css";
+}
+
+.secondaryButton {
+  composes: buttonSecondary from "../../../components/controls.module.css";
+}
+
+.startButton {
+  composes: buttonQuietSmall from "../../../components/controls.module.css";
+}

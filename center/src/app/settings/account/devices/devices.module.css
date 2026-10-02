@@ -1,0 +1,226 @@
+/*
+ * Settings → My Ai Pin. Additive styles for the Saved Wi-Fi Networks list, the
+ * honest-absent device rows, and the marked "Pin setup" addition. Shared
+ * section/InfoRow chrome is imported read-only from settings.module.css. Only
+ * the Wi-Fi- and pairing-specific bits live here.
+ *
+ * `.hiddenTag` is gone: the "Hidden" marker is now <StatusChip variant="tag">,
+ * the same idiom the console's override marker and the Ai Mic's source marker
+ * use, so three tag vocabularies became one.
+ */
+
+.wifiRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.wifiRow:last-child {
+  border-bottom: none;
+}
+
+.overviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  background: var(--luma-divider);
+}
+
+.overviewCard {
+  min-width: 0;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 20px 24px;
+  background: var(--luma-colors-penumbra-base);
+}
+
+.overviewCard[data-tone="live"] .overviewValue {
+  color: var(--luma-status-live);
+}
+
+.overviewCard[data-tone="warning"] .overviewValue {
+  color: var(--luma-status-warning);
+}
+
+.overviewLabel,
+.overviewDetail {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--luma-text-muted);
+}
+
+.overviewValue {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.deviceDetails {
+  border-top: 1px solid var(--luma-divider);
+}
+
+.deviceDetails summary {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  color: var(--luma-text-muted);
+  cursor: pointer;
+}
+
+.deviceDetails[open] summary {
+  color: var(--luma-colors-white);
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.wifiMain {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wifiIcon {
+  flex: none;
+  color: var(--luma-colors-crater-base);
+}
+
+.wifiText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wifiSsid {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wifiMeta {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--luma-colors-crater-base);
+}
+
+/*
+ * The sealed-envelope row's explanation.
+ *
+ * `.wifiMeta` carries one short token ("WPA3 Personal"). This carries two
+ * sentences saying why a real saved network has no name on screen. It must wrap
+ * rather than sit on one clipped line, or the reason disappears and the row
+ * reads as the bug it replaced.
+ */
+.wifiSealedMeta {
+  composes: wifiMeta;
+  max-width: 620px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+/* ------------------------------------------------- Pin setup (addition) -- */
+
+.pairOpenButton {
+  composes: buttonSecondary from "../../../../components/controls.module.css";
+}
+
+.pairCancel {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.deviceClaimRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--luma-divider);
+}
+
+.deviceClaimHeading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.unpairButton,
+.unpairConfirmButton {
+  composes: buttonQuiet from "../../../../components/controls.module.css";
+}
+
+.unpairConfirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 300px;
+}
+
+.unpairWarning,
+.unpairError {
+  font-size: 12px;
+  color: var(--luma-colors-crater-base);
+  text-align: right;
+}
+
+.unpairError {
+  color: var(--luma-status-danger);
+}
+
+.unpairActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 700px) {
+  .overviewGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .deviceClaimRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .unpairConfirm {
+    align-items: flex-start;
+  }
+
+  .unpairWarning,
+  .unpairError {
+    text-align: left;
+  }
+}
+
+.deviceActions {
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  flex: none;
+}
+
+.blockNote {
+  display: block;
+  margin-top: 6px;
+  color: var(--luma-colors-crater-base);
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 460px;
+}

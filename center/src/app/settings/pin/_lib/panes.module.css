@@ -1,0 +1,410 @@
+/*
+ * The device-settings panes (server, eSIM, flags, diagnostics, fitness).
+ *
+ * This file adds NOTHING that ../pin.module.css already says. Every shape the
+ * Pin console already has, the row band, the field stack, the buttons, the
+ * monospace device string, the chip row, is `composes:`d from there, so the
+ * settings panes and the Connect/Install panes cannot drift apart: change a
+ * metric in pin.module.css and it moves here too.
+ *
+ * What is genuinely new here is what only a *settings form* needs: a toggle
+ * row, a key/value evidence grid, the write-only secret field, the save bar, a
+ * repeated device record (an eSIM profile, a flag, a workout), and a blocking
+ * operation dialog.
+ *
+ * Written exclusively in the --luma-* tokens from globals.css. Zero lines of the
+ * standalone SPA's vendored PenumbraOS theme cross into Center.
+ */
+
+/* ------------------------------------------------------- from the console -- */
+
+/* One labelled control, on the console's own row band and field metrics. */
+.formRow {
+  composes: form from "../pin.module.css";
+}
+
+.field {
+  composes: field from "../pin.module.css";
+}
+
+.formLabel {
+  composes: fieldLabel from "../pin.module.css";
+}
+
+.formHelp {
+  composes: fieldHint from "../pin.module.css";
+  margin: 0;
+  max-width: 640px;
+}
+
+.formHelp code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--luma-colors-apollo-base);
+}
+
+.formHelp a {
+  color: var(--luma-colors-beam-base);
+}
+
+.input {
+  composes: fieldInput from "../pin.module.css";
+  max-width: 560px;
+}
+
+.inputWide {
+  composes: fieldInput from "../pin.module.css";
+}
+
+.mono {
+  composes: mono from "../pin.module.css";
+}
+
+.chipRow {
+  composes: chipRow from "../pin.module.css";
+}
+
+.actionRow {
+  composes: actions from "../pin.module.css";
+}
+
+.saveState {
+  composes: busy from "../pin.module.css";
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.primaryButton {
+  composes: button from "../pin.module.css";
+}
+
+.secondaryButton {
+  composes: buttonQuiet from "../pin.module.css";
+}
+
+.quietButton {
+  composes: buttonQuiet from "../pin.module.css";
+}
+
+.dangerButton {
+  composes: buttonDanger from "../pin.module.css";
+}
+
+.smallButton {
+  composes: buttonQuietSmall from "../../../../components/controls.module.css";
+  flex: none;
+}
+
+/* ------------------------------------------------------- new to settings -- */
+
+/* Copy on the left, one <Switch> on the right. */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.toggleCopy {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+  max-width: 520px;
+}
+
+/* Key/value evidence: what the device reports, in its own words. */
+.factList {
+  display: grid;
+  grid-template-columns: minmax(140px, max-content) 1fr;
+  gap: 8px 20px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.factList dt {
+  color: var(--luma-colors-crater-base);
+  font-weight: 500;
+}
+
+.factList dd {
+  margin: 0;
+  color: var(--luma-colors-apollo-base);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The whole editable body of a pane, disabled as one while a save is in flight.
+ * A <fieldset> is the only element that can do that to every descendant control
+ * at once. It carries no visual role here, so its own chrome is removed.
+ */
+.fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* A tag that shares a line with a row title ("Operators only"). */
+.inlineTag {
+  composes: additionTag from "../../settings.module.css";
+  margin-left: 8px;
+}
+
+/* A text-weight control that lives inline with a field ("Undo", "Clear"). */
+.linkButton {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--luma-colors-beam-base);
+  font-family: var(--luma-font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.linkButton:disabled {
+  color: var(--luma-text-muted);
+  cursor: not-allowed;
+}
+
+/* The save affordance above every editable pane. */
+.saveBar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: var(--gap-size);
+}
+
+.saveStateSaved {
+  color: var(--luma-colors-beam-base);
+}
+
+/* A right-aligned band above a read-only pane (Refresh, last-updated). */
+.actionRowEnd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: var(--gap-size);
+}
+
+/*
+ * The band a clear-all lives in, unarmed and armed.
+ *
+ * It sits in the pane BODY rather than in the section header, which is where a
+ * single-step "Delete all" used to go: once armed it has a whole sentence to
+ * show, and a header that reflows around a paragraph moves the buttons under
+ * the pointer that just armed it.
+ */
+.clearRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 0 24px var(--gap-size);
+}
+
+.clearQuestion {
+  margin: 0;
+  max-width: 640px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-status-danger);
+}
+
+/* ---------------------------------------------------------------- chips -- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+  text-transform: uppercase;
+  color: var(--luma-colors-crater-base);
+}
+
+.chipWarning {
+  color: var(--luma-status-warning);
+}
+
+.chipLive {
+  color: var(--luma-status-live);
+}
+
+/* ---------------------------------------------------------------- lists -- */
+
+/* One repeated device record: an eSIM profile, a flag, a workout. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.card:last-child {
+  border-bottom: none;
+}
+
+.cardHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cardTitleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cardTitleLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cardTitle {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+  margin: 0;
+}
+
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--luma-text-muted);
+}
+
+/* --------------------------------------------------------- secret field -- */
+
+.secretField {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 560px;
+}
+
+/*
+ * What a STORED credential looks like. The Pin never returns one, so this is
+ * the only representation there is, and it is a mask, not a value, so no
+ * device credential ever reaches the DOM.
+ */
+.secretMask {
+  flex: 1;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 11px 14px;
+  border-radius: var(--luma-radius-control);
+  background: var(--luma-colors-penumbra-200);
+  box-shadow: var(--outline-shadow);
+  color: var(--luma-colors-crater-base);
+  font-size: 15px;
+  letter-spacing: 2px;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------- overlays -- */
+
+/* A blocking device operation the wearer must not navigate away from. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.overlayCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(420px, 100%);
+  padding: 24px;
+  border-radius: var(--luma-radius-raised);
+  background: var(--luma-colors-penumbra-base);
+  box-shadow: var(--menu-drop-shadow);
+}
+
+.overlayTitle {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--luma-colors-white);
+}
+
+.overlayCopy {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--luma-colors-crater-base);
+}
+
+.spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  border-top-color: var(--luma-colors-beam-base);
+  animation: paneSpin 900ms linear infinite;
+}
+
+@keyframes paneSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------ responsive - */
+
+@media (max-width: 700px) {
+  .card {
+    padding: 16px;
+  }
+
+  .toggleRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .factList {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+
+  .factList dd {
+    margin-bottom: 10px;
+  }
+}

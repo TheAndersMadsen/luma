@@ -1,0 +1,54 @@
+{
+  "name": "luma-center",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "dev": "bun --bun next dev --turbopack -H 0.0.0.0 -p 4000",
+    "build": "bun --bun next build",
+    "start": "bun --bun next start -p 4000",
+    "typecheck": "bun --bun tsc --noEmit",
+    "test": "bun test --isolate --timeout=30000 verify/*.test.mjs",
+    "test:ui": "bun --bun vitest run",
+    "test:all": "pnpm run typecheck && pnpm test && pnpm run test:ui",
+    "test:share": "bun test --isolate --timeout=30000 verify/capture-share.test.mjs"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "@tanstack/react-query": "^5.62.0",
+    "@xterm/xterm": "^6.0.0",
+    "@yume-chan/adb": "^2.6.0",
+    "@yume-chan/adb-daemon-webusb": "^2.3.2",
+    "@yume-chan/stream-extra": "^2.5.3",
+    "bgutils-js": "4.0.3",
+    "core-js-bundle": "3.50.0",
+    "flatbuffers": "^25.9.23",
+    "jose": "^5.9.6",
+    "jsdom": "30.0.1",
+    "next": "^15.5.23",
+    "qrcode.react": "^4.2.0",
+    "quickjs-emscripten": "0.32.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "youtubei.js": "18.0.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.4",
+    "@types/jsdom": "30.0.0",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "bun": "1.4.2"
+  }
+}

@@ -1,0 +1,34 @@
+.layout {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: calc(24px + env(safe-area-inset-top))
+    calc(24px + env(safe-area-inset-right))
+    calc(120px + env(safe-area-inset-bottom))
+    calc(24px + env(safe-area-inset-left));
+}
+
+.header {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 28px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .layout {
+    padding-left: calc(16px + env(safe-area-inset-left));
+    padding-right: calc(16px + env(safe-area-inset-right));
+  }
+
+  .header h1 {
+    font-size: 26px;
+  }
+}

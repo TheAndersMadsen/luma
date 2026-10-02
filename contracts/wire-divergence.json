@@ -1,0 +1,1188 @@
+{
+  "schemaVersion": 1,
+  "id": "wire-tree-divergence",
+  "summary": "The repository holds two independently authored copies of the same stock wire contract. They declare the same proto packages, the same message names and the same gRPC service and method names, so both compile into servers that answer identical RPC paths. This file is the complete, mechanically derived inventory of where they disagree, classified by what the disagreement does to the bytes.",
+  "state": "ALL NINE BYTE-CHANGING DIVERGENCES ARE RESOLVED. The last two - humane.provisioning.VerifyHmcAssociationRequest fields 1 and 2 - were settled on 2026-08-12 from the stock client's own decompiled class, which declares HMC_ID_FIELD_NUMBER = 1 and DEVICE_ID_VERIFICATION_SIGNATURE_FIELD_NUMBER = 2, and the pin tree was corrected onto that layout. The wire-incompatible class is now empty, and so is semantic-only: the three enum numbers that meant two different things were decided the same way, from the client's own enum classes, all three for contracts. Two of those corrections are NOT free - they change what the device does when a release containing them is installed - and they are listed, with what changes and what to check, under `stagedForRelease`. Nothing in this file now says the device is doing something it is not. The build compares the two trees: platform/deploy/acceptance/wire-equivalence.test.mjs parses both and asserts that the set of field numbers they encode differently is EXACTLY the wire-incompatible list below - today, empty - and, since 2026-08-12, that every entry here still says what the trees say.",
+  "whatWasFixedAndWhy": "The rule applied, so that the next person can apply the same one: a divergence was corrected in place only where the correction could not change a byte the runtime in question emits or a value it acts on. Every free pin-side correction clears that bar - the runtime decodes those fields and never reads them (gmt_offset, horizon_angle), or answers with an empty repeated field whose encoding is zero bytes under either declaration (secure_wifi_configs), or renames an enum value whose NAME is not on the wire and whose number the runtime never emits (OpaqueLoginStatusCode 2, SubscriptionStatusCode 3). The one contracts-side correction clears it too: no client has ever sent RunState.agent_to_runs. A correction that WOULD change an emitted byte is not made silently and is not left undone either: it is made in the tree, recorded under `stagedForRelease` with what moves and what to check, and held there until a Pin release containing it is installed. Two changes are in that state - humane.capture.DeleteMemoryStatus, where the store-error arm moves from 3 to 4, and humane.provisioning.VerifyHmcAssociationRequest, where the pairing request starts decoding. That is the line between a contract cleanup and a Pin release, and it is drawn at what goes on the wire, not at which directory the file is in. The line the FIRST pass drew - leave it in place with a verdict and an action - was one step short: it left the tree knowingly wrong, which the equivalence gate then had to be told to tolerate forever.",
+  "stagedForRelease": {
+    "note": "The two corrections in this pass that are NOT free. Every other pin-side correction in this file could be made in place because it provably could not change a byte the runtime emits or a value it acts on; these two change what the device does the moment a release containing them is installed, so the source is correct and the DEVICE IS NOT. That gap is the thing this block exists to keep visible: a reader who sees the pin tree agreeing with the contracts tree would otherwise conclude the divergence is gone from the running system, and it is not. It is gone from the next build.",
+    "howItIsHeld": "platform/deploy/acceptance/wire-equivalence.test.mjs parses the pin tree and asserts that every `points` row below is exactly what that tree now declares, that it differs from `wasBefore`, that the two trees AGREE there (a staged correction is one that moves the pin tree onto the stock layout, so a disagreement means the staging is wrong), that no staged point is still listed in `entries`, and that README.md#connect-a-pin carries the install note by `id`. So this block cannot claim a change that was not made, cannot survive the change being reverted, and cannot ship without the note that tells the installer what moves.",
+    "clearingIt": "A change leaves this list when a Pin release containing it has been installed on the device and the `installCheck` has been run - not when the release is built, and not when it is shipped to the server. Until then the honest reading of this file is: the tree is right, the device is one release behind it.",
+    "changes": [
+      {
+        "id": "delete-memory-status-4",
+        "symbol": "humane.capture.DeleteMemoryStatus",
+        "stagedOn": "2026-08-12",
+        "points": [
+          {
+            "kind": "enum-value",
+            "symbol": "humane.capture.DeleteMemoryStatus",
+            "at": 3,
+            "pin": "DELETE_MEMORY_STATUS_NOT_AUTHORIZED",
+            "wasBefore": "DELETE_MEMORY_STATUS_FAILURE"
+          },
+          {
+            "kind": "enum-value",
+            "symbol": "humane.capture.DeleteMemoryStatus",
+            "at": 4,
+            "pin": "DELETE_MEMORY_STATUS_FAILURE",
+            "wasBefore": null
+          }
+        ],
+        "whatChangesOnTheWire": "One arm of one RPC. Capture.DeleteMemory's store-error arm - the `Err(_)` branch of pin/runtime/core/src/services/capture.rs - emits 4 where it emitted 3. The success (1) and not-found (2) arms are byte-identical, and nothing else in the runtime references this enum. `DeleteMemoryStatus::Failure` in that handler follows the declaration, so there is no second edit to forget and no way to install one half of the change.",
+        "untilItIsInstalled": "The device keeps answering 3, which a stock client decodes as NOT_AUTHORIZED: a failed delete is reported to the wearer as a refusal. Cosmos already answers 4 for the same outcome, so until this is installed the two servers on the same RPC path disagree by construction.",
+        "installCheck": "Delete a memory the loopback runtime cannot delete and read the status number off the response - `>>> Capture.DeleteMemory` is already logged on entry, and the store-error arm already logs 'failed to delete memory' next to it, so the pair identifies the arm without adding instrumentation. Expect 4. Deleting a memory that does not exist must still answer 2 and a successful delete must still answer 1; if either moved, the enum was renumbered rather than corrected.",
+        "ifItIsWrong": "Bounded. 4 is a value the stock client's forNumber() knows, so the worst case is a wearer told FAILURE for something that was really a refusal - and this runtime refuses nothing on the loopback path, so that case does not arise. Reverting is the same two-line enum edit in the other direction plus a rebuild."
+      },
+      {
+        "id": "verify-hmc-association-field-order",
+        "symbol": "humane.provisioning.VerifyHmcAssociationRequest",
+        "stagedOn": "2026-08-12",
+        "points": [
+          {
+            "kind": "field",
+            "symbol": "humane.provisioning.VerifyHmcAssociationRequest",
+            "at": 1,
+            "pin": "string hmc_id",
+            "wasBefore": "humane.provisioning.VerificationSignature device_id_verification_signature"
+          },
+          {
+            "kind": "field",
+            "symbol": "humane.provisioning.VerifyHmcAssociationRequest",
+            "at": 2,
+            "pin": "humane.provisioning.VerificationSignature device_id_verification_signature",
+            "wasBefore": "string hmc_id"
+          }
+        ],
+        "whatChangesOnTheWire": "What the runtime ACCEPTS, not what it says. Both field numbers are length-delimited under either declaration, so the framing was never the problem: with the fields swapped, a string decoder was handed a serialized VerificationSignature and rejected it as non-UTF-8, and a message decoder was handed an hmc_id string and could not parse it as protobuf. prost decodes before the handler is called, so the call died there and the wearer got InvalidArgument with the blame on the caller. After this, the same bytes parse. The ANSWER does not move: verify_hmc_association takes `_request` and returns SUCCESS unconditionally, before and after.",
+        "untilItIsInstalled": "A stock VerifyHmcAssociation against the device's loopback server fails to decode. Nothing else on the pairing path is affected - VerifyHmcByPass, CreateLoginInit and CreateLoginFinish were never in dispute - and the cloud side has always decoded this message with the layout the pin tree now uses.",
+        "installCheck": "Run pairing and watch for the existing `>>> Provisioning.VerifyHmcAssociation` log line. prost decodes the request BEFORE the handler runs, so reaching that line at all is proof the framing was accepted; its absence during a pairing attempt, or an InvalidArgument on that method, is the same evidence with the opposite sign. This is settling experiment (2) from the verdict, run as an install check rather than as a question - the artifact already answered the question.",
+        "ifItIsWrong": "The failure mode is unchanged from today's: InvalidArgument on one method of the onboarding service, loudly, at decode time. It cannot produce a wrong ANSWER, because the handler never reads the request. Reverting is swapping the two field numbers back."
+      }
+    ]
+  },
+  "trees": {
+    "contracts": {
+      "root": "contracts/wire",
+      "compiledBy": [
+        "cosmos/crates/protocol/build.rs",
+        "center/src/server/cosmos.ts (COSMOS_CONTRACTS_DIR)"
+      ],
+      "servesTo": "the stock client over the network, through the deployed edge"
+    },
+    "pin": {
+      "root": "pin/runtime/core/proto",
+      "compiledBy": [
+        "pin/runtime/core/build.rs"
+      ],
+      "servesTo": "the stock client over device loopback (config.toml grpc_bind_addr, default 127.0.0.1:9090)"
+    }
+  },
+  "whyItMatters": "Both trees are reconstructions of one original contract, so at most one can be right per divergence and the stock client's encoder is the fixed thing neither can negotiate with. proto3 binary encoding carries field NUMBERS and wire types only - never field names, message names or enum value names - so a large share of the divergence below cannot be observed at runtime at all. That was the hazard: the disagreements that do change bytes are mixed in with dozens that cannot, and until 2026-08-12 no build, test or deploy gate distinguished them. One does now - see `gate` - but the parser can only ever tell you THAT the two copies differ and what the difference does to the bytes. It cannot tell you which copy is faithful, because the stock client's encoder is not in this repository. That question is answered one verdict at a time, from recovered artifacts and production bytes, and `verdicts` below is the ledger.",
+  "citationPolicy": "Cross-tree citations - in this file and in the comments of both proto trees - name a fully-qualified symbol plus its field number, never `path:LINE`. Five line citations were checked on 2026-08-10 and all five were stale; three of them landed on a real, syntactically valid int32 field in the sibling tree, so a reviewer following the pointer to verify 'the other tree declares this sint32' saw an int32 and would reasonably have concluded the divergence note was wrong. A symbol citation cannot rot when either file is edited. If a `path:LINE` citation is ever reintroduced, the equivalence gate described under `gate` should resolve it and fail when the cited line is blank or a comment - that alone would have caught all five.",
+  "wireClasses": {
+    "wire-incompatible": "Same field number, different wire layout (varint vs zigzag-varint, message vs scalar, singular vs repeated). One side's bytes are misread or rejected by the other.",
+    "wire-compatible-value-risk": "Same field number and wire type; the declared types differ only in range, sign or validation (int32/int64, uint32/int32, bytes/string). Identical bytes for ordinary values; diverges at the edges, and a string decoder additionally enforces UTF-8.",
+    "semantic-only": "PURE RENAME - NO. Same enum number, two names that mean DIFFERENT things: the trees disagree about what the number denotes. The number on the wire is identical, so this class can never fail loudly. Applies to kind=enum-value only. The bar is MEANING and not spelling, and it was applied loosely once: on 2026-08-12 four rows filed here turned out to be the prefix convention or a synonym and moved to name-only, leaving three. See the 'the semantic-only class as a whole' verdict. Filing a rename here is not a safe overstatement - it buries the row that is real.",
+    "shape-subset": "Referenced types agree on every shared field number, but one side declares fields the other does not. The extra fields decode as unknown fields and are dropped in silence.",
+    "relocated-type": "Same field number and identical wire layout; only the referenced symbol's spelling or nesting differs. No effect on the bytes.",
+    "name-only": "PURE RENAME. The two trees agree on everything the wire carries and on the MEANING, and differ only in spelling. Nothing here reaches the bytes - but generated code, JSON transcoding and Center's protobuf.js property names all follow the name. Applies to three kinds: kind=field (same field number, wire type and label; only the field's own name differs), kind=enum-value (same enum number, same meaning, different spelling of the value name - e.g. humane.capture.MediaType UNKNOWN/PHOTO/AUDIO/VIDEO vs MEDIA_TYPE_*, a prefix convention), and kind=method (same request and response types; only the method's own name differs).",
+    "presence-only": "Declared on one side only. Encoded by one, dropped as an unknown field by the other."
+  },
+  "classKindMatrix": {
+    "note": "Every (class, kind) pair that occurs in `entries`, stated explicitly so a gate implemented from the definitions above has one unambiguous mapping. A pair not listed here does not occur; an entry that would need one is a new class question, not a judgement call at classification time. The distinction that carries the enum-value rows: name-only is a RENAME (same meaning), semantic-only is a CONFLICT (same number, different meaning). Two classes that this file used to contain are now EMPTY and are absent from `counts` and from this matrix rather than listed as zero: wire-incompatible, because all nine byte-changing divergences are resolved, and semantic-only, because all three surviving enum-meaning conflicts were decided from the stock client's own enum classes on 2026-08-12. Their definitions stay in `wireClasses` - the vocabulary is what a future entry gets classified against, and the wire-incompatible definition in particular is what the equivalence gate enforces set-equality against. An empty class is a burn-down, not a deleted rule.",
+    "wire-compatible-value-risk": [
+      "field"
+    ],
+    "shape-subset": [
+      "field"
+    ],
+    "relocated-type": [
+      "field"
+    ],
+    "name-only": [
+      "field",
+      "enum-value",
+      "method"
+    ],
+    "presence-only": [
+      "field",
+      "enum-value"
+    ]
+  },
+  "counts": {
+    "wire-compatible-value-risk": 9,
+    "shape-subset": 1,
+    "relocated-type": 25,
+    "name-only": 15,
+    "presence-only": 45
+  },
+  "verdicts": [
+    {
+      "symbol": "humane.capture.PhotoMemoryRequest.gmt_offset (12)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "Live production data, read-only, 2026-08-10. The deployed Cosmos decodes with the contracts tree (int32). The two real photo memories in the cosmos database - created 2026-08-07T21:40:23Z and 2026-08-08T17:41:02Z, with 7.1 MB and 3.0 MB thumbnail blobs, so device captures rather than fixtures - both hold gmt_offset = 2. Europe/Copenhagen was UTC+2 (CEST) on both dates, which is what an int32 read of the wire varint 2 yields. Under the pin tree's sint32 the same varint decodes to +1, i.e. UTC+1, which is Copenhagen's WINTER offset and contradicts the capture dates. So the field is int32 and its unit is hours, not seconds.",
+      "resolved": "2026-08-12. The pin tree now declares int32. The earlier action here said to defer this to a Pin release with a device test, on the ground that the pin runtime is installed on a live device; what that reasoning missed is that the change cannot reach the device's behaviour at all. pin/runtime/core/src/services/capture.rs reads num_bursts, num_pics_per_burst, device_created_time, encrypted_location, device_local_id and thumbnails out of PhotoMemoryRequest and never gmt_offset, so the mis-decoded value was discarded on arrival; the tag and wire type are identical under both declarations, so no request that parsed before stops parsing; and the runtime never re-encodes this message. The deferral was protecting a behaviour that does not exist.",
+      "corroborated": "2026-08-12. The decompiled `humane.capture.PhotoMemoryRequest` gives field 12 the descriptor char 0x04 (FieldType.INT32 = 4). That is a second, independent line of evidence for a verdict that already rested on production bytes, and the two agree: int32, hours. Worth recording because the production argument turns on a timezone offset that would read as plausible under either declaration to anyone checking in winter."
+    },
+    {
+      "symbol": "humane.capture.VideoMemoryRequest.gmt_offset (9)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "SETTLED 2026-08-12, and NOT by the experiment this verdict asked for. It asked for one stored video memory, because the production evidence for the sibling photo field covers photo memories only and no video memory has ever been stored by this deployment. The decompiled `humane.capture.VideoMemoryRequest` answers it without one: its `newMessageInfo` descriptor gives field 9 the char 0x04 (FieldType.INT32 = 4), with the objects array naming gmtOffset_ in the ninth position. int32, exactly as inferred from the sibling message. The same read confirms `humane.capture.PhotoMemoryRequest.gmt_offset (12)` independently of the production rows that settled it - char 0x04 there too - so the two capture gmt_offset verdicts now agree at descriptor level and at value level.",
+      "whyThisMatters": "This is the verdict that was RIDING ON AN INFERENCE while the pin tree had already been changed on the strength of it. The first pass allowed that because a wrong inference there cost a re-edit rather than a wrong value in flight - the runtime never reads the field. The reasoning was sound and the answer was right, but it stayed unchecked for a day against an artifact that could have overturned it in one line, which is the same mistake the two open byte-changing fields were sitting on.",
+      "resolved": "2026-08-12 (declaration), confirmed 2026-08-12 (evidence). The pin tree declares int32 and that is now the artifact's reading rather than a sibling's."
+    },
+    {
+      "symbol": "humane.capture.OrientationInfo.horizon_angle (1)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "The contracts tree cites the decompiled descriptor directly: OrientationInfo.java:164 gives field 1 the descriptor char 0x0f, FieldType.SINT32 = 15. The pin tree's own comment on the same field said 'Reconstructed - exact fields unknown, treated as opaque', so it asserted nothing that could outweigh that. cosmos/crates/protocol/src/lib.rs pins the same reading from the other end, decoding hand-written device bytes in orientation_info_from_the_device_decodes_a_negative_angle.",
+      "resolved": "2026-08-12. The pin tree now declares sint32 horizon_angle, matching the descriptor char. Free to correct: no line of pin/runtime/core/src references OrientationInfo, so the mirrored angle (the device's -7 read as 13) was decoded and dropped, and the field name change cannot break a compile that never named it."
+    },
+    {
+      "symbol": "humane.capture.ImageMetadata.strides (7)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "The contracts tree cites ImageMetadata.java:978, descriptor char '+', FieldType.UINT32_LIST_PACKED = 43. The pin tree declares repeated int32 with no evidence. Both are packed varint, so the bytes agree for the non-negative values a stride can actually take; the citation still settles which declaration is faithful."
+    },
+    {
+      "symbol": "humane.account.ListSecureWifiConfigsResponse.secure_wifi_configs (1) and the whole of humane.account.WifiConfig",
+      "faithful": "contracts",
+      "confidence": "medium",
+      "evidence": "The whole verdict rests on the FIELD SET. The pin tree's WifiConfig{ssid, psk, security_type, hidden, priority, eap_method, phase2_method, ca_certificate, identity, anonymous_identity, password, domain} is the field set of an Android WifiConfiguration / wpa_supplicant entry, not of a stock Humane message; it is a locally invented shape that happens to occupy the stock name. The contracts declaration - repeated humane.common.encryption.EncryptedData - is consistent with the rest of that tree, where every wearer secret crosses the wire sealed.",
+      "notEvidence": "That the deployed backend returns EncryptedData proves nothing about the stock contract, and it was the leading ground here until 2026-08-10. Cosmos COMPILES the contracts tree: cosmos/crates/cosmos/src/services/account.rs reads a stored blob with read_blob::<ListSecureWifiConfigsResponse> and replays it, and the module doc records that the stored bytes are the prost encoding of that same response type. Cosmos returning EncryptedData therefore only restates which proto Cosmos was built with. Anyone re-checking this verdict should skip that leg; the field-set argument above is what carries it.",
+      "writePath": "An admin-only HTTP route does write this blob kind - cosmos/crates/cosmos/src/http.rs `admin_wifi` requires the admin header, accepts already-encrypted envelopes only, and does put_account_blob(AccountBlobKind::WifiConfigs). It has never been used on this deployment (cosmos_account_blob holds no wifi_configs row). So the kind is unused rather than read-only; describing it as read-only, as store.rs does, overstates it.",
+      "resolved": "2026-08-12. The pin tree now declares `repeated humane.common.encryption.EncryptedData secure_wifi_configs = 1`, and the invented WifiConfig message was deleted with it (it is now listed under onlyInContracts.messages, i.e. absence rather than conflict). pin/runtime/core/src/services/wifi_config.rs and the Axum round-trip test in pin/runtime/core/src/main.rs were updated for the field name; both still answer with an empty list, and an empty repeated field encodes to zero bytes under either declaration, so nothing on the wire changed. The confidence stays medium - this is still the field-set argument and not an artifact citation - but the risk that used to justify deferring it is gone: the correction removed a latent plaintext-credential shape without touching a byte the runtime emits.",
+      "action": "Still latent in the other direction: if that handler is ever taught to return rows, they must be sealed envelopes. The stock-shaped WifiConfig it would seal is in contracts/wire/humane/account.proto."
+    },
+    {
+      "symbol": "humane.account.AuthorizationType",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "Two unrelated types under one fully-qualified name. The contracts tree's {UNSPECIFIED, WEP, WPA, OPEN, WPA2, WPA3_PERSONAL} is Wi-Fi security and is the declared type of WifiConfig.authorization_type. The pin tree's {UNKNOWN, OAUTH, DAC} was device authorization and was referenced by NO field in the pin descriptor set and by no line of pin/runtime/core/src - it was dead, and it was the reason a name-level comparison of the two trees reported a conflict where the wire had none.",
+      "resolved": "2026-08-12. The dead pin-side declaration was deleted along with the invented WifiConfig that was its only neighbour. Zero wire effect and zero build effect, as recorded. This is where three of the ten former semantic-only rows went: AuthorizationType 0, 1 and 2 were not a disagreement about what a number MEANS at all, they were two different enums colliding on one name, and deleting the squatter is the only fix that makes the collision go away rather than documenting it forever."
+    },
+    {
+      "symbol": "humane.aibus.RunState.agent_to_runs (1)",
+      "faithful": "pin",
+      "confidence": "medium",
+      "evidence": "The only inventoried divergence where the pin tree is the better reconstruction. It declares map<string, Runs> agent_to_runs, which is what the field name states and what the sibling Runs message exists to hold; contracts declared a singular bytes field, which is that file's placeholder for an unresolved type - it carried 28 bare bytes fields to the pin copy's 4. A map encodes as repeated length-delimited MapEntry submessages, so the bytes reading kept only the last entry's raw bytes and discarded every other agent's runs with no error.",
+      "resolved": "2026-08-12. The contracts tree now declares map<string, Runs>. This is a Cosmos-side decode change and it landed with the Cosmos test the action asked for: cosmos/crates/cosmos/src/assistant/bidi.rs::a_run_state_seed_is_skipped_not_fatal now seeds TWO agents rather than an opaque byte string, which is the shape that distinguishes the two declarations - a one-entry seed passes under both, because `bytes` keeps the last entry and there is only one. Safe on a live deployment because the field has never carried traffic: the shipped device does not send StreamingUnderstandRequest.initial_run_state, and the handler accepts and skips it. humane.aibus.RunState.AgentToRunsEntry left onlyInPin.messages in the same change - protoc synthesises it on both sides now."
+    },
+    {
+      "symbol": "humane.provisioning.SubscriptionStatusCode (3), humane.provisioning.HmcAssociationResponseCode (3, 4), humane.provisioning.VerifyHmcAssociationResponse.name_to_display (2), humane.provisioning.VerifyHmcByPassRequest",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "Was medium on a superset argument; the decompiled classes settle all four points on 2026-08-12. `humane.provisioning.SubscriptionStatusCode` declares UNSPECIFIED 0, ACTIVE 1, AVAILABLE 2, SUSPENDED 3, PAUSED 4, BLOCKED 5, DEACTIVATED 6 - so 3 is SUSPENDED, the pin tree's INACTIVE at 3 was invented, and the behavioural note the contracts tree already carried (that humane.provisioning and humane.account each define a DISTINCT enum of this name, and that the device's forNumber(6) returns null and logs 'Invalid subscription status update. Not updating.') stands. `humane.provisioning.VerifyHmcByPassRequest` declares DEVICE_ID_VERIFICATION_SIGNATURE_FIELD_NUMBER = 1 and DEVICE_ID_FIELD_NUMBER = 2, which is the contracts layout; the pin copy declares the message empty.",
+      "correction": "This verdict used to say the pin copy drops 'the signature and device_id the stock client sends'. That overstates what any artifact shows, and the repository already contained the correction: cosmos/crates/cosmos/src/services/provisioning.rs reads the same decompiled client and records that `checkHMCBypass` and `checkSubscription` BUILD THEIR REQUESTS EMPTY, which is why Cosmos classes this RPC's signature as Attestation::MaySkip rather than AlwaysSigned. The fields exist in the stock message; on the shipped client path they normally arrive unset. So the pin handler answering ALLOWED without inspecting them is a shape divergence and a missing-check-by-construction, not evidence that a check the client expects is being skipped - and adding the fields to the pin tree would change no byte and refuse no call that is refused today. It is not staged for that reason.",
+      "resolved": "2026-08-12, partially. SubscriptionStatusCode 3 is corrected in the pin tree to SUBSCRIPTION_STATUS_CODE_SUSPENDED and lands free: the name is not on the wire, pin/runtime/core/src/services/provisioning.rs emits only SubscriptionStatusCode::Active (1), and no Rust identifier named the old variant. Values 4, 5 and 6 stay absent, as does HmcAssociationResponseCode 3 and 4, VerifyHmcAssociationResponse.name_to_display (2) and the whole of VerifyHmcByPassRequest's field set: this tree reconstructs what its runtime serves, and declaring a value nothing emits or a field nothing reads would change no byte in either direction. They stay recorded as presence-only, which is what that class is for."
+    },
+    {
+      "symbol": "humane.provisioning.VerifyHmcAssociationRequest (1, 2, 3)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "SETTLED 2026-08-12 by this verdict's own settling experiment (1), which is the one of the three that never needed the device. The stock client's generated class `humane.provisioning.VerifyHmcAssociationRequest` declares HMC_ID_FIELD_NUMBER = 1, DEVICE_ID_VERIFICATION_SIGNATURE_FIELD_NUMBER = 2 and DEVICE_ID_FIELD_NUMBER = 3. Its `newMessageInfo` descriptor says the same thing a second time and independently of the constants: field 1 carries the char 0x0208 (FieldType.STRING with the utf8 check), field 2 the char 0x09 (FieldType.MESSAGE), field 3 the char 0x0208, and the objects array names hmcId_, deviceIdVerificationSignature_, deviceId_ in that order. That is the contracts layout exactly. It is also the same class of artifact - a descriptor char read out of newMessageInfo - that settled OrientationInfo.horizon_angle and ImageMetadata.strides, so this verdict now rests on what the other high-confidence verdicts here rest on rather than on the house pattern. The house pattern was right; it is simply no longer what carries the claim.",
+      "wherePreviouslyLooked": "The class evidence comes from an operator-owned stock image outside this repository. The citation names the generated class and constants because those survive decompiler changes while line numbers do not.",
+      "resolved": "2026-08-12. The pin tree now declares `string hmc_id = 1; VerificationSignature device_id_verification_signature = 2;`. This is the FIRST pin-side correction in this file that is not free, so it is staged rather than landed: see `stagedForRelease`. Under the old declaration a stock pairing call did not decode at all - a string decoder rejects a serialized VerificationSignature as non-UTF-8 and a message decoder cannot parse an hmc_id string as protobuf - so the runtime answered InvalidArgument and blamed the caller. Under the new one it parses. What it does NOT change is any value the runtime acts on: verify_hmc_association in pin/runtime/core/src/services/provisioning.rs takes `_request` and answers SUCCESS unconditionally, before and after. device_id (3) stays absent here, as presence-only: it arrives as an unknown field and is dropped, and declaring it would change no byte."
+    },
+    {
+      "symbol": "humane.capture.ShutterSpeed (1, 2), humane.capture.ISO (1, 2)",
+      "faithful": "contracts",
+      "confidence": "inference",
+      "evidence": "Both sides are varint, so the bytes agree; the trees disagree about MEANING. The contracts names - exposure_time, frame_duration, sensitivity, boost - map one to one onto android.hardware.camera2 CaptureResult keys (SENSOR_EXPOSURE_TIME, SENSOR_FRAME_DURATION, SENSOR_SENSITIVITY, SENSOR_SENSITIVITY_BOOST), which is what a camera pipeline on this hardware reports, and int64 matches those keys' nanosecond ranges. The pin names - numerator, denominator, value - are a generic EXIF-rational reading. Same number of varints on the wire either way, so no runtime signal distinguishes them."
+    },
+    {
+      "symbol": "field name spellings: userid/userID, targetid/targetID, reversegeocodedlocation/reverse_geocoded_location, singlesender/singleSender, stalestatus/stale_status, deletekids/delete_kids, exportedkeys/exported_keys, base_64_encoded_image/base64_encoded_image, subscribedexperiencestatuses/subscribedExperienceStatuses",
+      "faithful": "unknown",
+      "confidence": "none",
+      "evidence": "Field names are not on the wire, so nothing at runtime can settle these and nothing at runtime is harmed by them. The contracts spellings look like the lowercased *_FIELD_NUMBER constant; the pin spellings look like the Java field identifier normalized to snake_case. Either could be the original. Resolve from the APK's newMessageInfo object array, or leave alone."
+    },
+    {
+      "symbol": "humane.provisioning.OpaqueLoginStatusCode (2)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "SETTLED 2026-08-12 by this verdict's own settling experiment - value 2's name from the same decompiled enum class that already supplied RATE_LIMIT_HIT to cosmos/crates/cosmos/src/enrollment.rs. The class reads UNSPECIFIED 0, SUCCESSFUL_REQUEST 1, SERVER_EXCEPTION 2, RATE_LIMIT_HIT 3, MISSING_REGISTRATION 4. The inference recorded here - that a Java enum class hands over every constant at once, so a decompile of it was in hand when the contracts copy was written, and that the two trees agreeing spelling-for-spelling at 0, 1, 3 and 4 looks like an edited copy rather than two independent readings - was correct.",
+      "resolved": "2026-08-12. The pin tree now declares OPAQUE_LOGIN_STATUS_SERVER_EXCEPTION = 2 and the invented MISSING_HMC is gone. Free to correct, and therefore landed rather than staged: an enum value NAME is not on the wire at all, and both servers emit only SUCCESSFUL_REQUEST (1) - pin/runtime/core/src/services/provisioning.rs and cosmos/crates/cosmos/src/services/provisioning.rs - so no byte either process sends changes and no Rust identifier in pin/runtime/core/src named the old variant."
+    },
+    {
+      "symbol": "humane.capture.DeleteMemoryStatus (3)",
+      "faithful": "contracts",
+      "confidence": "high",
+      "kind": "was semantic-only, and the only one that was SERVED",
+      "evidence": "SETTLED 2026-08-12 by this verdict's own settling experiment, the decompiled enum class, and the shape argument it replaces was right: `humane.capture.DeleteMemoryStatus` declares UNSPECIFIED 0, SUCCESS 1, NOT_FOUND 2, NOT_AUTHORIZED 3, FAILURE 4, and its forNumber() returns null above 4. The confidence moves from medium to high and the grounds change completely - it used to be 'NOT_AUTHORIZED is not a value a reconstruction invents', which is a plausibility argument about an author, and it is now the client's own constant table.",
+      "whatWasWrong": "Every Pin build before this correction answered a store error on Capture.DeleteMemory with 3, which a stock client decodes as DELETE_MEMORY_STATUS_NOT_AUTHORIZED - a failed delete reported to the wearer as a refusal, which is a different thing to say and a different thing to retry. cosmos/crates/cosmos/src/services/capture.rs compiles the contracts tree and answered the identical outcome with 4, so the same failure carried two different numbers depending on which server handled it. That is exactly the failure the semantic-only class exists to warn about: nothing throws.",
+      "resolved": "2026-08-12, and STAGED, not landed: the pin tree now declares NOT_AUTHORIZED = 3 and FAILURE = 4, and `DeleteMemoryStatus::Failure` in the handler follows the declaration automatically, so the store-error arm will emit 4 the moment a release containing this is installed and there is no way to install half of it. The running build on the device still emits 3. See `stagedForRelease` for what changes and what to check; the earlier `action` note on this verdict asked for exactly this and is now discharged.",
+      "downsideIfWrong": "Bounded, and smaller than it was recorded as being. The old note said a stock client that does not know 4 reports an unrecognized status; the decompiled class shows it does know 4, and maps it to FAILURE. The only remaining way to be wrong here is if the paired device's build predates the enum that was decompiled, which would make 4 unrecognized rather than misread - a worse-looking failure, not a worse-behaving one."
+    },
+    {
+      "symbol": "humane.aibus calendar automation messages and TestAutomationService methods",
+      "faithful": "contracts",
+      "confidence": "high",
+      "evidence": "SETTLED 2026-08-16 from the stock system-navigation client's generated protobuf-lite classes. `humane.aibus.CalendarEvent` declares TITLE 1, LOCATION 2, DESCRIPTION 3, STARTTIME 4, ENDTIME 5, RECURRENCERULE 6, ATTENDEES 7, MEETINGINFO 8, STATUS 9, CALENDARID 10 and EVENTID 11; its descriptor identifies the two dates and meeting information as messages and the recurrence and attendee fields as repeated. `CalendarEventDate` declares Timestamp 1 and timezone string 2. `ConferenceData` declares URI 1, PINCODE 2 and ACCESSCODE 3. `CreateNewCalendarEventsRequest` is repeated CalendarEvent at 1; its response is repeated string createdEventIds at 1 and string calendarId at 2. `GetCalendarEventsRequest` is string calendarId 1, int32 maxCount 2 and repeated string eventIds 3; its response is repeated CalendarEvent at 1. `InitializedCalendarResponse` carries string calendarId at 1. The generated gRPC class declares the four unary methods lowerCamel: `generateFullMethodName(SERVICE_NAME, \"createNewCalendarEvents\")`, `deleteAllCalendarEvents`, `getCalendarEvents` and `initializeCalendar`, and `WebSearchServiceGrpc` likewise declares `search`. This is direct artifact evidence for the typed schema, not an inference from the clone handler.",
+      "resolved": "2026-08-16. contracts/wire/humane/aibus.proto now carries those exact field numbers, scalar/message kinds and repetition labels. Cosmos stores and returns the typed messages in services/aibus_extra.rs, with lifecycle coverage for initialize, create, filtered read and delete. 2026-09-23: the contracts tree had declared those four rpcs and WebSearchService.Search PascalCase, and tonic routes the rpc name verbatim, so every stock-spelled path answered UNIMPLEMENTED. No stock caller exercises these stubs, so no device ever hit it. aibus.proto and cosmos/crates/core/src/registry.rs now carry the stock spelling, and `every_stock_method_path_routes_to_a_handler` in services/aibus_extra.rs sends each of the 98 registry paths through the real per-workload servers. The pin tree does not declare these test-automation-only messages, so they remain correctly listed under onlyInContracts rather than being manufactured into the loopback runtime."
+    },
+    {
+      "symbol": "the semantic-only class as a whole",
+      "faithful": "contracts",
+      "confidence": "high",
+      "audit": "2026-08-12, second pass. The class held ten rows in the morning, three after the first pass corrected the record, and none by the end of the day - every one of the three genuine enum-meaning conflicts was decided from the stock client's own enum class, and all three decided FOR the contracts tree. DeleteMemoryStatus (3) is NOT_AUTHORIZED, OpaqueLoginStatusCode (2) is SERVER_EXCEPTION, SubscriptionStatusCode (3) is SUSPENDED. The class is therefore empty and is absent from `counts` rather than listed as zero; its definition stays in `wireClasses` because the next entry to be classified needs the vocabulary.",
+      "howTheyWereDecided": "One artifact, three answers, and none of it needed the device. A protobuf-lite enum class carries every constant and its number in one table, so the cost of settling a fourth or a fifth would have been the same. The lesson worth keeping is the ORDER the first pass got wrong: two of these three had a `settledBy` that named a decompile, and both were left open behind experiments that required a device that cannot be touched. The decompile was the cheap experiment the whole time.",
+      "whatIsLeft": "Nothing in this class, and the one reachable case is discharged: DeleteMemoryStatus (3) was the only semantic-only row ever SERVED, and its correction is staged under `stagedForRelease`. The other two were unreachable in both directions - every server in this repository emits only OPAQUE_LOGIN_STATUS_SUCCESSFUL_REQUEST (1) and SUBSCRIPTION_STATUS_CODE_ACTIVE (1) - so no wearer was ever told a wrong reason by either of them."
+    }
+  ],
+  "howToRegenerate": {
+    "note": "Requires protoc and the python protobuf package. Field lists below mirror the two build scripts.",
+    "steps": [
+      "protoc -I contracts/wire --include_imports --descriptor_set_out=/tmp/contracts.desc $(proto list from cosmos/crates/protocol/build.rs)",
+      "protoc -I pin/runtime/core/proto --include_imports --descriptor_set_out=/tmp/pin.desc $(PROTO_FILES from pin/runtime/core/build.rs)",
+      "Compare the two FileDescriptorSets by fully-qualified name: for every message, enum and service present in BOTH, diff per field number (name, type, label, type_name), per enum value number, and per method signature."
+    ]
+  },
+  "gate": "Both halves run, under platform/deploy/acceptance. wire-divergence.test.mjs holds this FILE to its own rules - counts, the (class, kind) matrix, the citation policy, and that every cited symbol still exists in a tree. wire-equivalence.test.mjs parses both TREES with a self-contained proto3 parser (no protoc: it is not a deploy-time dependency here, and a gate that skips when its tool is missing is green exactly where it matters least) and asserts that the set of shared field numbers the two trees encode differently is EXACTLY the wire-incompatible list below. Set equality in both directions is the point: a new byte-changing divergence fails because it is not listed, and a fixed one fails because it still is. Since 2026-08-12 it also holds every ENTRY to the source, which is the direction that rotted first: an entry's recorded `contracts` and `pin` declarations must be exactly what the two trees declare at that number, a presence-only entry's null side must really not declare it, and an entry with both sides present must still actually differ. That one check subsumes three separate ways the record used to be able to drift - a divergence silently fixed, a divergence silently changed into a different divergence, and a presence-only row whose absent side quietly acquired the field - and it is what makes an empty wire-incompatible class trustworthy rather than merely short. `stagedForRelease` is held the same way, against the pin tree and against README.md#connect-a-pin. Deliberately NOT failed on: renames, relocated types, int32-against-int64, and enum values respelled into the prefix convention. A gate that broke the build for a rename would be switched off within the week, so the classification in this file is the granularity, and its own entries are the allowlist. The enum half is checked at meaning rather than spelling: a shared enum number whose two names differ after stripping the enum's own UPPER_SNAKE prefix must be classified here as name-only or semantic-only - and a presence-only row no longer silences that check, because 'the other tree does not declare this' stops being true the moment it does.",
+  "entries": [
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.aibus.FunctionCall",
+      "at": 4,
+      "contracts": "bytes reversegeocodedlocation",
+      "pin": "string reverse_geocoded_location"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.aibus.MessageCompositionRequest",
+      "at": 3,
+      "contracts": "bytes userid",
+      "pin": "string userID"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.aibus.MessageCompositionRequest",
+      "at": 4,
+      "contracts": "bytes targetid",
+      "pin": "string targetID"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.aibus.MessageForSummarization",
+      "at": 2,
+      "contracts": "bytes userid",
+      "pin": "string userID"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.capture.ISO",
+      "at": 1,
+      "contracts": "int64 boost",
+      "pin": "int32 value"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.capture.ImageMetadata",
+      "at": 7,
+      "contracts": "repeated uint32 strides",
+      "pin": "repeated int32 strides"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.capture.ShutterSpeed",
+      "at": 1,
+      "contracts": "int64 exposure_time",
+      "pin": "int32 numerator"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.capture.ShutterSpeed",
+      "at": 2,
+      "contracts": "int64 frame_duration",
+      "pin": "int32 denominator"
+    },
+    {
+      "class": "wire-compatible-value-risk",
+      "kind": "field",
+      "symbol": "humane.provisioning.GetAssignedUserResponse",
+      "at": 1,
+      "contracts": "bytes userid",
+      "pin": "string user_id"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.CreateMemoryResultStatus",
+      "at": 0,
+      "contracts": "UNKNOWN_STATUS",
+      "pin": "CREATE_MEMORY_RESULT_STATUS_UNSPECIFIED"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.CreateMemoryResultStatus",
+      "at": 1,
+      "contracts": "CREATE_SUCCESS",
+      "pin": "CREATE_MEMORY_RESULT_STATUS_SUCCESS"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.CreateMemoryResultStatus",
+      "at": 2,
+      "contracts": "CREATE_FAILURE",
+      "pin": "CREATE_MEMORY_RESULT_STATUS_FAILURE"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.provisioning.VerifyHmcByPassResponseCode",
+      "at": 2,
+      "contracts": "VERIFY_HMC_BY_PASS_RESPONSE_CODE_DISALLOWED",
+      "pin": "VERIFY_HMC_BY_PASS_RESPONSE_CODE_NOT_ALLOWED"
+    },
+    {
+      "class": "shape-subset",
+      "kind": "field",
+      "symbol": "humane.pushrelay.PushMessageResponse",
+      "at": 1,
+      "contracts": "repeated humane.common.push.PushMessage push_messages",
+      "pin": "repeated humane.pushrelay.PushMessage push_messages"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.CanTranslateRequest",
+      "at": 1,
+      "contracts": "humane.common.Locale from",
+      "pin": "humane.aibus.Locale from"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.CanTranslateRequest",
+      "at": 2,
+      "contracts": "humane.common.Locale to",
+      "pin": "humane.aibus.Locale to"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateConversationConfig",
+      "at": 1,
+      "contracts": "humane.common.Locale device_locale",
+      "pin": "humane.aibus.Locale device_locale"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateConversationConfig",
+      "at": 2,
+      "contracts": "humane.common.Locale conversation_locale",
+      "pin": "humane.aibus.Locale conversation_locale"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateConversationConfig",
+      "at": 3,
+      "contracts": "repeated humane.common.Locale additional_conversation_locales",
+      "pin": "repeated humane.aibus.Locale additional_conversation_locales"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateConversationResponse",
+      "at": 2,
+      "contracts": "humane.common.Locale transcript_locale",
+      "pin": "humane.aibus.Locale transcript_locale"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateConversationResponse",
+      "at": 4,
+      "contracts": "humane.common.Locale translation_locale",
+      "pin": "humane.aibus.Locale translation_locale"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateTextRequest",
+      "at": 2,
+      "contracts": "humane.common.Locale from",
+      "pin": "humane.aibus.Locale from"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateTextRequest",
+      "at": 3,
+      "contracts": "humane.common.Locale to",
+      "pin": "humane.aibus.Locale to"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.aibus.TranslateTextResponse",
+      "at": 2,
+      "contracts": "humane.common.Locale locale",
+      "pin": "humane.aibus.Locale locale"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.capture.CaptureRetryConfig",
+      "at": 3,
+      "contracts": "humane.capture.CaptureRetryConfig.CaptureRetryPolicy policy",
+      "pin": "humane.capture.CaptureRetryPolicy policy"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.capture.MemoryCreateIntentRequest",
+      "at": 3,
+      "contracts": "humane.capture.MemoryCreateIntentRequest.DelayReason delay_reason",
+      "pin": "humane.capture.DelayReason delay_reason"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.capture.ReportPhotographyExperienceStatusRequest",
+      "at": 1,
+      "contracts": "humane.capture.ReportPhotographyExperienceStatusRequest.PhotographyExperienceStatus status",
+      "pin": "humane.capture.PhotographyExperienceStatus status"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.capture.UploadCompleteResponse",
+      "at": 1,
+      "contracts": "humane.capture.UploadCompleteResponse.Status status",
+      "pin": "humane.capture.UploadCompleteStatus status"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.capture.UploadRequest",
+      "at": 2,
+      "contracts": "humane.capture.UploadRequest.UploadType upload_type",
+      "pin": "humane.capture.UploadType upload_type"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.contacts.SocialHandle",
+      "at": 1,
+      "contracts": "humane.contacts.SocialHandle.SocialProvider social_provider",
+      "pin": "humane.contacts.SocialProvider social_provider"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.contacts.SocialProviderAttribute",
+      "at": 1,
+      "contracts": "humane.contacts.SocialProviderAttribute.SocialProviderAttributeEnum type",
+      "pin": "humane.contacts.SocialProviderAttributeEnum type"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.EstablishWrappingKeysRequest",
+      "at": 1,
+      "contracts": "humane.krypton.grpc.key.ClearKey clear_key",
+      "pin": "humane.privacy.grpc.pub.ClearKey clear_key"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.EstablishWrappingKeysResponse",
+      "at": 2,
+      "contracts": "humane.krypton.grpc.key.ClearKey clear_key",
+      "pin": "humane.privacy.grpc.pub.ClearKey clear_key"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.ExportableKey",
+      "at": 3,
+      "contracts": "humane.krypton.grpc.key.WrappedKey wrapped_key",
+      "pin": "humane.privacy.grpc.pub.WrappedKey wrapped_key"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.ExportableKey",
+      "at": 4,
+      "contracts": "humane.krypton.grpc.key.ClearKey clear_key",
+      "pin": "humane.privacy.grpc.pub.ClearKey clear_key"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.ExportableKey",
+      "at": 6,
+      "contracts": "humane.krypton.grpc.auth.Credentials creds",
+      "pin": "humane.privacy.grpc.pub.Credentials creds"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.ImportableKey",
+      "at": 2,
+      "contracts": "humane.krypton.grpc.key.WrappedKey wrapped_key",
+      "pin": "humane.privacy.grpc.pub.WrappedKey wrapped_key"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.ImportableKey",
+      "at": 3,
+      "contracts": "humane.krypton.grpc.key.ClearKey clear_key",
+      "pin": "humane.privacy.grpc.pub.ClearKey clear_key"
+    },
+    {
+      "class": "relocated-type",
+      "kind": "field",
+      "symbol": "humane.pushrelay.PushMessageRequest",
+      "at": 5,
+      "contracts": "humane.common.push.PushConnectionType conn_type",
+      "pin": "humane.pushrelay.PushConnectionType conn_type"
+    },
+    {
+      "class": "name-only",
+      "kind": "method",
+      "symbol": "humane.aibus.AIBusService",
+      "at": "EncryptedStreamAIBus",
+      "contracts": "(stream humane.aibus.EncryptedAIRequest) returns (stream humane.aibus.EncryptedAIResponse)",
+      "pin": "(stream humane.aibus.EncryptedAiRequest) returns (stream humane.aibus.EncryptedAiResponse)"
+    },
+    {
+      "class": "name-only",
+      "kind": "field",
+      "symbol": "humane.aibus.AnalyzeImageRequest",
+      "at": 1,
+      "contracts": "string base_64_encoded_image",
+      "pin": "string base64_encoded_image"
+    },
+    {
+      "class": "name-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ConversationSummarizationRequest",
+      "at": 2,
+      "contracts": "bool singlesender",
+      "pin": "bool singleSender"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.MediaType",
+      "at": 0,
+      "contracts": "UNKNOWN",
+      "pin": "MEDIA_TYPE_UNKNOWN"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.MediaType",
+      "at": 1,
+      "contracts": "PHOTO",
+      "pin": "MEDIA_TYPE_PHOTO"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.MediaType",
+      "at": 2,
+      "contracts": "AUDIO",
+      "pin": "MEDIA_TYPE_AUDIO"
+    },
+    {
+      "class": "name-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.MediaType",
+      "at": 3,
+      "contracts": "VIDEO",
+      "pin": "MEDIA_TYPE_VIDEO"
+    },
+    {
+      "class": "name-only",
+      "kind": "field",
+      "symbol": "humane.common.encryption.LocationEnvelope",
+      "at": 5,
+      "contracts": "humane.common.encryption.LocationStaleStatus stalestatus",
+      "pin": "humane.common.encryption.LocationStaleStatus stale_status"
+    },
+    {
+      "class": "name-only",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.SyncKeysResponse",
+      "at": 1,
+      "contracts": "repeated bytes deletekids",
+      "pin": "repeated bytes delete_kids"
+    },
+    {
+      "class": "name-only",
+      "kind": "field",
+      "symbol": "humane.privacy.grpc.pub.SyncKeysResponse",
+      "at": 2,
+      "contracts": "repeated humane.privacy.grpc.pub.ExportableKey exportedkeys",
+      "pin": "repeated humane.privacy.grpc.pub.ExportableKey exported_keys"
+    },
+    {
+      "class": "name-only",
+      "kind": "field",
+      "symbol": "humane.pushrelay.PushMessageResponse",
+      "at": 2,
+      "contracts": "repeated humane.pushrelay.SubscribedExperienceStatus subscribedexperiencestatuses",
+      "pin": "repeated humane.pushrelay.SubscribedExperienceStatus subscribedExperienceStatuses"
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ActionExecutionTestRequest",
+      "at": 1,
+      "contracts": "humane.aibus.ActionExecutionTestRequest.Mode mode",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ActionExecutionTestResponse",
+      "at": 1,
+      "contracts": "bool success",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ActionExecutionTestResponse",
+      "at": 2,
+      "contracts": "string error_message",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ServerStatefulUnderstandRequest",
+      "at": 1,
+      "contracts": "string transcription",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ServerStatefulUnderstandRequest",
+      "at": 2,
+      "contracts": "humane.aibus.Audio audio_bytes",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ServerStatefulUnderstandRequest",
+      "at": 3,
+      "contracts": "humane.aibus.ServerStatefulUnderstandRequest.ResponseFormat response_format",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ServerStatefulUnderstandResponse",
+      "at": 1,
+      "contracts": "string text",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.ServerStatefulUnderstandResponse",
+      "at": 2,
+      "contracts": "humane.aibus.Audio audio_bytes",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.Session",
+      "at": 1,
+      "contracts": "repeated humane.aibus.SynapseChatTurn turn",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseActionDefinition",
+      "at": 1,
+      "contracts": "string name",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseActionDefinition",
+      "at": 2,
+      "contracts": "string parameter_definition",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseActionDefinition",
+      "at": 3,
+      "contracts": "string description",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseAnswer",
+      "at": 1,
+      "contracts": "string answer",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseAnswer",
+      "at": 2,
+      "contracts": "string thought",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseAnswer",
+      "at": 3,
+      "contracts": "string ssml",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseDisambiguation",
+      "at": 1,
+      "contracts": "string question",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseDisambiguation",
+      "at": 2,
+      "contracts": "string thought",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseFailure",
+      "at": 1,
+      "contracts": "string message",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseInterpretation",
+      "at": 1,
+      "contracts": "string interpretation",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseInterpretation",
+      "at": 2,
+      "contracts": "string thought",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseNoAnswerExplanation",
+      "at": 1,
+      "contracts": "string explanation",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseNoAnswerExplanation",
+      "at": 2,
+      "contracts": "string thought",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapsePreviousAction",
+      "at": 1,
+      "contracts": "string utterance",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapsePreviousAction",
+      "at": 2,
+      "contracts": "string action",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapsePreviousAction",
+      "at": 3,
+      "contracts": "google.protobuf.Timestamp timestamp",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.SynapseUserRequestContent",
+      "at": 6,
+      "contracts": "humane.aibus.Audio audio_bytes",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.TranscriptionRepairTestRequest",
+      "at": 1,
+      "contracts": "string transcription",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.TranscriptionRepairTestRequest",
+      "at": 2,
+      "contracts": "repeated string immutable_tokens",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.TranscriptionRepairTestResponse",
+      "at": 1,
+      "contracts": "bool success",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.TranscriptionRepairTestResponse",
+      "at": 2,
+      "contracts": "string error_message",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.aibus.TranscriptionRepairTestResponse",
+      "at": 3,
+      "contracts": "string corrected_transcription",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.CreateMemoryResultStatus",
+      "at": 3,
+      "contracts": "CREATE_MEMORY_RESULT_STATUS_INTERNAL_FAILURE",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.CreateMemoryResultStatus",
+      "at": 4,
+      "contracts": "CREATE_MEMORY_RESULT_STATUS_THUMBNAIL_DATA_MISSING",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.capture.CreateMemoryResultStatus",
+      "at": 5,
+      "contracts": "CREATE_MEMORY_RESULT_STATUS_BAD_REQUEST",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.capture.ISO",
+      "at": 2,
+      "contracts": "int64 sensitivity",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.provisioning.GetAssignedUserResponse",
+      "at": 2,
+      "contracts": null,
+      "pin": "string display_name"
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.provisioning.HmcAssociationResponseCode",
+      "at": 3,
+      "contracts": "HMC_ASSOCIATION_RESPONSE_CODE_MISSING_DEVICE_USER_ASSOCIATION",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.provisioning.HmcAssociationResponseCode",
+      "at": 4,
+      "contracts": "HMC_ASSOCIATION_RESPONSE_CODE_INVALID_HMC_ID",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.provisioning.SubscriptionStatusCode",
+      "at": 4,
+      "contracts": "SUBSCRIPTION_STATUS_CODE_PAUSED",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.provisioning.SubscriptionStatusCode",
+      "at": 5,
+      "contracts": "SUBSCRIPTION_STATUS_CODE_BLOCKED",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "enum-value",
+      "symbol": "humane.provisioning.SubscriptionStatusCode",
+      "at": 6,
+      "contracts": "SUBSCRIPTION_STATUS_CODE_DEACTIVATED",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.provisioning.VerifyHmcAssociationRequest",
+      "at": 3,
+      "contracts": "string device_id",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.provisioning.VerifyHmcAssociationResponse",
+      "at": 2,
+      "contracts": "string name_to_display",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.provisioning.VerifyHmcByPassRequest",
+      "at": 1,
+      "contracts": "humane.provisioning.VerificationSignature device_id_verification_signature",
+      "pin": null
+    },
+    {
+      "class": "presence-only",
+      "kind": "field",
+      "symbol": "humane.provisioning.VerifyHmcByPassRequest",
+      "at": 2,
+      "contracts": "string device_id",
+      "pin": null
+    }
+  ],
+  "onlyInContracts": {
+    "messages": [
+      "humane.account.AiMicFeedbackData",
+      "humane.account.DailyIntakeGoals",
+      "humane.account.EncryptedGetFoodRestrictionsResponse",
+      "humane.account.EncryptedSetFoodRestrictionsRequest",
+      "humane.account.EncryptedSetFoodRestrictionsResponse",
+      "humane.account.FeedbackData",
+      "humane.account.FoodRestriction",
+      "humane.account.GetDailyIntakeGoalsRequest",
+      "humane.account.GetDailyIntakeGoalsResponse",
+      "humane.account.GetFoodRestrictionsRequest",
+      "humane.account.NutrientGoal",
+      "humane.account.PersonalDetailsRequest",
+      "humane.account.SetDailyIntakeGoalsRequest",
+      "humane.account.SetDailyIntakeGoalsResponse",
+      "humane.account.SubscriptionStatus",
+      "humane.account.UnauthorizedStatus",
+      "humane.account.UserFeedback",
+      "humane.account.WifiConfig",
+      "humane.aibus.AIRequest",
+      "humane.aibus.AIResponse",
+      "humane.aibus.AnswersResponse",
+      "humane.aibus.AudioData",
+      "humane.aibus.AudioProcessingRequest",
+      "humane.aibus.AudioProcessingResponse",
+      "humane.aibus.BackupMessagesRequest",
+      "humane.aibus.BackupMessagesResponse",
+      "humane.aibus.CalendarEvent",
+      "humane.aibus.CalendarEventDate",
+      "humane.aibus.ConferenceData",
+      "humane.aibus.CreateNewCalendarEventsRequest",
+      "humane.aibus.CreateNewCalendarEventsResponse",
+      "humane.aibus.EncryptedAIRequest",
+      "humane.aibus.EncryptedAIResponse",
+      "humane.aibus.EncryptedFoodIdentifyRequest",
+      "humane.aibus.EncryptedFoodIdentifyResponse",
+      "humane.aibus.EventAttendee",
+      "humane.aibus.FoodFeedbackItem",
+      "humane.aibus.FoodFeedbackRequest",
+      "humane.aibus.FoodFeedbackResponse",
+      "humane.aibus.FoodIdentifyRequest",
+      "humane.aibus.FoodIdentifyResponse",
+      "humane.aibus.FoodImageAdjustment",
+      "humane.aibus.GenericChatRequest",
+      "humane.aibus.GenericChatResponse",
+      "humane.aibus.GenericCompletion",
+      "humane.aibus.GenericCompletionRequest",
+      "humane.aibus.GenericCompletionResponse",
+      "humane.aibus.GetCalendarEventsRequest",
+      "humane.aibus.GetCalendarEventsResponse",
+      "humane.aibus.GoogleSpeechRequest",
+      "humane.aibus.GoogleTranscribeRequest",
+      "humane.aibus.GoogleTranslateRequest",
+      "humane.aibus.InitializedCalendarResponse",
+      "humane.aibus.Message",
+      "humane.aibus.MessageAttachment",
+      "humane.aibus.MessageData",
+      "humane.aibus.NutritionInfo",
+      "humane.aibus.OpenAIChatRequest",
+      "humane.aibus.OpenAIChatResponse",
+      "humane.aibus.OpenAICompletionRequest",
+      "humane.aibus.OpenAICompletionResponse",
+      "humane.aibus.QueryMessagesRequest",
+      "humane.aibus.QueryMessagesResponse",
+      "humane.aibus.ResembleSpeechRequest",
+      "humane.aibus.SearchMemoryItem",
+      "humane.aibus.SearchRequest",
+      "humane.aibus.SearchResponse",
+      "humane.aibus.SmartEditRequest",
+      "humane.aibus.SmartEditResponse",
+      "humane.aibus.SynapseEvaluationExample",
+      "humane.aibus.SynapseEvaluationExamples",
+      "humane.aibus.SynapseEvaluationMetadata",
+      "humane.aibus.TranslateRequest",
+      "humane.aibus.TranslateResponse",
+      "humane.aibus.UploadAttachmentRequest",
+      "humane.aibus.UploadAttachmentResponse",
+      "humane.aibus.VisualSearchRequest",
+      "humane.aibus.VisualSearchResponse",
+      "humane.capture.DeviceCreateNoteRequest",
+      "humane.capture.DeviceCreateNoteResponse",
+      "humane.capture.DeviceDeleteAllNotesRequest",
+      "humane.capture.DeviceDeleteAllNotesResponse",
+      "humane.capture.DeviceGetRecentNotesRequest",
+      "humane.capture.DeviceGetRecentNotesResponse",
+      "humane.capture.DeviceGetSingleNoteResponse",
+      "humane.common.Locale",
+      "humane.common.push.CreateMessageResponse",
+      "humane.common.push.NotificationPayload",
+      "humane.common.push.PushMessage",
+      "humane.contacts.NewContact",
+      "humane.contacts.ThirdPartyContactData",
+      "humane.contacts.UpdateContact",
+      "humane.krypton.grpc.auth.Credentials",
+      "humane.krypton.grpc.crypto.Asset",
+      "humane.krypton.grpc.crypto.AuxiliaryData",
+      "humane.krypton.grpc.crypto.CiphertextEnvelope",
+      "humane.krypton.grpc.crypto.Plaintext",
+      "humane.krypton.grpc.crypto.SecureAsset",
+      "humane.krypton.grpc.key.ClearKey",
+      "humane.krypton.grpc.key.KeyMetadata",
+      "humane.krypton.grpc.key.KeyPermissions",
+      "humane.krypton.grpc.key.TagInfo",
+      "humane.krypton.grpc.key.TagPermissions",
+      "humane.krypton.grpc.key.WrappedKey",
+      "humane.personaldata.ContactsMetadata",
+      "humane.personaldata.GPSLocation",
+      "humane.personaldata.Note",
+      "humane.personaldata.PersonalProtoMetadata",
+      "humane.personaldata.SMSMessage",
+      "humane.provisioning.CertificateAndChain",
+      "humane.provisioning.DeviceAssignment",
+      "humane.provisioning.DeviceCertificate"
+    ],
+    "enums": [
+      "humane.account.AiMicFeedbackCategory",
+      "humane.account.AuthorizationType",
+      "humane.account.FeedbackType",
+      "humane.account.OverallFeedbackCategory",
+      "humane.account.RestrictionType",
+      "humane.account.Severity",
+      "humane.account.SubscriptionStatusCode",
+      "humane.account.UnauthorizedStatusCode",
+      "humane.aibus.ActionExecutionTestRequest.Mode",
+      "humane.aibus.Capability",
+      "humane.aibus.FoodFeedbackRequestType",
+      "humane.aibus.FoodIdentificationEngine",
+      "humane.aibus.MessageType",
+      "humane.aibus.ServerStatefulUnderstandRequest.ResponseFormat",
+      "humane.capture.CaptureRetryConfig.CaptureRetryPolicy",
+      "humane.capture.MemoryCreateIntentRequest.DelayReason",
+      "humane.capture.ReportPhotographyExperienceStatusRequest.PhotographyExperienceStatus",
+      "humane.capture.UploadCompleteResponse.Status",
+      "humane.capture.UploadRequest.UploadType",
+      "humane.common.auth.AuthenticationType",
+      "humane.common.food.NutrientUnit",
+      "humane.common.push.CreateMessageStatus",
+      "humane.common.push.PushConnectionType",
+      "humane.contacts.SocialHandle.SocialProvider",
+      "humane.contacts.SocialProviderAttribute.SocialProviderAttributeEnum",
+      "humane.events.EventType",
+      "humane.krypton.grpc.key.Algo",
+      "humane.krypton.grpc.key.Level",
+      "humane.krypton.grpc.key.Mutation",
+      "humane.krypton.grpc.key.Op",
+      "humane.provisioning.DeleteStatusCode"
+    ],
+    "services": [
+      "humane.account.FoodPreferencesService",
+      "humane.aibus.AmazonShoppingService",
+      "humane.aibus.DeviceMessagesService",
+      "humane.aibus.FoodService",
+      "humane.aibus.TestAutomationService",
+      "humane.aibus.WebSearchService",
+      "humane.capture.TestingAutomationService",
+      "humane.location.v1.E911GeoLocationService"
+    ]
+  },
+  "onlyInPin": {
+    "messages": [
+      "humane.aibus.EncryptedAiRequest",
+      "humane.aibus.EncryptedAiResponse",
+      "humane.aibus.Locale",
+      "humane.privacy.grpc.pub.ClearKey",
+      "humane.privacy.grpc.pub.Credentials",
+      "humane.privacy.grpc.pub.WrappedKey",
+      "humane.pushrelay.PushMessage"
+    ],
+    "enums": [
+      "humane.capture.CaptureRetryPolicy",
+      "humane.capture.DelayReason",
+      "humane.capture.PhotographyExperienceStatus",
+      "humane.capture.UploadCompleteStatus",
+      "humane.capture.UploadType",
+      "humane.contacts.SocialProvider",
+      "humane.contacts.SocialProviderAttributeEnum",
+      "humane.pushrelay.PushConnectionType"
+    ],
+    "services": []
+  },
+  "onlyInNote": "The pin tree reconstructs only what its runtime serves, so most symbols present only in contracts are absence, not conflict. They are listed for completeness because a gate must decide about each one."
+}

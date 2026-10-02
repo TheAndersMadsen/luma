@@ -1,0 +1,55 @@
+.checkForm {
+  display: inline-flex;
+  margin: 0;
+}
+
+.statusRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--luma-divider);
+}
+
+.statusRow:last-child {
+  border-bottom: none;
+}
+
+.statusRow p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+
+.notes {
+  font-size: 15px;
+  color: var(--luma-colors-white);
+}
+
+.notes summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--luma-colors-beam-base);
+}
+
+.notesBody {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--luma-colors-penumbra-200);
+  color: var(--luma-colors-crater-base);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inlineCommand {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--luma-colors-penumbra-200);
+  color: var(--luma-colors-white);
+  overflow-wrap: anywhere;
+}
