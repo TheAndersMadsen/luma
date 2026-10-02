@@ -23,6 +23,16 @@ identity, and provider results are never metric labels.
 - Center reaches the Pin's Device Services remotely over an Iroh connection
   that is end-to-end encrypted to the Pin's key. The public n0 relay and DNS
   discovery help it cross NAT; they carry the traffic but cannot read it.
+- Once an hour your server asks its update source for its public
+  `/api/version` to learn whether a newer release exists. The source is the
+  Center you installed from, or the maintainer's Center
+  (`center.andersmadsen.dk`) for a server set up from the release files. The
+  request carries nothing about you or your Pin, but the source sees your
+  server's IP address. `./luma setup production --update-source https://CENTER`
+  names another source ([Run your own update source](operations.md#run-your-own-update-source)).
+- When Center connects to a Pin over USB, it sends the Pin's 20-byte ADB
+  challenge, and nothing else, to PenumbraOS's remote signer
+  (`adb.penumbraos.workers.dev`), which returns the signature the Pin expects.
 - Secret fields never return to the browser, and secrets go in through
   `./luma config set NAME --stdin`, never argv or shell history.
 
