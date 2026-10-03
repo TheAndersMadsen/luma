@@ -215,6 +215,13 @@ in **[docs/install.md](docs/install.md)** (server and provider choices, the
 one-line installer, and the Hetzner cloud-init path), or the
 [Quick start](#quick-start) above.
 
+**Running Umbrel OS?** The community app store
+[Perseu5/umbrel-apps](https://github.com/Perseu5/umbrel-apps) repackages Luma
+for Umbrel. Add `https://github.com/Perseu5/umbrel-apps` as a community app
+store in Umbrel, then install and set up Luma from there. Its packager builds
+their own images, so it is not this project's signed release, and it is still
+being tested.
+
 ## Configure services in Center
 
 A useful Pin needs an assistant model and Azure Speech; search, maps, weather,

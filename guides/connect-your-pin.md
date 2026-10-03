@@ -40,6 +40,41 @@ and link services before doing any of the physical steps below.
 
 ## Before you start
 
+### Coming from PenumbraOS or another Ai Pin project
+
+Installing Luma replaces what is on the Pin, and there is no button to go
+back. If the Pin runs PenumbraOS v0 (MABL), FusionOS, or OpenPin, Stage 3
+offers **Remove and install**, which:
+
+- uninstalls those apps: for PenumbraOS v0 that is `com.penumbraos.mabl`,
+  `com.penumbraos.plugins.*`, `com.penumbraos.sdk.*`, `com.penumbraos.bridge*`,
+  and `com.penumbraos.pinitd`. Their app data goes with them;
+- re-enables Humane's Ironman, Onboarding, and System Navigation apps, clears
+  PenumbraOS's expanded logging (`persist.log.tag`), and reboots the Pin.
+
+It leaves PenumbraOS's files in `/sdcard/penumbra` and `/data/local/tmp/bin`
+alone.
+
+**Back up first,** with the ADB access you used to install PenumbraOS:
+
+```sh
+adb pull /sdcard/penumbra penumbra-backup
+```
+
+That copies MABL's assistant settings (`etc/mabl/llm_configs.json`: the URL,
+key, and model of your OpenAI-compatible endpoint) and the pinitd service
+files. The same endpoint works in Luma: enter it in Center under **Settings →
+Assistant & voice**. Keep the backup as private as a password; it holds that
+key.
+
+**To go back to PenumbraOS later,** choose **Uninstall** on Center's
+**Software & updates** page. It removes Luma's apps and re-enables the stock
+apps Luma had turned off, but it does not reinstall PenumbraOS. Reinstall it
+with PenumbraOS's own installer ([penumbraos.com](https://penumbraos.com)),
+then restore your settings from the backup. Because one Luma server serves one
+Pin, test Luma by setting up a server and Center first; connect the Pin only
+when you are ready to move it.
+
 ### Prepare the Pin for the interposer (first time only)
 
 Follow the interposer project's illustrated
@@ -177,7 +212,9 @@ the Pin's clock.*
 
 > **If the page says "Apps from another Ai Pin project":** the Pin has apps
 > that conflict with Luma. Center lists them and offers **Remove and
-> install**; it removes those apps first, then continues.
+> install**; it removes those apps first, then continues. Back them up before
+> you choose it: see
+> [Coming from PenumbraOS or another Ai Pin project](#coming-from-penumbraos-or-another-ai-pin-project).
 > **If it says "No Pin release to install":** the server has no Pin archive
 > staged. On the server run `./luma pin release acquire --check`; if that
 > reports none, run `./luma pin release acquire --archive ../luma-pin-*.tar.gz`
