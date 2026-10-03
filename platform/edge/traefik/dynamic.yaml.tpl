@@ -35,7 +35,7 @@ http:
       entryPoints: [websecure]
       rule: "Host(`@@PUBLIC_DOMAIN@@`) && (PathPrefix(`/realms/humane`) || PathPrefix(`/resources/`))"
       service: keycloak
-      middlewares: [secure-headers]
+      middlewares: [identity-headers]
       priority: 150
       tls:
         certResolver: letsencrypt
@@ -84,6 +84,18 @@ http:
       headers:
         contentTypeNosniff: true
         frameDeny: true
+        referrerPolicy: same-origin
+        stsSeconds: 31536000
+    # The identity router forgoes frameDeny: Keycloak's account console (where
+    # Center sends the owner to change their password) loads same-origin hidden
+    # iframes (`3p-cookies/step1.html`, `login-status-iframe.html`), and this
+    # middleware's X-Frame-Options overwrote Keycloak's own per-page framing
+    # headers, so keycloak-js's init check timed out on an error page. Keycloak
+    # sends X-Frame-Options: SAMEORIGIN and CSP frame-ancestors 'self' where
+    # framing matters, which allows exactly those same-origin frames.
+    identity-headers:
+      headers:
+        contentTypeNosniff: true
         referrerPolicy: same-origin
         stsSeconds: 31536000
   services:
