@@ -29,6 +29,9 @@
 //!   unless the owner allowed a server while locked. A Pin is locked whenever
 //!   it is off the body, on its charger for one, so a server the owner wants
 //!   there says so explicitly.
+//! * **A server that wants an OAuth sign-in** instead of a typed header gets
+//!   one through `crate::mcp_oauth`, which keeps the tokens in a file of its
+//!   own. This client only sends the access token it is handed.
 //!
 //! ## How this can fail, and what each failure does
 //!
@@ -86,6 +89,11 @@
 //! 23. Switched-off tools use up the overall cap or hold a mangled name: they
 //!     are skipped before both, so switching tools off makes room for others
 //!     and frees the name for a tool it collided with.
+//! 24. The server answers 401 and names OAuth resource metadata, or refuses the
+//!     access token a sign-in produced: one renewal and one retry, then
+//!     recorded as `sign_in_required` so Center can offer the sign-in. A
+//!     server with a typed `Authorization` header stays `unauthorized`. The
+//!     sign-in's own failures are listed in `crate::mcp_oauth`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -134,7 +142,7 @@ const MAX_TOOL_PAGES: usize = 5;
 const MAX_MODEL_TOOL_NAME: usize = 64;
 
 /// The revision this client speaks. A server may answer an older one.
-const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Every offered MCP tool's model-facing name starts with this.
 pub const TOOL_PREFIX: &str = "mcp_";
 /// The built-in tool that lists and switches servers by voice.
@@ -312,6 +320,9 @@ pub enum McpState {
     Connected,
     /// The server refused the token.
     Unauthorized,
+    /// The server asks for an OAuth sign-in, or the one it had could not be
+    /// renewed. See `crate::mcp_oauth`.
+    SignInRequired,
     Unreachable,
     TimedOut,
     /// The server answered, but not with MCP this client understands.
@@ -344,6 +355,8 @@ pub enum McpError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum McpCallError {
     Unauthorized,
+    /// The server wants an OAuth sign-in, or refused the token one produced.
+    SignInRequired,
     Unreachable,
     TimedOut,
     InvalidResponse,
@@ -357,6 +370,7 @@ impl McpCallError {
     fn state(&self) -> McpState {
         match self {
             Self::Unauthorized => McpState::Unauthorized,
+            Self::SignInRequired => McpState::SignInRequired,
             Self::Unreachable | Self::SessionExpired => McpState::Unreachable,
             Self::TimedOut => McpState::TimedOut,
             Self::InvalidResponse | Self::Rpc(_) => McpState::InvalidResponse,
@@ -366,7 +380,7 @@ impl McpCallError {
     /// A short constant for metrics and logs.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Unauthorized => "not_configured",
+            Self::Unauthorized | Self::SignInRequired => "not_configured",
             Self::Unreachable | Self::SessionExpired => "unavailable",
             Self::TimedOut => "timed_out",
             Self::InvalidResponse => "invalid_response",
@@ -379,6 +393,9 @@ impl McpCallError {
         match self {
             Self::Unauthorized => {
                 format!("The {server} tool server refused its token. The owner fixes it in Center.")
+            }
+            Self::SignInRequired => {
+                format!("The {server} tool server needs the owner to sign in to it in Center.")
             }
             Self::Unreachable | Self::SessionExpired => {
                 format!("The {server} tool server could not be reached.")
@@ -444,6 +461,8 @@ pub struct McpStore {
     settings: RwLock<McpSettings>,
     status: RwLock<BTreeMap<String, McpServerStatus>>,
     sessions: Mutex<BTreeMap<String, Session>>,
+    /// What signing in to a server produced. See `crate::mcp_oauth`.
+    pub(crate) oauth: crate::mcp_oauth::OAuthStore,
     path: Option<PathBuf>,
 }
 
@@ -489,6 +508,7 @@ impl McpStore {
             settings: RwLock::new(settings),
             status: RwLock::new(status),
             sessions: Mutex::new(BTreeMap::new()),
+            oauth: crate::mcp_oauth::OAuthStore::load(path.as_deref()),
             path,
         })
     }
@@ -499,6 +519,7 @@ impl McpStore {
             settings: RwLock::new(settings),
             status: RwLock::new(BTreeMap::new()),
             sessions: Mutex::new(BTreeMap::new()),
+            oauth: crate::mcp_oauth::OAuthStore::load(None),
             path: None,
         })
     }
@@ -511,7 +532,7 @@ impl McpStore {
         self.status.read().expect("MCP lock poisoned").clone()
     }
 
-    fn server(&self, id: &str) -> Option<McpServer> {
+    pub(crate) fn server(&self, id: &str) -> Option<McpServer> {
         self.settings
             .read()
             .expect("MCP lock poisoned")
@@ -601,10 +622,17 @@ impl McpStore {
         *current = next;
         drop(current);
         self.sessions.lock().expect("MCP lock poisoned").remove(id);
+        // A sign-in file that cannot be rewritten is logged there.
+        let _ = self.oauth.forget(id);
         self.change_status(|status| {
             status.remove(id);
         });
         Ok(())
+    }
+
+    /// Drop the session held with a server, so the next request opens one.
+    pub(crate) fn forget_session(&self, id: &str) {
+        self.sessions.lock().expect("MCP lock poisoned").remove(id);
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<McpServer, McpError> {
@@ -754,6 +782,7 @@ impl McpStore {
     async fn session(
         &self,
         server: &McpServer,
+        bearer: Option<&str>,
         timeout: Duration,
     ) -> Result<Option<String>, McpCallError> {
         let digest = endpoint_digest(server);
@@ -769,6 +798,7 @@ impl McpStore {
         let (_, issued) = rpc(
             server,
             None,
+            bearer,
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -787,6 +817,7 @@ impl McpStore {
         rpc(
             server,
             issued.as_deref(),
+            bearer,
             json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
             None,
             timeout,
@@ -802,7 +833,8 @@ impl McpStore {
         Ok(issued)
     }
 
-    /// One request inside a session, re-initializing once if it expired.
+    /// One request to a server. One the owner signed in to is sent its access
+    /// token, renewed once when it has run out or when the server refuses it.
     async fn request(
         &self,
         server: &McpServer,
@@ -811,18 +843,55 @@ impl McpStore {
         timeout: Duration,
     ) -> Result<Value, McpCallError> {
         let started = Instant::now();
+        let bearer = self.oauth.bearer(server, timeout).await?;
+        let token = bearer.as_ref().map(|bearer| bearer.token.as_str());
+        let remaining = timeout.saturating_sub(started.elapsed());
+        let outcome = self
+            .request_as(server, token, method, &params, remaining)
+            .await;
+        let (Err(McpCallError::SignInRequired), Some(bearer)) = (&outcome, &bearer) else {
+            return outcome;
+        };
+        // The server refused the token. A token renewed a moment ago is not
+        // renewed again.
+        if bearer.renewed {
+            self.oauth.forget_tokens(&server.id);
+            return outcome;
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        let renewed = self.oauth.renew(server, &bearer.token, remaining).await?;
+        let remaining = timeout.saturating_sub(started.elapsed());
+        let outcome = self
+            .request_as(server, Some(&renewed), method, &params, remaining)
+            .await;
+        if matches!(outcome, Err(McpCallError::SignInRequired)) {
+            self.oauth.forget_tokens(&server.id);
+        }
+        outcome
+    }
+
+    /// One request inside a session, re-initializing once if it expired.
+    async fn request_as(
+        &self,
+        server: &McpServer,
+        bearer: Option<&str>,
+        method: &str,
+        params: &Value,
+        timeout: Duration,
+    ) -> Result<Value, McpCallError> {
+        let started = Instant::now();
         for attempt in 0..2 {
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 return Err(McpCallError::TimedOut);
             }
-            let session = self.session(server, remaining).await?;
+            let session = self.session(server, bearer, remaining).await?;
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 return Err(McpCallError::TimedOut);
             }
             let body = json!({ "jsonrpc": "2.0", "id": 2, "method": method, "params": params });
-            match rpc(server, session.as_deref(), body, Some(2), remaining).await {
+            match rpc(server, session.as_deref(), bearer, body, Some(2), remaining).await {
                 Err(McpCallError::SessionExpired) if attempt == 0 => {
                     self.sessions
                         .lock()
@@ -1486,7 +1555,7 @@ static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
 /// A client of its own: no redirects, so a token never follows one to another
 /// host, and no global timeout, because every request sets its own.
-fn http() -> reqwest::Client {
+pub(crate) fn http() -> reqwest::Client {
     HTTP.get_or_init(|| {
         reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(4))
@@ -1500,9 +1569,11 @@ fn http() -> reqwest::Client {
 /// One JSON-RPC exchange over Streamable HTTP. `expect` is the id whose
 /// response is awaited, or `None` for a notification. Answers the `result` and
 /// any session id the server issued.
+/// `bearer` is the access token of an OAuth sign-in, when there is one.
 async fn rpc(
     server: &McpServer,
     session: Option<&str>,
+    bearer: Option<&str>,
     body: Value,
     expect: Option<u64>,
     timeout: Duration,
@@ -1519,11 +1590,19 @@ async fn rpc(
     for header in &server.headers {
         request = request.header(header.name.as_str(), header.value.as_str());
     }
+    if let Some(bearer) = bearer {
+        request = request.bearer_auth(bearer);
+    }
     if let Some(session) = session {
         request = request.header("Mcp-Session-Id", session);
     }
     let response = request.send().await.map_err(transport_error)?;
     let status = response.status();
+    if status.as_u16() == 401
+        && (bearer.is_some() || crate::mcp_oauth::asks_for_sign_in(server, response.headers()))
+    {
+        return Err(McpCallError::SignInRequired);
+    }
     if matches!(status.as_u16(), 401 | 403) {
         return Err(McpCallError::Unauthorized);
     }

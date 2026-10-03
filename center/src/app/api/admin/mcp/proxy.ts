@@ -67,3 +67,6 @@ export async function mcpProxy(
     return Response.json({ error: "Cosmos is unreachable." }, { status: 502 });
   }
 }
+
+/** Where a provider sends the owner's browser at the end of a tool server's sign-in. */
+export const MCP_OAUTH_CALLBACK_PATH = "/api/admin/mcp/oauth/callback";

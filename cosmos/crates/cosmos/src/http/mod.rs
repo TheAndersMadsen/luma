@@ -246,6 +246,11 @@ fn build_router_with_uploads_and_keys(
                 "/demo-api/admin/mcp/servers/:id/test",
                 post(test_mcp_server),
             )
+            .route(
+                "/demo-api/admin/mcp/servers/:id/oauth",
+                post(start_mcp_sign_in).delete(sign_out_mcp_server),
+            )
+            .route("/demo-api/admin/mcp/oauth/finish", post(finish_mcp_sign_in))
             .route("/demo-api/admin/provision", post(admin_provision))
             .route("/demo-api/admin/push", post(admin_push))
             .route("/demo-api/admin/wifi", post(admin_wifi))
