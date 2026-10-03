@@ -163,7 +163,9 @@ Pin later.
 
 7. **Add your keys, then your Pin.** In **Settings → Assistant & voice**,
    enter the assistant key and the Azure Speech key and region, and choose
-   **Save changes**. When you're ready, [connect your Pin](#connect-a-pin).
+   **Save changes**. If you do not have those yet, follow the
+   [provider setup guides](guides/providers/README.md). When you're ready,
+   [connect your Pin](#connect-a-pin).
 
 > [!TIP]
 > Something didn't match? When a `./luma` or `bootstrap` step stops, it says
@@ -208,18 +210,20 @@ Everything else is optional and can be added at any time.
 
 | Service | Needed? | Options |
 | --- | --- | --- |
-| Assistant | Yes | Any OpenAI-compatible API (OpenRouter, OpenAI, a gateway, or your own), or a Codex subscription |
-| Speech | Yes | Azure Speech |
-| Search | Optional | SearXNG (included) or SerpAPI, plus Perplexity |
-| Maps and places | Optional | Google Maps |
-| Weather | Optional | Pirate Weather |
-| Knowledge | Optional | Wolfram |
-| Food | Optional | Open Food Facts |
-| Music | Optional | Spotify, YouTube Music, TIDAL |
-| Agent | Optional | Rabbit OS3 |
+| Assistant | Yes | [OpenRouter](guides/providers/openrouter.md), [OpenAI API](guides/providers/openai-api.md), [another compatible API](guides/providers/openai-compatible.md), or a [Codex subscription](guides/providers/codex-subscription.md) |
+| Speech | Yes | [Azure Speech](guides/providers/azure-speech.md) |
+| Search | Optional | [SearXNG](guides/providers/searxng.md) (included) or [SerpAPI](guides/providers/serpapi.md), plus [Perplexity](guides/providers/perplexity.md) |
+| Maps and places | Optional | [Google Maps](guides/providers/google-maps.md) |
+| Weather | Optional | [Pirate Weather](guides/providers/pirate-weather.md) |
+| Knowledge | Optional | [Wolfram\|Alpha](guides/providers/wolfram-alpha.md) |
+| Food | Optional | [Open Food Facts](guides/providers/open-food-facts.md) |
+| Music | Optional | [Spotify](guides/providers/spotify.md), [YouTube Music](guides/providers/youtube-music.md), [TIDAL](guides/providers/tidal.md) |
+| Agent | Optional | [Rabbit OS3](guides/providers/rabbit-os3.md) |
 
 You add every key in Center's settings. Keys stay in Cosmos on your server and
-never reach the Pin. Setup for each one is in [docs/services.md](docs/services.md).
+never reach the Pin. Use the [provider setup guides](guides/providers/README.md)
+to get each account or key; [Configure services in Center](docs/services.md)
+explains how the services work together.
 
 ## Connect a Pin
 

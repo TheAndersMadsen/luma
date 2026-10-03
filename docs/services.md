@@ -10,6 +10,12 @@ terms. **Advanced** holds software updates, connection settings, experiments,
 and diagnostics. Expand it when you need those controls. **Music** has its own
 page for your linked accounts and playback provider.
 
+If you still need an account, API key, or provider app, start with the
+[provider setup guides](../guides/providers/README.md). They give the current
+provider-side steps, costs and limits, privacy details, and a check that the
+finished connection works. This page is the reference for how those services
+behave inside Luma.
+
 To set up the Pin's cloud services, sign in as the operator and open
 **Settings → Assistant & voice**. Every cloud service the Pin uses is
 configured here. Each service opens on its own, and required services that
@@ -33,10 +39,12 @@ you leave a page with an unsaved draft.
   integration.
   Each service's **Test** checks only that provider. A successful test says
   nothing about other providers or about audio playback on the Pin.
-  In Google Cloud, enable Places API (New), Geocoding API, and Routes API for
-  the Maps key. **Test** tries a place search and a route, and names any API
-  Google refuses. Pirate Weather also answers forecasts such as "what will the
-  weather be tomorrow?".
+  In Google Cloud, enable Places API (New), Routes API, Geocoding API, and
+  Geolocation API for the Maps key. **Test** tries a place search and a route,
+  and names either of those APIs when Google refuses it. The
+  [Google Maps guide](../guides/providers/google-maps.md) has separate Pin
+  checks for geocoding and radio-based location. Pirate Weather also answers
+  forecasts such as "what will the weather be tomorrow?".
 - **Voice:** add the Azure Speech key, region, and voice.
 - **Food & nutrition:** you can connect and test an Open Food Facts account.
   Cosmos keeps both credentials private and sends them only in the provider's

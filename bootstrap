@@ -253,6 +253,8 @@ die() {
 # run (never one that carries a secret) in WRAPPED_COMMAND for this message.
 unexpected_failure() {
   local status="$?" command="${BASH_COMMAND//$'\n'/ }"
+  if (( $# >= 1 )); then status="$1"; fi
+  if (( $# >= 2 )); then command="$2"; fi
   [[ "$command" != *'"$@"'* || -z "$WRAPPED_COMMAND" ]] || command="$WRAPPED_COMMAND"
   (( ${#command} <= 200 )) || command="${command:0:200}..."
   report_failure "The command \`$command\` stopped with exit status $status. Its own error message is just above this block."
@@ -374,10 +376,18 @@ unattended_inputs() {
 # run_luma ARGS... runs ./luma ARGS in the operator release, through the
 # Docker group when this user is not root, with this process's stdin.
 run_luma() {
-  local command argument
+  local command argument status
   WRAPPED_COMMAND="./luma $*"
   if [[ "$DOCKER_MODE" == "direct" ]]; then
-    (cd "$OPERATOR_DIR" && ./luma "$@")
+    # Bash versions disagree about which boundary reports a failed subshell
+    # when errtrace is active. Suppress its inherited trap and report the
+    # wrapper failure explicitly, once, with the command the owner ran.
+    if (trap - ERR; cd "$OPERATOR_DIR" && ./luma "$@"); then
+      return 0
+    else
+      status="$?"
+      unexpected_failure "$status" "$WRAPPED_COMMAND"
+    fi
   else
     printf -v command 'cd %q && exec ./luma' "$OPERATOR_DIR"
     for argument in "$@"; do printf -v command '%s %q' "$command" "$argument"; done

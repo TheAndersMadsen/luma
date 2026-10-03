@@ -38,6 +38,7 @@ interoperability identifiers.
 ## How-to guides
 
 - [Server from nothing](guides/server-from-nothing.md)
+- [Set up provider services](guides/providers/README.md)
 - [Connect your Pin](guides/connect-your-pin.md)
 - [Update Luma](guides/update.md)
 - [Troubleshooting](guides/troubleshooting.md)
