@@ -199,6 +199,13 @@ function ServerForm({
       setUrl("");
       setRows([blankRow("Authorization")]);
     }
+    if (saved && server) {
+      // This form is re-created only when the name, URL or header names
+      // change. A value sent for a header is stored now: take it off the page.
+      setRows((current) =>
+        current.map((row) => (row.name.trim() && row.value.trim() ? { ...row, value: "", saved: true } : row)),
+      );
+    }
   };
 
   return (

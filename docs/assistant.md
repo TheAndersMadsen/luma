@@ -93,6 +93,13 @@ not stop work Rabbit has already accepted. Only a correlated canceled worker
 confirms that Rabbit stopped. These session and cancellation policies are Luma
 extensions.
 
+Both transports use the stock interstitial followed by one terminal `Respond`
+for Luma speech. The legacy client buffers final actions until the RPC
+completes, so this is not streamed progress narration
+(`SynapseInterpreter.interpretLegacy`,
+`LoadingMessageManager.onIntermediateAction`,
+`RespondActionHandler.handleAction`).
+
 ## MCP servers
 
 MCP servers are an optional Luma extension, like OS3. The owner adds a server
@@ -123,13 +130,6 @@ retyping one keeps it.
 Tools are named `mcp_<server>_<tool>`. At most 40 are offered at once.
 Settings live in `mcp.json` in the Cosmos state directory, separate from the
 provider settings, so a release without this feature still starts.
-
-Both transports use the stock interstitial followed by one terminal `Respond`
-for Luma speech. The legacy client buffers final actions until the RPC
-completes, so this is not streamed progress narration
-(`SynapseInterpreter.interpretLegacy`,
-`LoadingMessageManager.onIntermediateAction`,
-`RespondActionHandler.handleAction`).
 
 ## Music
 

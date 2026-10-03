@@ -4,7 +4,6 @@ import {
   adminAuthHeaders,
   cosmosDeadlineSignal,
 } from "@/server/cosmos";
-import { isSameOriginRequest } from "@/server/auth";
 import { requireOperatorRequest } from "@/server/operator";
 
 /** A server id as Cosmos mints it: a lowercase slug of the server's name. */
@@ -17,11 +16,15 @@ export function isMcpServerId(value: string): boolean {
 /**
  * The gate every MCP route shares: an operator session, a same-origin request
  * for anything that changes state, and a Cosmos operator API to call.
+ *
+ * A write passes `isSameOriginRequest(request)` from its own handler, because
+ * `verify/same-origin-writes.test.mjs` looks for the Origin check in each
+ * route file. A read passes nothing.
  */
-export async function mcpGate(request: Request | null): Promise<Response | null> {
+export async function mcpGate(write?: { sameOrigin: boolean }): Promise<Response | null> {
   const session = await requireOperatorRequest();
   if (session instanceof Response) return session;
-  if (request && !isSameOriginRequest(request)) {
+  if (write && !write.sameOrigin) {
     return Response.json({ error: "A same-origin request is required." }, { status: 403 });
   }
   if (!COSMOS_ADMIN_ENABLED || !COSMOS_WEBAPI) {
