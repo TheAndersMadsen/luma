@@ -7,15 +7,24 @@ import { useCallback, useEffect, useState } from "react";
 import { ErrorState, SectionSkeleton } from "@/components/States";
 import { GuidedSetupReturn } from "@/components/GuidedSetupReturn";
 import { StatusChip, StatusMessage } from "@/components/Status";
+import type { AdbSessionTransport } from "@/lib/pin-device/adb/transport";
+import type { PinClient } from "@/lib/pin-device/client";
+import type { DeviceStatusResponse } from "@/lib/contracts/deviceStatus";
 import { usePinDevice } from "../PinDeviceProvider";
 import { deviceErrorMessage } from "../_lib/deviceErrorPresentation";
 import settings from "../../settings.module.css";
 import { createActivationBundleJson } from "./activationBundle";
 import { PasscodeFact } from "./PasscodeFact";
 import {
+  ActiveIdentityMismatchError,
   centerRemoteAccess,
+  EnrollmentIncompleteError,
+  OnboardingLaunchError,
   provisionConnectedPin,
+  reenrollConnectedPin,
   RemoteAccessSetupError,
+  switchPinToThisServer,
+  type ActivationStatus,
 } from "./browserActivation";
 import styles from "./provision.module.css";
 import type { ActivationBundle, ProvisioningOverview } from "./types";
@@ -86,6 +95,8 @@ function ProvisioningContent() {
   const [checkingConnection, setCheckingConnection] = useState(false);
   const [bundle, setBundle] = useState<ActivationBundle | null>(null);
   const [provisionError, setProvisionError] = useState<string | null>(null);
+  const [mismatch, setMismatch] = useState<ActiveIdentityMismatchError | null>(null);
+  const [enrollmentIncomplete, setEnrollmentIncomplete] = useState<EnrollmentIncompleteError | null>(null);
 
   const load = useCallback(async () => {
     setLoadState("loading");
@@ -175,46 +186,63 @@ function ProvisioningContent() {
     }
   }
 
-  async function activatePin() {
+  function provisioningOperations() {
+    return {
+      ...centerRemoteAccess,
+      // The same ["device-status"] cache Guided setup reads for
+      // cloud.connectedPinReporting. The question is "has this Pin ever
+      // reported", not "is it fresh": a completed enrollment leaves a report
+      // behind even after the Pin goes offline. Nothing cached, or no serial
+      // to match against: fail-safe true, so a working Pin keeps its silent
+      // fast path.
+      hasDeviceReported: async () => {
+        const serial = pin.connectionInfo?.serial?.trim().toLowerCase() ?? null;
+        const cached = queryClient.getQueryData<DeviceStatusResponse>(["device-status"]);
+        if (!cached || serial === null) return true;
+        return cached.devices.some((device) => device.serial_number.trim().toLowerCase() === serial);
+      },
+      async pairDevice(id: string) {
+        const response = await fetch("/api/devices/pair", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ device_id: id }),
+        });
+        const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+        if (!response.ok) {
+          throw new Error(
+            typeof body?.error === "string"
+              ? body.error
+              : "Center could not pair this Pin with your account.",
+          );
+        }
+      },
+      async issueBundle(id: string) {
+        setDeviceId(id);
+        return issueBundle(id);
+      },
+    };
+  }
+
+  async function runActivation(
+    activate: (
+      session: AdbSessionTransport,
+      client: Pick<PinClient, "updateSettings" | "getIrohTicket">,
+      operations: Parameters<typeof provisionConnectedPin>[2],
+    ) => Promise<ActivationStatus>,
+  ) {
     if (activationBusy || pin.status !== "connected" || !usbClient) return;
     setActivationBusy(true);
     setActivationMessage(null);
     setProvisionError(null);
     try {
-      const session = pin.borrowSession();
-      await provisionConnectedPin(
-        session,
-        usbClient,
-        {
-          ...centerRemoteAccess,
-          async pairDevice(id) {
-            const response = await fetch("/api/devices/pair", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ device_id: id }),
-            });
-            const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-            if (!response.ok) {
-              throw new Error(
-                typeof body?.error === "string"
-                  ? body.error
-                  : "Center could not pair this Pin with your account.",
-              );
-            }
-          },
-          async issueBundle(id) {
-            setDeviceId(id);
-            return issueBundle(id);
-          },
-        },
-        overview?.device_edge_ipv4 ?? null,
-        overview?.device_status_endpoint ?? null,
-      );
+      await activate(pin.borrowSession(), usbClient, provisioningOperations());
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["pin-setup"] }),
         queryClient.invalidateQueries({ queryKey: ["paired-pins"] }),
         queryClient.invalidateQueries({ queryKey: ["device-status"] }),
       ]);
+      setMismatch(null);
+      setEnrollmentIncomplete(null);
       setBundle(null);
       setActivationState("complete");
       setActivationMessage({
@@ -231,10 +259,52 @@ function ProvisioningContent() {
           queryClient.invalidateQueries({ queryKey: ["paired-pins"] }),
         ]);
       }
+      if (error instanceof OnboardingLaunchError) {
+        // The re-enrollment's activation DID succeed; only the ceremony
+        // launch failed. Say so as a warning, not a failure.
+        setBundle(null);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["pin-setup"] }),
+          queryClient.invalidateQueries({ queryKey: ["paired-pins"] }),
+          queryClient.invalidateQueries({ queryKey: ["device-status"] }),
+        ]);
+        setMismatch(null);
+        setEnrollmentIncomplete(null);
+        setActivationState("complete");
+        setActivationMessage({ tone: "warning", text: error.message });
+        return;
+      }
+      if (error instanceof ActiveIdentityMismatchError) {
+        setEnrollmentIncomplete(null);
+        setMismatch(error);
+        return;
+      }
+      if (error instanceof EnrollmentIncompleteError) {
+        setMismatch(null);
+        setEnrollmentIncomplete(error);
+        return;
+      }
+      setMismatch(null);
+      setEnrollmentIncomplete(null);
       setActivationMessage({ tone: error instanceof RemoteAccessSetupError ? "warning" : "danger", text: activationFailureMessage(error) });
     } finally {
       setActivationBusy(false);
     }
+  }
+
+  function activatePin() {
+    return runActivation((session, client, operations) =>
+      provisionConnectedPin(session, client, operations, overview?.device_edge_ipv4 ?? null, overview?.device_status_endpoint ?? null));
+  }
+
+  function switchPin() {
+    return runActivation((session, client, operations) =>
+      switchPinToThisServer(session, client, operations, overview?.device_edge_ipv4 ?? null, overview?.device_status_endpoint ?? null));
+  }
+
+  function reenrollPin() {
+    return runActivation((session, client, operations) =>
+      reenrollConnectedPin(session, client, operations, overview?.device_edge_ipv4 ?? null, overview?.device_status_endpoint ?? null));
   }
 
   if (loadState === "loading") {
@@ -337,6 +407,36 @@ function ProvisioningContent() {
                 {pin.status === "connecting" ? "Connecting…" : "Connect over USB"}
               </button>
             )}
+
+            {mismatch ? (
+              <>
+                <StatusMessage tone="warning">
+                  {`This Pin is connected to another Luma server${mismatch.status.edgeIpv4 ? ` (edge IPv4 ${mismatch.status.edgeIpv4})` : ""}. Switching disconnects it from that server and connects it to this one.`}
+                </StatusMessage>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  disabled={activationBusy || pin.status !== "connected" || !usbClient}
+                  onClick={() => void switchPin()}
+                >
+                  {activationBusy ? "Switching this Pin…" : "Switch this Pin to this server"}
+                </button>
+              </>
+            ) : null}
+
+            {enrollmentIncomplete ? (
+              <>
+                <StatusMessage tone="warning">{enrollmentIncomplete.message}</StatusMessage>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  disabled={activationBusy || pin.status !== "connected" || !usbClient}
+                  onClick={() => void reenrollPin()}
+                >
+                  {activationBusy ? "Running its setup…" : "Run its original setup"}
+                </button>
+              </>
+            ) : null}
 
             {pin.identity?.recognizedAiPin === false ? (
               <StatusMessage tone="danger">The connected device is not an Ai Pin.</StatusMessage>

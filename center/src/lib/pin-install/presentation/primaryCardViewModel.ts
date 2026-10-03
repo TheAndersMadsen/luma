@@ -79,6 +79,7 @@ export interface PrimaryCardViewModel {
   readonly steps: readonly PrimaryCardStepViewModel[];
   readonly packageRows: readonly PrimaryCardPackageRowViewModel[];
   readonly conflictRows: readonly PrimaryCardPackageRowViewModel[];
+  readonly unrecognizedApps: PrimaryCardUnrecognizedAppsViewModel | null;
   readonly overflowActions: readonly PrimaryCardActionViewModel[];
   readonly primaryAction: PrimaryCardActionViewModel | null;
   readonly secondaryActions: readonly PrimaryCardActionViewModel[];
@@ -110,7 +111,13 @@ const PHASE_TITLES: Record<OperationProgressEvent["phase"], string> = {
   Configure: "Finishing up",
   Verify: "Checking your Pin",
   Restore: "Restoring the original apps",
+  Deactivate: "Removing your server connection",
 };
+
+export interface PrimaryCardUnrecognizedAppsViewModel {
+  readonly count: number;
+  readonly packages: readonly string[];
+}
 
 const KEEP_CONNECTED_COPY =
   "Keep this tab open and your Pin unlocked on the cable. If it restarts, Center reconnects.";
@@ -526,6 +533,20 @@ function getConflictRows(
   }));
 }
 
+function getUnrecognizedApps(
+  state: InstallControllerState,
+): PrimaryCardUnrecognizedAppsViewModel | null {
+  const packages = state.inspection?.unrecognizedPackages ?? [];
+  if (packages.length === 0) {
+    return null;
+  }
+
+  return {
+    count: packages.length,
+    packages: [...packages],
+  };
+}
+
 function createActionFromCommand(
   key: Exclude<PrimaryCardActionViewModel["key"], "goToCenter">,
   command: InstallActionCommand,
@@ -755,6 +776,7 @@ export function derivePrimaryCardViewModel(
     steps: getSteps(state, primaryAction),
     packageRows: state.connection === null ? [] : getPackageRows(state),
     conflictRows: state.connection === null ? [] : getConflictRows(state),
+    unrecognizedApps: getUnrecognizedApps(state),
     overflowActions: getOverflowActions(state, commands),
     primaryAction,
     secondaryActions: getSecondaryActions(state, commands, primaryAction),

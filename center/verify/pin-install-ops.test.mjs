@@ -21,10 +21,16 @@
  *                           download or device write, and records whether any
  *                           device change actually started.
  *   runRemoveConflicts, a package that survives its own uninstall is a
- *                           failure, not a warning. A wedged device times out
- *                           instead of hanging.
- *   runUninstall, cleanup → restore → verify runs in that order, and
- *                           a verification failure fails the operation.
+ *                           failure, not a warning. The stock launcher goes
+ *                           back on BEFORE the per-suite reboot commands, and
+ *                           the op does not return until the Pin has finished
+ *                           starting. A wedged device times out instead of
+ *                           hanging.
+ *   runRemovePackages, the confirmed-packages removal reuses the conflict
+ *                           flow's survive-own-uninstall rule.
+ *   runUninstall, deactivate → cleanup → restore → verify runs in that
+ *                           order, an identity refusal degrades to a warning,
+ *                           and a verification failure fails the operation.
  *   deriveInstallController, the primary action is disabled unless the device
  *                           proved its credential-encrypted storage is
  *                           available. A failed inspection drops the trusted
@@ -63,9 +69,11 @@ const {
   deriveInstallControllerCommands,
   derivePrimaryCardViewModel,
   installControllerReducer,
+  inspectionIsFirstInstall,
   lockResolvedInstallTarget,
   runInstallOperation,
   runRemoveConflictsOperation,
+  runRemovePackagesOperation,
   runUninstallOperation,
 } = await import("../src/lib/pin-install/index.ts?pin-install-ops-test");
 
@@ -84,6 +92,9 @@ const { PackageServiceNotReadyError } = await import(
 );
 const { verifyInstalledManagedState } = await import(
   "../src/lib/pin-install/ops/shared.ts"
+);
+const { PREINSTALL_CLEANUP_COMMANDS } = await import(
+  "../src/lib/pin-install/domain/knownPackageConflicts.ts"
 );
 const installControllerSource = await readFile(
   new URL(
@@ -206,7 +217,7 @@ function createInspection(options = {}) {
     target,
     targetResolutionFailed: false,
     targetResolutionErrorMessage: null,
-    helperPresentUnexpectedly: false,
+    helperPresentUnexpectedly: options.helperPresent ?? false,
     readiness: {
       packageQueryabilityOk: true,
       settleDelayMs: 0,
@@ -216,6 +227,7 @@ function createInspection(options = {}) {
     packages,
     detectedConflicts: [],
     hasDetectedConflicts: false,
+    unrecognizedPackages: [],
     actionState: {
       action: options.action ?? "Update",
       warnings: { newerThanTarget: false, unreadableVersion: true },
@@ -242,6 +254,7 @@ function createInternals(target, inspection) {
     assertPackageManagerReady: spy(),
     runPreinstallCleanupCommand: spy(async () => ({ success: true, message: "ok" })),
     cleanupManagedPackages: spy(),
+    uninstallLeftoverHelper: spy(),
     bootstrapFinalInstaller: spy(),
     installManagedPackages: spy(),
     disableConfiguredPackages: spy(async () => []),
@@ -286,7 +299,8 @@ describe("createInstallPlan", () => {
     const target = createResolvedInstallTargetFixture();
     // Confirmation is granted here on purpose: an operator who has agreed to
     // recovery must still not get recovery for a device whose installer signer
-    // is simply unrecognised. That is a blocked device, not a broken one.
+    // is unrecognised WHILE other roles stay Luma-signed. A mixed set is a
+    // blocked device, not a broken one.
     assert.throws(
       () =>
         createInstallPlan({
@@ -300,6 +314,45 @@ describe("createInstallPlan", () => {
         }),
       (error) => error instanceof InstallPlanningError && error.code === "blocked",
     );
+  });
+
+  /*
+   * The wholly foreign-signed baseline (every installed role carries Luma's
+   * package IDs under another key, the CURRENT-generation PenumbraOS shape) is
+   * the decision's one new route to recovery, and it holds the same separate
+   * explicit confirmation as every other recovery plan.
+   */
+  it("routes a wholly foreign-signed healthy baseline through confirmed recovery", () => {
+    const target = createResolvedInstallTargetFixture();
+    const inspection = createInspection({
+      target,
+      packageOverrides: Object.fromEntries(
+        MANAGED_ROLES.map((role) => [role, { signerIdentity: "aaaaaaaa" }]),
+      ),
+    });
+
+    assert.throws(
+      () =>
+        createInstallPlan({
+          transport: createFakeTransport(),
+          target,
+          inspection,
+        }),
+      (error) =>
+        error instanceof InstallPlanningError &&
+        error.code === "bootstrap-recovery-confirmation-required",
+    );
+
+    const plan = createInstallPlan({
+      transport: createFakeTransport(),
+      target,
+      inspection,
+      bootstrapRecoveryConfirmed: true,
+    });
+    assert.equal(plan.kind, "bootstrap-recovery");
+    assert.equal(plan.shouldCleanupManagedPackages, true);
+    assert.equal(plan.shouldBootstrapInstaller, true);
+    assert.equal(plan.retainedInstaller, null);
   });
 
   it("keeps canonical routine reinstalls on the installed provider", () => {
@@ -399,6 +452,66 @@ describe("createInstallPlan", () => {
       "serverApk",
       "loaderApk",
     ]);
+  });
+
+  /*
+   * A bootstrap that died partway leaves the Setup Helper installed. That alone
+   * is not a dead end: a device with nothing else of Luma's reaches the same
+   * recovery plan as a stock Pin (its cleanupManagedPackages uninstalls the
+   * helper), and the wearer reads it as a first install.
+   */
+  it("sends a helper-only device to the recovery plan as a first install", () => {
+    const target = createResolvedInstallTargetFixture();
+    const inspection = createInspection({
+      target,
+      helperPresent: true,
+      packageOverrides: Object.fromEntries(
+        MANAGED_ROLES.map((role) => [
+          role,
+          {
+            installed: false,
+            healthy: false,
+            versionName: null,
+            signerIdentity: null,
+            versionReadable: false,
+            querySucceeded: false,
+            rawOutput: null,
+            versionComparison: null,
+          },
+        ]),
+      ),
+    });
+
+    assert.equal(inspectionIsFirstInstall(inspection), true);
+
+    const plan = createInstallPlan({
+      transport: createFakeTransport(),
+      target,
+      inspection,
+      bootstrapRecoveryConfirmed: true,
+    });
+    assert.equal(plan.kind, "bootstrap-recovery");
+    assert.equal(plan.shouldCleanupManagedPackages, true);
+    assert.equal(plan.shouldCleanupLeftoverHelper, true);
+  });
+
+  it("plans leftover Setup Helper cleanup beside a healthy installer", () => {
+    const target = createResolvedInstallTargetFixture();
+    const plan = createInstallPlan({
+      transport: createFakeTransport(),
+      target,
+      inspection: createInspection({
+        target,
+        helperPresent: true,
+      }),
+    });
+
+    // The installer is healthy, so the plan stays in place; only the helper
+    // gains a dedicated removal step.
+    assert.equal(plan.kind, "routine-in-place");
+    assert.equal(plan.shouldCleanupLeftoverHelper, true);
+    assert.equal(plan.shouldCleanupManagedPackages, false);
+    assert.equal(plan.shouldBootstrapInstaller, false);
   });
 });
 
@@ -625,6 +738,56 @@ describe("runInstallOperation", () => {
 
     const [, , policy] = internals.verifyInstalledManagedState.calls[0];
     assert.equal(policy.mode, "bootstrap-recovery");
+  });
+
+  it("uninstalls a leftover Setup Helper during an in-place install and fails the op when that fails", async () => {
+    const target = createResolvedInstallTargetFixture();
+    const inspection = createInspection({
+      target,
+      helperPresent: true,
+    });
+    const internals = createInternals(target, inspection);
+
+    const result = await runInstallOperation(
+      { transport: createFakeTransport(), target, inspection },
+      internals,
+    );
+
+    // The healthy installer is retained; only the helper gains a removal step.
+    assert.equal(result.success, true);
+    assert.equal(internals.uninstallLeftoverHelper.calls.length, 1);
+    assert.equal(internals.cleanupManagedPackages.calls.length, 0);
+    assert.equal(internals.bootstrapFinalInstaller.calls.length, 0);
+
+    const failingInternals = createInternals(target, inspection);
+    failingInternals.uninstallLeftoverHelper.implementation = async () => {
+      throw new Error("pm uninstall failed");
+    };
+    const failed = await runInstallOperation(
+      { transport: createFakeTransport(), target, inspection },
+      failingInternals,
+    );
+
+    // Not best-effort: a helper that survives cleanup would fail verification
+    // with "still present after installation", so the op stops here.
+    assert.equal(failed.success, false);
+    assert.equal(failed.failedPhase, "Cleanup");
+    assert.equal(failed.deviceChangesStarted, true);
+    assert.equal(failingInternals.installManagedPackages.calls.length, 0);
+  });
+
+  it("keeps an in-place install additive when no helper is left behind", async () => {
+    const target = createResolvedInstallTargetFixture();
+    const inspection = createInspection({ target });
+    const internals = createInternals(target, inspection);
+
+    const result = await runInstallOperation(
+      { transport: createFakeTransport(), target, inspection },
+      internals,
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(internals.uninstallLeftoverHelper.calls.length, 0);
   });
 
   it("refreshes stale missing-package state after readiness before planning", async () => {
@@ -890,45 +1053,89 @@ const CONFLICT_DATA_CLEANUP = Object.freeze({
   description: "Clear previous data",
 });
 
+const CONFLICT_REBOOT = Object.freeze({
+  argv: ["reboot"],
+  description: "Reboot device",
+});
+
+/** Recording stubs for every device-touching step of the conflict pipeline. */
+function createRemoveConflictsInternals(calls) {
+  return {
+    async waitForPackageManagerReady() {
+      calls.push("package-ready");
+    },
+    async uninstallPackage(_transport, packageId) {
+      calls.push(`uninstall:${packageId}`);
+    },
+    async packageExists(_transport, packageId) {
+      calls.push(`exists:${packageId}`);
+      return false;
+    },
+    async runPreinstallCleanupCommand(_transport, command) {
+      calls.push(`preinstall:${command.argv.join(" ")}`);
+      return { success: true, message: "ok" };
+    },
+    async setHomeActivity() {
+      calls.push("set-home");
+    },
+    async runCleanupCommand(_transport, command) {
+      calls.push(`cleanup:${command.argv.join(" ")}`);
+      return { success: true, message: "ok" };
+    },
+    async removeConflictFilePaths(_transport, paths) {
+      calls.push(`rm:${paths.join(",")}`);
+    },
+    async waitForBootCompleted() {
+      calls.push("boot-wait");
+    },
+  };
+}
+
 describe("runRemoveConflictsOperation", () => {
-  it("removes detected package IDs and runs group cleanup commands", async () => {
+  it("removes packages, restores the stock launcher, reboots, and waits out the boot, in that order", async () => {
     const calls = [];
     const progress = spy();
     const installed = new Set(["one.pkg", "two.pkg"]);
+    const internals = createRemoveConflictsInternals(calls);
+    internals.uninstallPackage = async (_transport, packageId) => {
+      calls.push(`uninstall:${packageId}`);
+      installed.delete(packageId);
+    };
+    internals.packageExists = async (_transport, packageId) => {
+      calls.push(`exists:${packageId}`);
+      return installed.has(packageId);
+    };
+    internals.runCleanupCommand = async (_transport, command) => {
+      calls.push(`cleanup:${command.argv.join(" ")}`);
+      return { success: true, message: "ok" };
+    };
 
     const result = await runRemoveConflictsOperation(
       {
         transport: createFakeTransport("Fake Device"),
-        conflicts: [createConflict({ cleanupCommands: [CONFLICT_DATA_CLEANUP] })],
+        conflicts: [createConflict({ cleanupCommands: [CONFLICT_REBOOT] })],
         onProgress: progress,
       },
-      {
-        async waitForPackageManagerReady() {
-          calls.push("package-ready");
-        },
-        async uninstallPackage(_transport, packageId) {
-          calls.push(`uninstall:${packageId}`);
-          installed.delete(packageId);
-        },
-        async packageExists(_transport, packageId) {
-          calls.push(`exists:${packageId}`);
-          return installed.has(packageId);
-        },
-        async runCleanupCommand(_transport, command) {
-          calls.push(`cleanup:${command.argv.join(" ")}`);
-          return { success: true, message: "ok" };
-        },
-      },
+      internals,
     );
 
-    // Each removal is confirmed against the device before the next one starts.
+    // Each removal is confirmed against the device before the next one starts,
+    // the stock launcher and system apps go back on BEFORE the reboot (an
+    // interrupted run must never leave a launcherless Pin), and the op does not
+    // return until the Pin has finished starting.
     assert.deepEqual(calls, [
       "package-ready",
       "uninstall:one.pkg",
       "exists:one.pkg",
       "uninstall:two.pkg",
       "exists:two.pkg",
-      "cleanup:pm clear previous.data",
+      ...PREINSTALL_CLEANUP_COMMANDS.map(
+        (command) => `preinstall:${command.argv.join(" ")}`,
+      ),
+      "set-home",
+      "cleanup:reboot",
+      "boot-wait",
+      "package-ready",
     ]);
     assert.equal(result.success, true);
     assert.deepEqual(result.warnings, []);
@@ -936,22 +1143,72 @@ describe("runRemoveConflictsOperation", () => {
     assertCompletedPhase(lastEvent(progress), "Cleanup");
   });
 
+  it("removes a conflict suite's leftover files before its cleanup commands", async () => {
+    const calls = [];
+    const internals = createRemoveConflictsInternals(calls);
+
+    const result = await runRemoveConflictsOperation(
+      {
+        transport: createFakeTransport("Fake Device"),
+        conflicts: [
+          createConflict({
+            installedPackageIds: ["one.pkg"],
+            cleanupFilePaths: ["/sdcard/penumbra", "/data/local/tmp/bin"],
+          }),
+        ],
+      },
+      internals,
+    );
+
+    assert.deepEqual(calls, [
+      "package-ready",
+      "uninstall:one.pkg",
+      "exists:one.pkg",
+      "rm:/sdcard/penumbra,/data/local/tmp/bin",
+      ...PREINSTALL_CLEANUP_COMMANDS.map(
+        (command) => `preinstall:${command.argv.join(" ")}`,
+      ),
+      "set-home",
+      "boot-wait",
+      "package-ready",
+    ]);
+    assert.equal(result.success, true);
+  });  it("degrades a failed leftover-file removal to a warning", async () => {
+    const internals = createRemoveConflictsInternals([]);
+    internals.removeConflictFilePaths = async () => {
+      throw new Error("rm failed");
+    };
+
+    const result = await runRemoveConflictsOperation(
+      {
+        transport: createFakeTransport("Fake Device"),
+        conflicts: [
+          createConflict({
+            installedPackageIds: [],
+            cleanupFilePaths: ["/sdcard/penumbra"],
+          }),
+        ],
+      },
+      internals,
+    );
+
+    // Leftover files are untidy, not unsafe: the removal continues.
+    assert.equal(result.success, true);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0].code, "conflict-file-cleanup-failed");
+    assert.match(result.warnings[0].message, /rm failed/);
+  });
+
   it("returns failure when a package is still present after uninstall", async () => {
+    const internals = createRemoveConflictsInternals([]);
+    internals.packageExists = async () => true;
+
     const result = await runRemoveConflictsOperation(
       {
         transport: createFakeTransport("Fake Device"),
         conflicts: [createConflict({ installedPackageIds: ["stuck.pkg"] })],
       },
-      {
-        async waitForPackageManagerReady() {},
-        async uninstallPackage() {},
-        async packageExists() {
-          return true;
-        },
-        async runCleanupCommand() {
-          return { success: true, message: "ok" };
-        },
-      },
+      internals,
     );
 
     // A silent uninstall failure would leave the install path believing the
@@ -961,6 +1218,12 @@ describe("runRemoveConflictsOperation", () => {
   });
 
   it("continues with warnings when a cleanup command fails", async () => {
+    const internals = createRemoveConflictsInternals([]);
+    internals.runCleanupCommand = async () => ({
+      success: false,
+      message: "clear failed",
+    });
+
     const result = await runRemoveConflictsOperation(
       {
         transport: createFakeTransport("Fake Device"),
@@ -971,16 +1234,7 @@ describe("runRemoveConflictsOperation", () => {
           }),
         ],
       },
-      {
-        async waitForPackageManagerReady() {},
-        async uninstallPackage() {},
-        async packageExists() {
-          return false;
-        },
-        async runCleanupCommand() {
-          return { success: false, message: "clear failed" };
-        },
-      },
+      internals,
     );
 
     // Leftover data is untidy, not unsafe: it degrades to a warning.
@@ -991,6 +1245,11 @@ describe("runRemoveConflictsOperation", () => {
   });
 
   it("returns failure when a device-side cleanup command times out", async () => {
+    const internals = createRemoveConflictsInternals([]);
+    internals.runCleanupCommand = async () => {
+      throw new AdbDeviceStepTimeoutError("shell pm clear previous.data");
+    };
+
     const result = await runRemoveConflictsOperation(
       {
         transport: createFakeTransport("Fake Device"),
@@ -1001,16 +1260,7 @@ describe("runRemoveConflictsOperation", () => {
           }),
         ],
       },
-      {
-        async waitForPackageManagerReady() {},
-        async uninstallPackage() {},
-        async packageExists() {
-          return false;
-        },
-        async runCleanupCommand() {
-          throw new AdbDeviceStepTimeoutError("shell pm clear previous.data");
-        },
-      },
+      internals,
     );
 
     // A wedged device is not a warning: the operation stops and says so.
@@ -1021,29 +1271,22 @@ describe("runRemoveConflictsOperation", () => {
 
   it("does not mutate conflicts when package readiness times out", async () => {
     const mutations = [];
+    const internals = createRemoveConflictsInternals([]);
+    internals.waitForPackageManagerReady = async () => {
+      throw new Error(
+        "Timed out waiting for Android's package service. Wait for startup to finish, then retry.",
+      );
+    };
+    internals.uninstallPackage = async () => {
+      mutations.push("uninstall");
+    };
+
     const result = await runRemoveConflictsOperation(
       {
         transport: createFakeTransport("Fake Device"),
         conflicts: [createConflict({ installedPackageIds: ["one.pkg"] })],
       },
-      {
-        async waitForPackageManagerReady() {
-          throw new Error(
-            "Timed out waiting for Android's package service. Wait for startup to finish, then retry.",
-          );
-        },
-        async uninstallPackage() {
-          mutations.push("uninstall");
-        },
-        async packageExists() {
-          mutations.push("query-after-uninstall");
-          return false;
-        },
-        async runCleanupCommand() {
-          mutations.push("cleanup");
-          return { success: true, message: "ok" };
-        },
-      },
+      internals,
     );
 
     assert.equal(result.success, false);
@@ -1054,60 +1297,182 @@ describe("runRemoveConflictsOperation", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * uninstall: removing the managed runtime and restoring stock packages
+ * removePackages: taking the wearer-confirmed unknown apps off
  * ------------------------------------------------------------------ */
 
-describe("runUninstallOperation", () => {
-  it("runs cleanup, restore, and verify in order", async () => {
+describe("runRemovePackagesOperation", () => {
+  it("removes exactly the confirmed package IDs and verifies each uninstall", async () => {
     const calls = [];
-    const progress = spy();
-    const result = await runUninstallOperation(
-      { transport: createFakeTransport("Fake Device"), onProgress: progress },
+    const internals = createRemoveConflictsInternals(calls);
+
+    const result = await runRemovePackagesOperation(
       {
-        async waitForPackageManagerReady() {
-          calls.push("package-ready");
-        },
-        async cleanupManagedPackages() {
-          calls.push("cleanup");
-        },
-        async restoreConfiguredPackages() {
-          calls.push("restore");
-          return [
-            {
-              code: "restore-failed",
-              packageName: "humane.ota",
-              message: "enable failed",
-            },
-          ];
-        },
-        async verifyUninstalledManagedState() {
-          calls.push("verify");
-        },
+        transport: createFakeTransport("Fake Device"),
+        packageIds: ["side.app.one", "side.app.two"],
       },
+      internals,
     );
 
-    // Order is load-bearing: managed packages come off before stock packages go
-    // back on, and only then is the end state verified.
-    assert.deepEqual(calls, ["package-ready", "cleanup", "restore", "verify"]);
+    assert.deepEqual(calls, [
+      "package-ready",
+      "uninstall:side.app.one",
+      "exists:side.app.one",
+      "uninstall:side.app.two",
+      "exists:side.app.two",
+    ]);
+    assert.equal(result.success, true);
+    assert.deepEqual(result.removedPackageIds, ["side.app.one", "side.app.two"]);
+    assert.deepEqual(result.warnings, []);
+  });
+
+  it("fails when a confirmed package survives its own uninstall", async () => {
+    const internals = createRemoveConflictsInternals([]);
+    internals.packageExists = async () => true;
+
+    const result = await runRemovePackagesOperation(
+      {
+        transport: createFakeTransport("Fake Device"),
+        packageIds: ["stuck.app"],
+      },
+      internals,
+    );
+
+    // The conflict flow's rule: a silent failure must not read as success.
+    assert.equal(result.success, false);
+    assert.match(result.error?.message ?? "", /stuck\.app/);
+    assert.deepEqual(result.removedPackageIds, []);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * uninstall: deactivating the server identity, removing the managed
+ * runtime, and restoring stock packages
+ * ------------------------------------------------------------------ */
+
+function createUninstallInternals(calls) {
+  return {
+    async waitForPackageManagerReady() {
+      calls.push("package-ready");
+    },
+    async deactivateCosmosIdentity() {
+      calls.push("deactivate");
+      return { ok: true, state: "deactivated", rollbackComplete: true, message: null };
+    },
+    async clearCosmosIdentity() {
+      calls.push("clear");
+      return { ok: true, state: "cleared", rollbackComplete: true, message: null };
+    },
+    async cleanupManagedPackages() {
+      calls.push("cleanup");
+    },
+    async restoreConfiguredPackages() {
+      calls.push("restore");
+      return [];
+    },
+    async verifyUninstalledManagedState() {
+      calls.push("verify");
+    },
+  };
+}
+
+describe("runUninstallOperation", () => {
+  it("runs deactivate, cleanup, restore, and verify in order", async () => {
+    const calls = [];
+    const progress = spy();
+    const internals = createUninstallInternals(calls);
+    internals.restoreConfiguredPackages = async () => {
+      calls.push("restore");
+      return [
+        {
+          code: "restore-failed",
+          packageName: "humane.ota",
+          message: "enable failed",
+        },
+      ];
+    };
+    const result = await runUninstallOperation(
+      { transport: createFakeTransport("Fake Device"), onProgress: progress },
+      internals,
+    );
+
+    // Order is load-bearing: the identity provider lives in the server APK, so
+    // it is deactivated BEFORE cleanup uninstalls that package, stock packages
+    // go back on after the managed packages come off, and only then is the end
+    // state verified.
+    assert.deepEqual(calls, [
+      "package-ready",
+      "deactivate",
+      "clear",
+      "cleanup",
+      "restore",
+      "verify",
+    ]);
     // A package that could not be re-enabled is reported, not fatal.
     assert.equal(result.success, true);
     assert.equal(result.warnings.length, 1);
     assertCompletedPhase(lastEvent(progress), "Verify");
   });
 
-  it("returns failure when verification fails", async () => {
+  it("degrades a Cosmos identity refusal to a warning and still uninstalls", async () => {
+    const calls = [];
+    const {
+      CosmosIdentityRefusedError,
+    } = await import("../src/lib/pin-device/cosmosIdentity.ts");
+    const internals = createUninstallInternals(calls);
+    internals.deactivateCosmosIdentity = async () => {
+      calls.push("deactivate-refused");
+      throw new CosmosIdentityRefusedError("The Pin refused the Cosmos identity change.");
+    };
+
     const result = await runUninstallOperation(
       { transport: createFakeTransport("Fake Device") },
-      {
-        async waitForPackageManagerReady() {},
-        async cleanupManagedPackages() {},
-        async restoreConfiguredPackages() {
-          return [];
-        },
-        async verifyUninstalledManagedState() {
-          throw new Error("package still present");
-        },
-      },
+      internals,
+    );
+
+    // An unreachable or refusing provider must not strand Luma on the Pin:
+    // the uninstall continues and reports what did not happen.
+    assert.equal(result.success, true);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0].code, "identity-deactivate-failed");
+    assert.match(result.warnings[0].message, /refused/);
+    assert.deepEqual(calls, [
+      "package-ready",
+      "deactivate-refused",
+      "cleanup",
+      "restore",
+      "verify",
+    ]);
+  });
+
+  it("warns when deactivation succeeded but the settings rollback did not complete", async () => {
+    const internals = createUninstallInternals([]);
+    internals.deactivateCosmosIdentity = async () => ({
+      ok: true,
+      state: "deactivated",
+      rollbackComplete: false,
+      message: null,
+    });
+
+    const result = await runUninstallOperation(
+      { transport: createFakeTransport("Fake Device") },
+      internals,
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.warnings.length, 1);
+    assert.equal(result.warnings[0].code, "identity-deactivate-failed");
+    assert.match(result.warnings[0].message, /may need a repair/);
+  });
+
+  it("returns failure when verification fails", async () => {
+    const internals = createUninstallInternals([]);
+    internals.verifyUninstalledManagedState = async () => {
+      throw new Error("package still present");
+    };
+
+    const result = await runUninstallOperation(
+      { transport: createFakeTransport("Fake Device") },
+      internals,
     );
 
     assert.equal(result.success, false);
@@ -1115,18 +1480,14 @@ describe("runUninstallOperation", () => {
   });
 
   it("returns failure when a device-side uninstall step times out", async () => {
+    const internals = createUninstallInternals([]);
+    internals.cleanupManagedPackages = async () => {
+      throw new AdbDeviceStepTimeoutError("shell pm uninstall com.penumbraos.server");
+    };
+
     const result = await runUninstallOperation(
       { transport: createFakeTransport("Fake Device") },
-      {
-        async waitForPackageManagerReady() {},
-        async cleanupManagedPackages() {
-          throw new AdbDeviceStepTimeoutError("shell pm uninstall com.penumbraos.server");
-        },
-        async restoreConfiguredPackages() {
-          return [];
-        },
-        async verifyUninstalledManagedState() {},
-      },
+      internals,
     );
 
     assert.equal(result.success, false);
@@ -1137,24 +1498,25 @@ describe("runUninstallOperation", () => {
   it("does not mutate uninstall state when package readiness fails", async () => {
     const mutations = [];
     let readinessCalls = 0;
+    const internals = createUninstallInternals([]);
+    internals.waitForPackageManagerReady = async () => {
+      readinessCalls += 1;
+      throw new Error("Android package service is not ready");
+    };
+    internals.cleanupManagedPackages = async () => {
+      mutations.push("cleanup");
+    };
+    internals.restoreConfiguredPackages = async () => {
+      mutations.push("restore");
+      return [];
+    };
+    internals.verifyUninstalledManagedState = async () => {
+      mutations.push("verify");
+    };
+
     const result = await runUninstallOperation(
       { transport: createFakeTransport("Fake Device") },
-      {
-        async waitForPackageManagerReady() {
-          readinessCalls += 1;
-          throw new Error("Android package service is not ready");
-        },
-        async cleanupManagedPackages() {
-          mutations.push("cleanup");
-        },
-        async restoreConfiguredPackages() {
-          mutations.push("restore");
-          return [];
-        },
-        async verifyUninstalledManagedState() {
-          mutations.push("verify");
-        },
-      },
+      internals,
     );
 
     assert.equal(result.success, false);
@@ -1252,6 +1614,7 @@ function createControllerInspection(overrides = {}) {
     },
     detectedConflicts: [],
     hasDetectedConflicts: false,
+    unrecognizedPackages: [],
     actionState: {
       action: "Reinstall",
       warnings: { newerThanTarget: false, unreadableVersion: false },
@@ -1358,6 +1721,22 @@ describe("deriveInstallControllerCommands", () => {
     assert.equal(commands.removeConflicts.visible, true);
     assert.equal(commands.removeConflicts.disabled, true);
     assert.match(commands.removeConflicts.reason ?? "", /Connect a device/);
+  });
+
+  it("offers the unrecognized-apps removal only while unrecognized apps are detected", () => {
+    const clean = deriveInstallControllerCommands(createControllerState());
+    assert.equal(clean.removeUnrecognized.visible, false);
+
+    const withUnrecognized = deriveInstallControllerCommands(
+      createControllerState({
+        inspection: createControllerInspection({
+          unrecognizedPackages: ["com.example.sideapp"],
+        }),
+      }),
+    );
+    assert.equal(withUnrecognized.removeUnrecognized.visible, true);
+    assert.equal(withUnrecognized.removeUnrecognized.disabled, false);
+    assert.equal(withUnrecognized.removeUnrecognized.label, "Remove unrecognized apps…");
   });
 
   it("shows recheck after successful conflict removal", () => {
@@ -1472,6 +1851,12 @@ function createCommands() {
       disabled: false,
       reason: null,
     },
+    removeUnrecognized: {
+      visible: false,
+      label: "Remove unrecognized apps…",
+      disabled: false,
+      reason: null,
+    },
     recheck: { visible: false, label: "Check again", disabled: false, reason: null },
     startOver: { visible: true, label: "Disconnect", disabled: false, reason: null },
     goToCenter: { visible: false, ...DEFAULT_POST_INSTALL_LINK },
@@ -1549,5 +1934,27 @@ describe("derivePrimaryCardViewModel", () => {
     // Two packages are known to the group, one is actually on this device: the
     // row counts what is installed, not what the definition lists.
     assert.equal(row.value, "1 package");
+  });
+
+  it("surfaces the unrecognized-app advisory with its exact package list", () => {
+    const viewModel = derivePrimaryCardViewModel(
+      createControllerState({
+        inspection: createControllerInspection({
+          unrecognizedPackages: ["com.example.sideapp", "com.other.util"],
+        }),
+      }),
+      createCommands(),
+    );
+
+    assert.deepEqual(viewModel.unrecognizedApps, {
+      count: 2,
+      packages: ["com.example.sideapp", "com.other.util"],
+    });
+
+    const clean = derivePrimaryCardViewModel(
+      createControllerState(),
+      createCommands(),
+    );
+    assert.equal(clean.unrecognizedApps, null);
   });
 });

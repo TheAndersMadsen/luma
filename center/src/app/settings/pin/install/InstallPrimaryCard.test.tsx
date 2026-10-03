@@ -76,6 +76,7 @@ function inspection(options: { version: string; locked?: boolean }): InstallInsp
     },
     detectedConflicts: [],
     hasDetectedConflicts: false,
+    unrecognizedPackages: [],
     actionState: {
       action: upToDate ? "Reinstall" : "Update",
       warnings: { newerThanTarget: false, unreadableVersion: false },
@@ -105,7 +106,7 @@ function show(state: InstallControllerState, from: string | null = null) {
     runInstallApkFile: vi.fn(async () => undefined),
     startOver: vi.fn(async () => undefined),
   } as unknown as InstallController;
-  const handlers = { onPrimaryAction: vi.fn(), onUninstall: vi.fn(), onRemoveConflicts: vi.fn() };
+  const handlers = { onPrimaryAction: vi.fn(), onUninstall: vi.fn(), onRemoveConflicts: vi.fn(), onRemoveUnrecognized: vi.fn() };
   render(<InstallPrimaryCard controller={controller} handlers={handlers} terminalHref={null} />);
   return { controller, handlers };
 }

@@ -36,6 +36,7 @@ import {
   resolveInstallTarget,
   runInstallOperation,
   runRemoveConflictsOperation,
+  runRemovePackagesOperation,
   runUninstallOperation,
   type ControllerOperationResult,
   type InstallControllerCommands,
@@ -66,6 +67,7 @@ export interface InstallController {
   runInstallApkFile(): Promise<void>;
   runUninstall(): Promise<void>;
   runRemoveConflicts(): Promise<void>;
+  runRemoveUnrecognizedPackages(): Promise<void>;
   runFixConflictsThenPrimaryAction(options?: {
     readonly bootstrapRecoveryConfirmed?: boolean;
   }): Promise<void>;
@@ -462,6 +464,7 @@ export function useInstallController(
     const hasConflictCleanupWork = detectedConflicts.some(
       (conflict) =>
         conflict.installedPackageIds.length > 0 ||
+        (conflict.cleanupFilePaths?.length ?? 0) > 0 ||
         conflict.cleanupCommands.length > 0,
     );
     const progress = createProgressDispatcher({
@@ -514,6 +517,60 @@ export function useInstallController(
     }
   }, [ensureTransport, refreshInspection]);
 
+  const runRemoveUnrecognizedPackages = useCallback(async () => {
+    const transport = ensureTransport();
+    const currentState = stateRef.current;
+    const packageIds = currentState.inspection?.unrecognizedPackages ?? [];
+    const progress = createProgressDispatcher({
+      onDispatch: (event) => {
+        dispatch({
+          type: "operation-progress",
+          event,
+        });
+      },
+    });
+
+    if (packageIds.length === 0) {
+      return;
+    }
+
+    dispatch({ type: "operation-started" });
+
+    try {
+      const result = await runRemovePackagesOperation({
+        transport,
+        packageIds,
+        onProgress: progress.onProgress,
+      });
+
+      progress.markTimedOut(result.error);
+      const nextInspection = await resolvePostOperationInspection(result, () =>
+        refreshInspection(transport, {
+          target: getActiveTarget(currentState),
+          targetResolutionError: getInspectionTargetResolutionError(
+            currentState.inspection,
+          ),
+        }),
+      );
+
+      const operationResult: ControllerOperationResult = {
+        kind: "remove-conflicts",
+        result,
+      };
+
+      dispatch({
+        type: "operation-completed",
+        result: operationResult,
+        inspection: nextInspection,
+      });
+    } catch (error) {
+      dispatch({
+        type: "operation-failed",
+        error: toErrorMessage(error),
+      });
+    }
+  }, [ensureTransport, refreshInspection]);
+
   const runFixConflictsThenPrimaryAction = useCallback(
     async (operationOptions?: {
       readonly bootstrapRecoveryConfirmed?: boolean;
@@ -525,6 +582,7 @@ export function useInstallController(
       const hasConflictCleanupWork = detectedConflicts.some(
         (conflict) =>
           conflict.installedPackageIds.length > 0 ||
+          (conflict.cleanupFilePaths?.length ?? 0) > 0 ||
           conflict.cleanupCommands.length > 0,
       );
 
@@ -728,6 +786,7 @@ export function useInstallController(
     runInstallApkFile,
     runUninstall,
     runRemoveConflicts,
+    runRemoveUnrecognizedPackages,
     runFixConflictsThenPrimaryAction,
     getLogcatContent,
     startOver,

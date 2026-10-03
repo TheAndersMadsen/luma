@@ -59,6 +59,8 @@ export type { DeviceIdentity } from "./deviceIdentity";
 export { createDeviceLogLine } from "./logStream";
 export type { DeviceLogLine } from "./logStream";
 
+export { shellCommand, shellSingleQuote } from "./shellQuote";
+
 export {
   extractExactProviderMessage,
   installWithSafeProviderUpdates,
@@ -98,8 +100,11 @@ export type {
 } from "./packageManager";
 
 export {
+  BOOT_COMPLETED_POLL_MS,
+  BOOT_COMPLETED_TIMEOUT_MS,
   DEFAULT_SOFT_REBOOT_SETTLE_MS,
   inspectPackageQueryability,
+  waitForBootCompleted,
   waitForSoftRebootSettle,
 } from "./readiness";
 export type {

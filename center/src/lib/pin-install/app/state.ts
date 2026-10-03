@@ -98,6 +98,7 @@ export interface InstallControllerCommands {
   readonly installApkFile: InstallActionCommand;
   readonly uninstall: InstallActionCommand;
   readonly removeConflicts: InstallActionCommand;
+  readonly removeUnrecognized: InstallActionCommand;
   readonly recheck: InstallActionCommand;
   readonly startOver: InstallActionCommand;
   readonly goToCenter: InstallLinkCommand;
@@ -192,7 +193,12 @@ function hasRemovableManagedState(inspection: InstallInspectionResult): boolean 
 }
 
 function hasDetectedRemovableConflicts(inspection: InstallInspectionResult): boolean {
-  return inspection.detectedConflicts.some((conflict) => conflict.installedPackageIds.length > 0);
+  return inspection.detectedConflicts.some(
+    (conflict) =>
+      conflict.installedPackageIds.length > 0 ||
+      (conflict.cleanupFilePaths?.length ?? 0) > 0 ||
+      conflict.cleanupCommands.length > 0,
+  );
 }
 
 export function isControllerOperationSuccessful(
@@ -358,6 +364,8 @@ export function deriveInstallControllerCommands(
   const resultSuccessful = isControllerOperationSuccessful(state.lastOperationResult);
   const hasRemovableState = state.inspection ? hasRemovableManagedState(state.inspection) : true;
   const hasDetectedConflicts = state.inspection ? hasDetectedRemovableConflicts(state.inspection) : false;
+  const unrecognizedPackageCount =
+    state.inspection?.unrecognizedPackages?.length ?? 0;
   const installActionsBlockedReason =
     state.inspection?.installActionsBlockedReason ??
     "Center couldn’t load a verified Pin release from your server.";
@@ -453,6 +461,21 @@ export function deriveInstallControllerCommands(
           ? "Connect a device before removing conflicts."
           : !hasDetectedConflicts
             ? "No known conflicting packages were detected."
+            : null,
+    },
+    removeUnrecognized: {
+      visible:
+        (hasConnection || hasInspection) &&
+        state.stage !== "operating" &&
+        unrecognizedPackageCount > 0,
+      label: "Remove unrecognized apps…",
+      disabled: state.isBusy || !hasConnection || unrecognizedPackageCount === 0,
+      reason: state.isBusy
+        ? "Wait for the current task to finish."
+        : !hasConnection
+          ? "Connect a device before removing unrecognized apps."
+          : unrecognizedPackageCount === 0
+            ? "No unrecognized apps were detected."
             : null,
     },
     recheck: {

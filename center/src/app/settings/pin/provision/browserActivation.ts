@@ -1,5 +1,11 @@
 import type { AdbSessionTransport } from "@/lib/pin-device/adb/transport";
 import { PinApiError, type PinClient } from "@/lib/pin-device/client";
+import {
+  clearCosmosIdentity,
+  CosmosIdentityRefusedError,
+  CosmosIdentityUnavailableError,
+  deactivateCosmosIdentity,
+} from "@/lib/pin-device/cosmosIdentity";
 import { UsbBridgeUnavailableError } from "@/lib/pin-device/usbTransport";
 import type { ActivationBundle } from "./types";
 
@@ -10,6 +16,23 @@ const ONBOARDING_ENDPOINT = "https://onboarding.cosmos.humane.cloud";
 const DEVICE_ID = /^[0-9a-f]+$/u;
 const ENDPOINT_ID = /^[0-9a-f]{64}$/u;
 const MAINTENANCE_URI = "content://com.penumbraos.server.maintenance";
+
+/**
+ * Stock's completed-original-setup flag, written by
+ * `humane.experience.onboarding.node.WelcomeNode.launchHome` after a finished
+ * onboarding. Nothing stock ever writes it back to "0", and stock
+ * `OnboardingCoordinator.disableOnboarding` component-disables
+ * `OnboardingHome` after any completed onboarding, so "1" means the stock
+ * ceremony ran against some other credential issuer.
+ */
+const DUC_PROVISIONED_SETTING = "humane.settings.global.DUC_PROVISIONED";
+/** Manifest activities of package `humane.experience.onboarding`, verified
+ * against the decompiled stock manifest (`humane_onboarding/resources/
+ * AndroidManifest.xml` in the stock reference). Only `OnboardingHome` is
+ * component-disabled by stock `disableOnboarding`; `OnboardingExperience`
+ * stays enabled and exported, so it starts directly. */
+const ONBOARDING_EXPERIENCE_COMPONENT =
+  "humane.experience.onboarding/humane.experience.onboarding.OnboardingExperience";
 
 type BrowserBridgeStatus = {
   configured: boolean;
@@ -198,9 +221,22 @@ export async function connectedDeviceId(session: AdbSessionTransport): Promise<s
   return deviceId;
 }
 
+/**
+ * Fail-safe false by design: this read only arms the enrollment guard, so an
+ * unreadable answer must never break a working Pin's silent fast path.
+ */
+async function readDucProvisionedFlag(session: AdbSessionTransport): Promise<boolean> {
+  try {
+    const result = await session.shell(["settings", "get", "global", DUC_PROVISIONED_SETTING]);
+    return result.exitCode === 0 && result.stdout.trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
 async function preflightConnectedPinActivation(
   session: AdbSessionTransport,
-): Promise<{ deviceId: string; status: ActivationStatus }> {
+): Promise<{ deviceId: string; status: ActivationStatus; ducProvisioned: boolean }> {
   const deviceId = await connectedDeviceId(session);
   const unlocked = (await shell(
     session,
@@ -219,7 +255,52 @@ async function preflightConnectedPinActivation(
   if (!status.ok) {
     throw new Error("Install the current Luma release on this Pin, then try again.");
   }
-  return { deviceId, status };
+  return { deviceId, status, ducProvisioned: await readDucProvisionedFlag(session) };
+}
+
+/** What `verifyExistingActivation` rejected, in its own check order. */
+function activationMismatchDetail(status: ActivationStatus): string {
+  if (status.state !== "active") return `activation state ${status.state ?? "unknown"}`;
+  if (!status.consistent || !status.managed) return "an incomplete activation record";
+  if (!status.remoteGateEnabled) return "its remote access gate is disabled";
+  if (!status.targetMatches) return "an activation record that does not match this Pin";
+  if (!status.identityPresent || !status.identityUsable) return "an unusable Cosmos identity";
+  if (status.edgeIpv4) return `edge IPv4 ${status.edgeIpv4}`;
+  if (!status.fingerprintSha256 || !status.rootCertificateSha256) return "missing identity fingerprints";
+  if (!status.apiEndpoint) return "a different Cosmos API endpoint";
+  if (!status.onboardingEndpoint) return "a different onboarding endpoint";
+  return `device status endpoint ${status.deviceStatusEndpoint ?? "unknown"}`;
+}
+
+/** The Pin is active, but not with this server's Cosmos identity. */
+export class ActiveIdentityMismatchError extends Error {
+  readonly status: ActivationStatus;
+
+  constructor(status: ActivationStatus) {
+    super(`This Pin is active with a different or incomplete Cosmos identity (${activationMismatchDetail(status)}).`);
+    this.name = "ActiveIdentityMismatchError";
+    this.status = status;
+  }
+}
+
+/**
+ * The Pin finished Humane's original setup (`DUC_PROVISIONED=1`) but has never
+ * reported device-status to this server, so this server never issued its
+ * DeviceUser credential: that credential is issued only by the stock ceremony,
+ * and `OnboardingCoordinator.disableOnboarding` plus the flag itself mean the
+ * ceremony cannot run again on its own. A normal activation would publish the
+ * attestation handoff unconsumed and leave the Pin failing at every call.
+ */
+export class EnrollmentIncompleteError extends Error {
+  readonly status: ActivationStatus;
+
+  constructor(status: ActivationStatus) {
+    super(
+      "This Pin finished its original setup before this server could issue its credential. Run this Pin's original setup to connect it.",
+    );
+    this.name = "EnrollmentIncompleteError";
+    this.status = status;
+  }
 }
 
 function verifyExistingActivation(
@@ -242,7 +323,7 @@ function verifyExistingActivation(
     status.onboardingEndpoint !== ONBOARDING_ENDPOINT ||
     status.deviceStatusEndpoint !== canonicalStatusEndpoint(deviceStatusEndpoint)
   ) {
-    throw new Error("This Pin is active with a different or incomplete Cosmos identity.");
+    throw new ActiveIdentityMismatchError(status);
   }
   return status;
 }
@@ -428,6 +509,8 @@ export async function provisionConnectedPin(
   session: AdbSessionTransport,
   client: Pick<PinClient, "updateSettings" | "getIrohTicket">,
   operations: RemoteAccessOperations & {
+    /** True once this Pin has reported device-status to THIS server. */
+    hasDeviceReported: () => Promise<boolean>;
     pairDevice: (deviceId: string) => Promise<void>;
     issueBundle: (deviceId: string) => Promise<ActivationBundle>;
   },
@@ -436,6 +519,18 @@ export async function provisionConnectedPin(
 ): Promise<ActivationStatus> {
   const preflight = await preflightConnectedPinActivation(session);
   const { deviceId } = preflight;
+  // flag=1 + never-reported ⇒ this server never issued the credential and the
+  // stock ceremony cannot run unaided. A thrown or unreadable answer is
+  // fail-safe true: a working Pin keeps its silent fast path.
+  if (preflight.ducProvisioned) {
+    let reported: boolean;
+    try {
+      reported = await operations.hasDeviceReported();
+    } catch {
+      reported = true;
+    }
+    if (reported === false) throw new EnrollmentIncompleteError(preflight.status);
+  }
   await operations.pairDevice(deviceId);
   const status = preflight.status.state === "active"
     ? verifyExistingActivation(preflight.status, edgeIpv4, deviceStatusEndpoint)
@@ -450,6 +545,119 @@ export async function provisionConnectedPin(
     await enableRemoteAccess(session, client, operations, deviceId);
   } catch (error) {
     throw new RemoteAccessSetupError(error);
+  }
+  return status;
+}
+
+/**
+ * Move a Pin that is active with a different Luma server to this one. The
+ * deactivation is the device's journaled rollback
+ * (`CosmosIdentityProvider.METHOD_DEACTIVATE` →
+ * `CosmosActivationTransaction.deactivate`; wire codes `deactivated` and
+ * `already_inactive`), and an incomplete rollback leaves the Pin exactly as it
+ * was, so no new activation is written after one. Otherwise the leftover
+ * identity material is cleared best-effort — the provider refuses CLEAR while
+ * an activation record or the remote gate remains, and reactivation overwrites
+ * it — and the normal provisioning path runs against the now-inactive Pin.
+ */
+export async function switchPinToThisServer(
+  session: AdbSessionTransport,
+  client: Pick<PinClient, "updateSettings" | "getIrohTicket">,
+  operations: RemoteAccessOperations & {
+    hasDeviceReported: () => Promise<boolean>;
+    pairDevice: (deviceId: string) => Promise<void>;
+    issueBundle: (deviceId: string) => Promise<ActivationBundle>;
+  },
+  edgeIpv4: string | null,
+  deviceStatusEndpoint: string | null,
+): Promise<ActivationStatus> {
+  const preflight = await preflightConnectedPinActivation(session);
+  if (preflight.status.state !== "active") {
+    return provisionConnectedPin(session, client, operations, edgeIpv4, deviceStatusEndpoint);
+  }
+  const deactivated = await deactivateCosmosIdentity(session);
+  if (!deactivated.rollbackComplete) {
+    throw new Error(
+      "This Pin could not restore its previous settings while disconnecting from its current server. Nothing was changed; try again or repair the Pin first.",
+    );
+  }
+  try {
+    await clearCosmosIdentity(session);
+  } catch (error) {
+    if (!(error instanceof CosmosIdentityRefusedError || error instanceof CosmosIdentityUnavailableError)) throw error;
+  }
+  return provisionConnectedPin(session, client, operations, edgeIpv4, deviceStatusEndpoint);
+}
+
+/** Activation succeeded, but the stock setup screen did not open for the ceremony. */
+export class OnboardingLaunchError extends Error {
+  readonly status: ActivationStatus;
+
+  constructor(status: ActivationStatus) {
+    super(
+      "This Pin is connected to your server, but its setup screen didn't open. Restart the Pin and finish setup in Guided setup.",
+    );
+    this.name = "OnboardingLaunchError";
+    this.status = status;
+  }
+}
+
+/**
+ * Replay the stock onboarding ceremony against this server for a Pin whose
+ * `DUC_PROVISIONED` flag predates it. Stock wrote that flag when its original
+ * setup completed and component-disabled `OnboardingHome`
+ * (`OnboardingCoordinator.disableOnboarding`), and Ironman's provisioning
+ * never references the flag, so a plain activation would publish the
+ * attestation handoff to an app that cannot run. The replay: deactivate (the
+ * handoff is republished only by a fresh activation, never by the
+ * already-active verify path), set the flag to a readable "0" (the activation
+ * transaction reads it and fails closed on null), run the normal activation,
+ * then start the still-enabled, exported `OnboardingExperience` directly —
+ * shell cannot re-enable a component (`pm enable` answers SecurityException:
+ * Shell cannot change component state), and the experience does not need its
+ * disabled HOME redirect. Luma's on-device automation
+ * (`CosmosOnboardingAutomation`) then drives the stock OPAQUE login with the
+ * passcode the wearer re-enters in Guided setup stage 6. Stock
+ * `WelcomeNode.launchHome` writes the flag back to "1" and re-disables
+ * `OnboardingHome` when the ceremony completes.
+ */
+export async function reenrollConnectedPin(
+  session: AdbSessionTransport,
+  client: Pick<PinClient, "updateSettings" | "getIrohTicket">,
+  operations: RemoteAccessOperations & {
+    hasDeviceReported: () => Promise<boolean>;
+    pairDevice: (deviceId: string) => Promise<void>;
+    issueBundle: (deviceId: string) => Promise<ActivationBundle>;
+  },
+  edgeIpv4: string | null,
+  deviceStatusEndpoint: string | null,
+): Promise<ActivationStatus> {
+  const preflight = await preflightConnectedPinActivation(session);
+  if (preflight.status.state === "active") {
+    const deactivated = await deactivateCosmosIdentity(session);
+    if (!deactivated.rollbackComplete) {
+      throw new Error(
+        "This Pin could not restore its previous settings. Nothing was changed; try again.",
+      );
+    }
+    try {
+      await clearCosmosIdentity(session);
+    } catch (error) {
+      if (!(error instanceof CosmosIdentityRefusedError || error instanceof CosmosIdentityUnavailableError)) throw error;
+    }
+  }
+  const rearmFailure = "Center couldn't re-arm this Pin's original setup. Nothing was changed; try again.";
+  await shell(session, ["settings", "put", "global", DUC_PROVISIONED_SETTING, "0"], rearmFailure);
+  // The activation transaction reads this value; it must be a readable "0",
+  // not an unset key.
+  if ((await shell(session, ["settings", "get", "global", DUC_PROVISIONED_SETTING], rearmFailure)).trim() !== "0") {
+    throw new Error(rearmFailure);
+  }
+  const status = await provisionConnectedPin(session, client, operations, edgeIpv4, deviceStatusEndpoint);
+  try {
+    await shell(session, ["am", "start", "-n", ONBOARDING_EXPERIENCE_COMPONENT], "Center could not open this Pin's setup screen.");
+  } catch {
+    throw new OnboardingLaunchError(status);
   }
   return status;
 }

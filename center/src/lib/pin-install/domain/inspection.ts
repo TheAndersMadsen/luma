@@ -5,13 +5,18 @@ import {
   parseInstalledBaseApkPathFromDumpsys,
   type KeepDataUpdateVerdict,
 } from "./keepDataEligibility";
-import { detectKnownPackageConflicts } from "./knownPackageConflicts";
+import {
+  classifyUnrecognizedPackages,
+  getDetectedConflictPackageIds,
+  matchKnownPackageConflicts,
+} from "./knownPackageConflicts";
 import { MANAGED_PACKAGES } from "./managedPackages";
 import {
   createTimedAdbSessionTransport,
   getDeviceIdentity,
   getInstalledPackageMetadata,
   inspectPackageQueryability,
+  listInstalledPackages,
   waitForPackageManagerReady,
   type AdbSessionTransport,
   type DeviceIdentity,
@@ -61,6 +66,8 @@ export interface InstallInspectionResult {
   readonly packages: Record<ManagedPackageRole, ManagedPackageVersionSnapshot>;
   readonly detectedConflicts: readonly DetectedPackageConflict[];
   readonly hasDetectedConflicts: boolean;
+  /** Advisory: installed apps that are neither Luma's, a conflict, nor stock. */
+  readonly unrecognizedPackages: readonly string[];
   readonly actionState: InstallActionState;
   readonly installActionsBlocked: boolean;
   readonly installActionsBlockedReason: string | null;
@@ -149,7 +156,7 @@ export async function inspectInstallStateAfterPackageManagerReady(
   const targetResolutionError = options?.targetResolutionError ?? null;
   const device = await getDeviceIdentity(deviceTransport);
 
-  const [installerMetadata, hookMetadata, serverMetadata, loaderMetadata, helperMetadata, readiness, detectedConflicts] =
+  const [installerMetadata, hookMetadata, serverMetadata, loaderMetadata, helperMetadata, readiness, installedPackages] =
     await Promise.all([
       getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.installer),
       getInstalledPackageMetadata(deviceTransport, MANAGED_PACKAGES.hook),
@@ -166,8 +173,17 @@ export async function inspectInstallStateAfterPackageManagerReady(
         ],
         options?.readinessSettleDelayMs,
       ),
-      detectKnownPackageConflicts(deviceTransport, options?.knownPackageConflicts),
+      listInstalledPackages(deviceTransport),
     ]);
+
+  const detectedConflicts = matchKnownPackageConflicts(
+    installedPackages,
+    options?.knownPackageConflicts,
+  );
+  const unrecognizedPackages = classifyUnrecognizedPackages(
+    installedPackages,
+    getDetectedConflictPackageIds(detectedConflicts),
+  );
 
   const packages: Record<ManagedPackageRole, ManagedPackageVersionSnapshot> = {
     installer: createPackageSnapshot(
@@ -224,6 +240,7 @@ export async function inspectInstallStateAfterPackageManagerReady(
     packages,
     detectedConflicts,
     hasDetectedConflicts,
+    unrecognizedPackages,
     actionState,
     installActionsBlocked,
     installActionsBlockedReason,

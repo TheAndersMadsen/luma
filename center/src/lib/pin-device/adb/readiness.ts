@@ -1,5 +1,9 @@
 import type { AdbSessionTransport } from "./transport";
+import { AdbDeviceStepTimeoutError, withDeviceStepTimeout } from "./transport";
 import { getInstalledPackageMetadata } from "./packageManager";
+
+export const BOOT_COMPLETED_TIMEOUT_MS = 240_000;
+export const BOOT_COMPLETED_POLL_MS = 2_000;
 
 export const DEFAULT_SOFT_REBOOT_SETTLE_MS = 10000;
 
@@ -55,6 +59,50 @@ export async function waitForSoftRebootSettle(delayMs = DEFAULT_SOFT_REBOOT_SETT
   }
 
   await sleep(delayMs);
+}
+
+function isDeviceStepTimeoutError(error: unknown): error is AdbDeviceStepTimeoutError {
+  return error instanceof AdbDeviceStepTimeoutError;
+}
+
+/**
+ * A full reboot (the conflict flows' `reboot` cleanup command) leaves the Pin
+ * unavailable far longer than the package-manager probe alone tolerates, so the
+ * removal flows gate on Android's own boot-completed property before probing
+ * package services.
+ */
+export async function waitForBootCompleted(
+  transport: AdbSessionTransport,
+  timeoutMs = BOOT_COMPLETED_TIMEOUT_MS,
+  pollMs = BOOT_COMPLETED_POLL_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const result = await withDeviceStepTimeout(
+        "wait for the Pin to finish starting",
+        () => transport.shell(["getprop", "sys.boot_completed"]),
+        Math.max(1, deadline - Date.now()),
+      );
+      if (result.stdout.trim() === "1") {
+        return;
+      }
+    } catch (error) {
+      if (isDeviceStepTimeoutError(error)) {
+        throw error;
+      }
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(pollMs, remainingMs));
+    }
+  }
+
+  throw new Error(
+    "The Pin did not finish starting within 4 minutes. Keep it on the cable and unlocked, then try again.",
+  );
 }
 
 export async function inspectPackageQueryability(

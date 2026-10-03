@@ -179,11 +179,40 @@ export function inspectionRequiresBootstrapRecovery(
 }
 
 /**
- * The bootstrap path on a Pin that holds nothing of Luma's: no managed package
- * and no Setup Helper. It runs the same operation as a recovery, but there is
- * no Luma app data to erase, so the wearer is shown a first install rather than
- * a recovery. Display only (INFERRED: Luma's own install copy); the decision
- * above and its confirmation are unchanged.
+ * True when every managed package on the device carries a Luma package ID but
+ * was signed by another key, the CURRENT-generation PenumbraOS shape. Nothing
+ * Luma-signed is installed, so a recovery wipe removes only foreign state;
+ * any mixed or unexpected-name profile is deliberately false and fails closed
+ * in the per-role identity loop.
+ */
+export function inspectionHasForeignSigners(
+  inspection: InstallInspectionResult | null,
+): boolean {
+  if (!inspection) {
+    return false;
+  }
+  const installedRoles = (
+    Object.keys(EXPECTED_PACKAGE_BY_ROLE) as ManagedPackageRole[]
+  ).filter((role) => inspection.packages[role].installed);
+  return (
+    installedRoles.length > 0 &&
+    installedRoles.every((role) => {
+      const pkg = inspection.packages[role];
+      return (
+        pkg.packageName === EXPECTED_PACKAGE_BY_ROLE[role] &&
+        pkg.signerIdentity !== PIN_RELEASE_SIGNER_IDENTITY
+      );
+    })
+  );
+}
+
+/**
+ * The bootstrap path on a Pin that holds nothing of Luma's: no managed package.
+ * A Setup Helper left behind by an interrupted bootstrap is not Luma state on
+ * the device and does not disqualify it, the recovery's own
+ * `cleanupManagedPackages` removes that package first. Display only
+ * (INFERRED: Luma's own install copy); the decision above and its confirmation
+ * are unchanged.
  */
 export function inspectionIsFirstInstall(
   inspection: InstallInspectionResult | null,
@@ -191,7 +220,6 @@ export function inspectionIsFirstInstall(
   return (
     inspection !== null &&
     inspectionRequiresBootstrapRecovery(inspection) &&
-    !inspection.helperPresentUnexpectedly &&
     Object.values(inspection.packages).every((pkg) => !pkg.installed)
   );
 }
@@ -224,11 +252,53 @@ export function decideInstallMigration(options: {
   if (inspection.readiness.credentialState.state !== "unlocked") {
     return blocked("The Ai Pin must be unlocked before package migration.");
   }
-  if (inspection.helperPresentUnexpectedly) {
-    return blocked("The Setup Helper is present unexpectedly.");
-  }
+  // A leftover Setup Helper alone never blocks: a bootstrap that died partway
+  // leaves it installed, and every plan below removes it (the recovery's
+  // cleanupManagedPackages, or the in-place plan's leftover-helper cleanup).
   if (inspection.hasDetectedConflicts || inspection.detectedConflicts.length > 0) {
     return blocked("Known conflicting packages must be removed first.");
+  }
+
+  const installer = inspection.packages.installer;
+  const installerVersionOrdering = compareInstallVersions(
+    installer.versionName,
+    target.version,
+  );
+  const installerVersionKnown =
+    installerVersionOrdering !== null && installerVersionOrdering <= 0;
+
+  /*
+   * A Pin running another project's builds under Luma's exact package IDs
+   * (CURRENT-generation PenumbraOS) has no Luma-signed package to retain, so
+   * the same recovery-baseline gates as a broken installer apply: wipe the
+   * managed packages and bootstrap Luma's. Anything that is not exactly that
+   * shape (a Luma-signed role beside a foreign one, an unexpected package
+   * name, an unreadable version) falls through to the per-role identity loop
+   * and fails closed.
+   */
+  if (inspectionHasForeignSigners(inspection)) {
+    if (installer.installed && !installerVersionKnown) {
+      return blocked(
+        installer.healthy
+          ? "The healthy installer is not a supported release version at or below the selected target."
+          : "The unhealthy installer does not match a supported recovery baseline.",
+      );
+    }
+    if (
+      !IN_PLACE_PACKAGE_ROLES.every((role) =>
+        roleIsKnownForRecovery(inspection, target, role),
+      )
+    ) {
+      return blocked(
+        "The installed Luma apps do not match a supported Device Installer recovery state.",
+      );
+    }
+    return {
+      kind: "bootstrap-recovery",
+      reason: "The Pin runs another project's versions of Luma's apps.",
+      rolesToInstall: IN_PLACE_PACKAGE_ROLES,
+      retainedInstaller: null,
+    };
   }
 
   for (const role of Object.keys(EXPECTED_PACKAGE_BY_ROLE) as ManagedPackageRole[]) {
@@ -240,14 +310,6 @@ export function decideInstallMigration(options: {
       return blocked(`Signer identity for ${pkg.packageName} is missing or unexpected.`);
     }
   }
-
-  const installer = inspection.packages.installer;
-  const installerVersionOrdering = compareInstallVersions(
-    installer.versionName,
-    target.version,
-  );
-  const installerVersionKnown =
-    installerVersionOrdering !== null && installerVersionOrdering <= 0;
 
   if (!installer.installed || !installer.healthy) {
     if (installer.installed && !installerVersionKnown) {

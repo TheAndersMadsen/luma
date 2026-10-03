@@ -9,8 +9,11 @@ const { createActivationBundleJson } = await import(
 );
 const {
   buildActivationEnvelope,
+  EnrollmentIncompleteError,
+  OnboardingLaunchError,
   parseActivationStatus,
   provisionConnectedPin,
+  reenrollConnectedPin,
   RemoteAccessSetupError,
 } = await import("../src/app/settings/pin/provision/browserActivation.ts");
 const { PinApiError } = await import("../src/lib/pin-device/client.ts");
@@ -99,7 +102,7 @@ test("direct activation keeps the pairing service's actionable failure message",
     new URL("../src/app/settings/pin/provision/ProvisioningView.tsx", import.meta.url),
     "utf8",
   );
-  const pairDevice = /async pairDevice\(id\) \{([\s\S]*?)\n\s*\},\n\s*async issueBundle/u.exec(source)?.[1];
+  const pairDevice = /async pairDevice\(id[^)]*\) \{([\s\S]*?)\n\s*\},\n\s*async issueBundle/u.exec(source)?.[1];
   assert.ok(pairDevice, "direct activation is missing its pairing operation");
   assert.match(pairDevice, /await response\.json\(\)\.catch/u);
   assert.match(pairDevice, /typeof .*error.*=== "string"/u);
@@ -114,7 +117,7 @@ test("successful direct activation refreshes every Guided Setup cache before rep
     new URL("../src/app/settings/pin/provision/ProvisioningView.tsx", import.meta.url),
     "utf8",
   );
-  const activatePin = /async function activatePin\(\) \{([\s\S]*?)\n  \}\n\n  if \(loadState/u.exec(source)?.[1];
+  const activatePin = /async function runActivation\(([\s\S]*?)\n  \}\n\n  function activatePin/u.exec(source)?.[1];
   assert.ok(activatePin, "direct activation is missing its success handler");
   assert.match(source, /import \{ useQueryClient \} from "@tanstack\/react-query"/u);
   assert.match(source, /const queryClient = useQueryClient\(\)/u);
@@ -163,6 +166,9 @@ test("direct activation does not mint a one-time key before device preflight", a
         async getIrohTicket() { throw new Error("ticket must not run before device preflight"); },
       },
       {
+        hasDeviceReported() {
+          throw new Error("reporting must not be consulted before device preflight");
+        },
         async pairDevice() {
           throw new Error("pairing must not run before device preflight");
         },
@@ -202,6 +208,9 @@ test("direct activation pairs the account before minting a one-time key", async 
           exitCode: 0,
         };
       }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) {
+        return { stdout: "null\n", stderr: "", exitCode: 0 };
+      }
       throw new Error(`unexpected command ${command.join(" ")}`);
     },
   };
@@ -214,6 +223,7 @@ test("direct activation pairs the account before minting a one-time key", async 
         async getIrohTicket() { throw new Error("ticket must not run before account pairing"); },
       },
       {
+        hasDeviceReported: async () => true,
         async pairDevice(id) {
           calls.push(`pair:${id}`);
           throw new Error("pairing failed");
@@ -284,6 +294,10 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
               exitCode: 0,
             };
       }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) {
+        calls.push("duc-flag");
+        return { stdout: "null\n", stderr: "", exitCode: 0 };
+      }
       throw new Error(`unexpected command ${command.join(" ")}`);
     },
     async shellWithInput(command, body) {
@@ -321,6 +335,7 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
       },
     },
     {
+      hasDeviceReported: async () => true,
       async pairDevice(id) {
         calls.push(`pair:${id}`);
       },
@@ -368,6 +383,7 @@ test("direct activation completes one exact preflight, pairing, issuance, instal
     "device-id",
     "unlocked",
     "status:preflight",
+    "duc-flag",
     "pair:00aa11bb",
     "issue:00aa11bb",
     "stage",
@@ -402,6 +418,10 @@ test("retry after identity activation resumes remote pairing without minting ano
           exitCode: 0,
         };
       }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) {
+        calls.push("duc-flag");
+        return { stdout: "null\n", stderr: "", exitCode: 0 };
+      }
       if (command.includes("RESTART_RUNTIME")) {
         calls.push("restart-runtime");
         return {
@@ -430,6 +450,7 @@ test("retry after identity activation resumes remote pairing without minting ano
       },
     },
     {
+      hasDeviceReported: async () => true,
       async pairDevice(id) {
         calls.push(`pair:${id}`);
       },
@@ -460,6 +481,7 @@ test("retry after identity activation resumes remote pairing without minting ano
     "device-id",
     "unlocked",
     "status:active",
+    "duc-flag",
     "pair:00aa11bb",
     "bridge-status",
     "iroh-settings",
@@ -470,7 +492,7 @@ test("retry after identity activation resumes remote pairing without minting ano
 });
 
 /** A Pin already active against this server, as a retry or a replaced Pin finds it. */
-function activeSession(calls) {
+function activeSession(calls, ducFlag = "null") {
   const fingerprint = "c".repeat(64);
   return {
     async shell(command) {
@@ -483,6 +505,10 @@ function activeSession(calls) {
           stderr: "",
           exitCode: 0,
         };
+      }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) {
+        calls.push("duc-flag");
+        return { stdout: `${ducFlag}\n`, stderr: "", exitCode: 0 };
       }
       if (command.includes("RESTART_RUNTIME")) {
         calls.push("restart-runtime");
@@ -505,6 +531,7 @@ test("a remote link that cannot be read still leaves the Pin paired and activate
       async getIrohTicket() { throw new Error("no ticket without the bridge's endpoint"); },
     },
     {
+      hasDeviceReported: async () => true,
       async pairDevice(id) { calls.push(`pair:${id}`); },
       async issueBundle() { throw new Error("an active Pin needs no new key"); },
       async getBridgeStatus() {
@@ -520,7 +547,7 @@ test("a remote link that cannot be read still leaves the Pin paired and activate
   assert.ok(failure instanceof RemoteAccessSetupError);
   assert.equal(failure.message, "This Pin is connected to Cosmos, but remote access could not be set up.");
   assert.equal(failure.reason.message, "Remote Pin access is unavailable.");
-  assert.deepEqual(calls, ["status:active", "pair:00aa11bb", "bridge-status"]);
+  assert.deepEqual(calls, ["status:active", "duc-flag", "pair:00aa11bb", "bridge-status"]);
 });
 
 test("a Pin whose remote connector did not start says so, not 'Pin API 503'", async (t) => {
@@ -537,6 +564,7 @@ test("a Pin whose remote connector did not start says so, not 'Pin API 503'", as
       },
     },
     {
+      hasDeviceReported: async () => true,
       async pairDevice(id) { calls.push(`pair:${id}`); },
       async issueBundle() { throw new Error("an active Pin needs no new key"); },
       async getBridgeStatus() { return unassignedBridgeStatus(); },
@@ -549,5 +577,382 @@ test("a Pin whose remote connector did not start says so, not 'Pin API 503'", as
   assert.ok(failure instanceof RemoteAccessSetupError);
   assert.equal(failure.reason.message, "Remote access is still starting on the Pin. Keep it connected and try again shortly.");
   assert.doesNotMatch(failure.reason.message, /Pin API/u);
-  assert.deepEqual(calls, ["status:active", "pair:00aa11bb", "iroh-settings", "restart-runtime", "iroh-ticket"]);
+  assert.deepEqual(calls, ["status:active", "duc-flag", "pair:00aa11bb", "iroh-settings", "restart-runtime", "iroh-ticket"]);
+});
+
+test("a Pin that finished its original setup but never reported to this server stops before pairing or issuance", async () => {
+  const calls = [];
+  const session = {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) {
+        return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("sys.user.0.ce_available")) {
+        return { stdout: "1\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("ACTIVATION_STATUS")) {
+        calls.push("status:preflight");
+        return {
+          stdout: "Result: Bundle[{ok=true, state=inactive, consistent=true, managed=false, remote_gate_enabled=false, target_matches=false, present=false, identity_usable=false}]\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) {
+        calls.push("duc-flag");
+        return { stdout: "1\n", stderr: "", exitCode: 0 };
+      }
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+  };
+
+  const failure = await provisionConnectedPin(
+    session,
+    {
+      async updateSettings() { throw new Error("no remote settings before pairing"); },
+      async getIrohTicket() { throw new Error("no ticket before pairing"); },
+    },
+    {
+      hasDeviceReported: async () => {
+        calls.push("reported");
+        return false;
+      },
+      async pairDevice() { calls.push("pair:00aa11bb"); },
+      async issueBundle() { calls.push("issue:00aa11bb"); },
+      async getBridgeStatus() { calls.push("bridge-status"); return unassignedBridgeStatus(); },
+      async pairBridge() { calls.push("pair-bridge"); },
+    },
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(failure instanceof EnrollmentIncompleteError);
+  assert.equal(
+    failure.message,
+    "This Pin finished its original setup before this server could issue its credential. Run this Pin's original setup to connect it.",
+  );
+  assert.equal(failure.status.state, "inactive");
+  assert.deepEqual(calls, ["status:preflight", "duc-flag", "reported"]);
+});
+
+test("a provisioned Pin that has reported to this server keeps its silent fast path", async () => {
+  const calls = [];
+  const status = await provisionConnectedPin(
+    activeSession(calls, "1"),
+    {
+      async updateSettings() { calls.push("iroh-settings"); return { server: {} }; },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    {
+      hasDeviceReported: async () => {
+        calls.push("reported");
+        return true;
+      },
+      async pairDevice(id) { calls.push(`pair:${id}`); },
+      async issueBundle() { throw new Error("an active Pin needs no new key"); },
+      async getBridgeStatus() { calls.push("bridge-status"); return unassignedBridgeStatus(); },
+      async pairBridge() {
+        calls.push("pair-bridge");
+        return {
+          configured: true,
+          connected: true,
+          local_endpoint_id: BRIDGE_ENDPOINT_ID,
+          device_id: "00aa11bb",
+          remote_endpoint_id: PIN_ENDPOINT_ID,
+        };
+      },
+    },
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  );
+
+  assert.equal(status.state, "active");
+  assert.deepEqual(calls, [
+    "status:active",
+    "duc-flag",
+    "reported",
+    "pair:00aa11bb",
+    "bridge-status",
+    "iroh-settings",
+    "restart-runtime",
+    "iroh-ticket",
+    "pair-bridge",
+  ]);
+});
+
+/**
+ * A re-enrollment target: active (so it must be deactivated first), with the
+ * stock `DUC_PROVISIONED` flag armed until the re-arm writes it back. The
+ * activation phases are tracked so each `ACTIVATION_STATUS` answer matches the
+ * step that asks: 1 the re-enrollment preflight, 2 the delegated provisioning
+ * preflight after deactivation and re-arm, 3 the post-activation verification.
+ */
+function reenrollSession(calls, { rollbackComplete = true, readback = null, amStartExitCode = 0 } = {}) {
+  // The SHA-256 of the DER behind the "AQID" certificate the operations below
+  // issue: the post-activation verification compares it against the envelope.
+  const fingerprint = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
+  const verified = `Result: Bundle[{ok=true, state=active, consistent=true, managed=true, remote_gate_enabled=true, target_matches=true, present=true, identity_usable=true, edge_ipv4=203.0.113.42, fingerprint_sha256=${fingerprint}, root_certificate_sha256=${fingerprint}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud, device_status_endpoint=https://center.example/device-status/v1/report}]\n`;
+  let phase = 1;
+  let flagArmed = true;
+  return {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) {
+        calls.push("device-id");
+        return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("sys.user.0.ce_available")) {
+        calls.push("unlocked");
+        return { stdout: "1\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("ACTIVATION_STATUS")) {
+        calls.push(`status:${phase}`);
+        if (phase === 3) return { stdout: verified, stderr: "", exitCode: 0 };
+        if (phase === 2) {
+          return {
+            stdout: "Result: Bundle[{ok=true, state=inactive, consistent=true, managed=false, remote_gate_enabled=false, target_matches=false, present=false, identity_usable=false}]\n",
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return { stdout: verified, stderr: "", exitCode: 0 };
+      }
+      if (command.includes("DEACTIVATE")) {
+        calls.push("deactivate");
+        phase = 2;
+        return {
+          stdout: `Result: Bundle[{ok=true, state=deactivated, rollback_complete=${rollbackComplete}}]\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (command.includes("CLEAR")) {
+        calls.push("clear");
+        return { stdout: "Result: Bundle[{ok=true, state=cleared, rollback_complete=true}]\n", stderr: "", exitCode: 0 };
+      }
+      if (command[0] === "settings" && command[1] === "put") {
+        calls.push("flag-put");
+        flagArmed = false;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) {
+        calls.push("flag-read");
+        return { stdout: `${readback ?? (flagArmed ? "1" : "0")}\n`, stderr: "", exitCode: 0 };
+      }
+      if (command.includes("ACTIVATE")) {
+        calls.push("activate");
+        phase = 3;
+        return { stdout: "Result: Bundle[{ok=true, state=activated}]\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("RESTART_RUNTIME")) {
+        calls.push("restart-runtime");
+        return { stdout: "Result: Bundle[{status=200, ok=true}]\n", stderr: "", exitCode: 0 };
+      }
+      if (command[0] === "am") {
+        calls.push("am-start");
+        return { stdout: "Starting: Intent\n", stderr: "", exitCode: amStartExitCode };
+      }
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+    async shellWithInput(command) {
+      calls.push("stage");
+      assert.deepEqual(command, [
+        "content",
+        "write",
+        "--uri",
+        "content://com.penumbraos.server.cosmosidentity/attestation.json",
+      ]);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    },
+  };
+}
+
+function reenrollOperations(calls) {
+  return {
+    hasDeviceReported: async () => {
+      calls.push("reported");
+      return false;
+    },
+    async pairDevice(id) { calls.push(`pair:${id}`); },
+    async issueBundle(id) {
+      calls.push(`issue:${id}`);
+      return {
+        device_id: id,
+        subject: `V:01:D:${id}:P:00000001`,
+        certificate_pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",
+        private_key_pem: "private",
+        ca_certificate_pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",
+        root_certificate_pem: "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",
+        onboarding: {
+          endpoint: "https://onboarding.cosmos.humane.cloud",
+          authority: "example",
+        },
+      };
+    },
+    async getBridgeStatus() {
+      calls.push("bridge-status");
+      return unassignedBridgeStatus();
+    },
+    async pairBridge(input) {
+      calls.push("pair-bridge");
+      assert.deepEqual(input, {
+        device_id: "00aa11bb",
+        ticket: "endpoint-ticket",
+        node_id: PIN_ENDPOINT_ID,
+      });
+      return {
+        configured: true,
+        connected: true,
+        local_endpoint_id: BRIDGE_ENDPOINT_ID,
+        device_id: "00aa11bb",
+        remote_endpoint_id: PIN_ENDPOINT_ID,
+      };
+    },
+  };
+}
+
+test("re-enrollment deactivates, re-arms the stock ceremony, activates, then launches it, in that order", async () => {
+  const calls = [];
+  const status = await reenrollConnectedPin(
+    reenrollSession(calls),
+    {
+      async updateSettings() { calls.push("iroh-settings"); return { server: {} }; },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    reenrollOperations(calls),
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  );
+
+  assert.equal(status.state, "active");
+  assert.deepEqual(calls, [
+    "device-id",
+    "unlocked",
+    "status:1",
+    "flag-read",
+    "deactivate",
+    "clear",
+    "flag-put",
+    "flag-read",
+    "device-id",
+    "unlocked",
+    "status:2",
+    "flag-read",
+    "pair:00aa11bb",
+    "issue:00aa11bb",
+    "stage",
+    "activate",
+    "status:3",
+    "bridge-status",
+    "iroh-settings",
+    "restart-runtime",
+    "iroh-ticket",
+    "pair-bridge",
+    "am-start",
+  ]);
+});
+
+test("an incomplete deactivation rollback refuses re-enrollment before any write", async () => {
+  const calls = [];
+  const failure = await reenrollConnectedPin(
+    reenrollSession(calls, { rollbackComplete: false }),
+    {
+      async updateSettings() { throw new Error("no remote settings after a refused rollback"); },
+      async getIrohTicket() { throw new Error("no ticket after a refused rollback"); },
+    },
+    reenrollOperations(calls),
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(failure instanceof Error);
+  assert.equal(
+    failure.message,
+    "This Pin could not restore its previous settings. Nothing was changed; try again.",
+  );
+  assert.deepEqual(calls, ["device-id", "unlocked", "status:1", "flag-read", "deactivate"]);
+});
+
+test("a failed flag readback refuses re-enrollment before activation", async () => {
+  const calls = [];
+  const failure = await reenrollConnectedPin(
+    reenrollSession(calls, { readback: "1" }),
+    {
+      async updateSettings() { throw new Error("no remote settings without a re-armed flag"); },
+      async getIrohTicket() { throw new Error("no ticket without a re-armed flag"); },
+    },
+    reenrollOperations(calls),
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(failure instanceof Error);
+  assert.equal(
+    failure.message,
+    "Center couldn't re-arm this Pin's original setup. Nothing was changed; try again.",
+  );
+  assert.deepEqual(calls, [
+    "device-id",
+    "unlocked",
+    "status:1",
+    "flag-read",
+    "deactivate",
+    "clear",
+    "flag-put",
+    "flag-read",
+  ]);
+});
+
+test("a failed ceremony launch reports OnboardingLaunchError after activation succeeded", async () => {
+  const calls = [];
+  const failure = await reenrollConnectedPin(
+    reenrollSession(calls, { amStartExitCode: 1 }),
+    {
+      async updateSettings() { calls.push("iroh-settings"); return { server: {} }; },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    reenrollOperations(calls),
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(failure instanceof OnboardingLaunchError);
+  assert.equal(
+    failure.message,
+    "This Pin is connected to your server, but its setup screen didn't open. Restart the Pin and finish setup in Guided setup.",
+  );
+  assert.equal(failure.status.state, "active");
+  assert.deepEqual(calls, [
+    "device-id",
+    "unlocked",
+    "status:1",
+    "flag-read",
+    "deactivate",
+    "clear",
+    "flag-put",
+    "flag-read",
+    "device-id",
+    "unlocked",
+    "status:2",
+    "flag-read",
+    "pair:00aa11bb",
+    "issue:00aa11bb",
+    "stage",
+    "activate",
+    "status:3",
+    "bridge-status",
+    "iroh-settings",
+    "restart-runtime",
+    "iroh-ticket",
+    "pair-bridge",
+    "am-start",
+  ]);
 });

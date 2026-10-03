@@ -12,11 +12,15 @@
  *  - `unsupported-device`, shown once per CONNECTION (keyed on serial+name) when
  *    the device fails the Humane Ai Pin identity check, so acknowledging it for
  *    one Pin never carries over to the next one plugged in.
- *  - `uninstall` / `remove-conflicts`, what the action removes.
+ *  - `uninstall` / `remove-conflicts` / `remove-unrecognized`, what the action
+ *    removes.
  *  - `newer-than-target`, the installed packages are ahead of the resolved
  *    release. Continuing is a downgrade.
  *  - `known-conflicts`, another Ai Pin project's packages are present, which
  *    forces the "remove first" choice rather than a plain continue.
+ *  - `foreign-apps`, another project's builds occupy Luma's exact package
+ *    names, so the only path forward is the recovery wipe, routed through the
+ *    same `bootstrap-recovery` choice as the entry below.
  *  - `bootstrap-recovery`, the setup-helper flow will be re-run and app data wiped.
  *  - `first-install`, the same setup-helper flow on a Pin with nothing of
  *    Luma's on it (`inspectionIsFirstInstall`). It is the same operation and
@@ -34,13 +38,16 @@ import { useCallback, useMemo, useState } from "react";
 import type { AdbConnectionInfo } from "@/lib/pin-device/adb";
 import {
   formatDetectedPackageConflicts,
+  inspectionHasForeignSigners,
   inspectionIsFirstInstall,
   inspectionRequiresBootstrapRecovery,
+  MANAGED_PACKAGE_ROLES,
+  PIN_RELEASE_SIGNER_IDENTITY,
   type InstallControllerCommands,
   type InstallControllerState,
 } from "@/lib/pin-install";
 
-type PendingAction = "primary" | "uninstall" | "remove-conflicts";
+type PendingAction = "primary" | "uninstall" | "remove-conflicts" | "remove-unrecognized";
 
 export type InstallConfirmationChoiceAction =
   | PendingAction
@@ -54,7 +61,9 @@ type ConfirmationRequirementKind =
   | "uninstall"
   | "newer-than-target"
   | "known-conflicts"
+  | "foreign-apps"
   | "remove-conflicts"
+  | "remove-unrecognized"
   | "bootstrap-recovery"
   | "first-install";
 
@@ -84,6 +93,7 @@ export interface InstallActionConfirmation {
   requestPrimaryAction(): Promise<void>;
   requestUninstall(): Promise<void>;
   requestRemoveConflicts(): Promise<void>;
+  requestRemoveUnrecognized(): Promise<void>;
   dismissDialog(): void;
   confirmDialog(action: InstallConfirmationChoiceAction): Promise<void>;
 }
@@ -148,7 +158,7 @@ function createUninstallRequirement(): InstallConfirmationRequirement {
     kind: "uninstall",
     title: "What uninstalling does",
     description:
-      "Center removes Luma from this Pin and turns the original Humane apps back on where it can.",
+      "Center removes Luma from this Pin, removes its connection to your server, and turns the original Humane apps back on where it can.",
   };
 }
 
@@ -159,6 +169,22 @@ function createNewerThanTargetRequirement(): InstallConfirmationRequirement {
     description:
       "Some Luma software on this Pin is newer than your server’s release. Continuing replaces it with the older release.",
   };
+}
+
+/**
+ * PenumbraOS v0 leaves its own files on the device, and its removal flow takes
+ * them with it (guides/connect-your-pin.md). Say so before the removal runs,
+ * because the wearer may want to pull a backup first.
+ */
+const FILE_CLEANUP_NOTICE =
+  "\n\nCenter also removes PenumbraOS's own files in /sdcard/penumbra and /data/local/tmp/bin. Back them up first if you want to keep them: adb pull /sdcard/penumbra penumbra-backup";
+
+function detectedConflictsCleanupFiles(
+  state: InstallControllerState,
+): boolean {
+  return (state.inspection?.detectedConflicts ?? []).some(
+    (conflict) => (conflict.cleanupFilePaths?.length ?? 0) > 0,
+  );
 }
 
 function createKnownConflictsRequirement(
@@ -173,7 +199,8 @@ function createKnownConflictsRequirement(
     title: "Apps from another Ai Pin project",
     description:
       "These apps conflict with Luma, so Center removes them first:\n\n" +
-      formattedConflicts,
+      formattedConflicts +
+      (detectedConflictsCleanupFiles(state) ? FILE_CLEANUP_NOTICE : ""),
   };
 }
 
@@ -187,7 +214,22 @@ function createRemoveConflictsRequirement(
   return {
     kind: "remove-conflicts",
     title: "Apps that will be removed",
-    description: `These apps conflict with Luma:\n\n${formattedConflicts}`,
+    description:
+      `These apps conflict with Luma:\n\n${formattedConflicts}` +
+      (detectedConflictsCleanupFiles(state) ? FILE_CLEANUP_NOTICE : ""),
+  };
+}
+
+function createRemoveUnrecognizedRequirement(
+  state: InstallControllerState,
+): InstallConfirmationRequirement {
+  const packageIds = state.inspection?.unrecognizedPackages ?? [];
+  return {
+    kind: "remove-unrecognized",
+    title: "Apps that will be removed",
+    description:
+      "These apps are not part of Luma or this Pin's original software. Center removes the ones you confirmed.\n\n" +
+      packageIds.join("\n"),
   };
 }
 
@@ -197,6 +239,32 @@ function createBootstrapRecoveryRequirement(): InstallConfirmationRequirement {
     title: "Recovery erases Luma’s app data",
     description:
       "The part of Luma that installs updates is missing or not working. Recovery removes Luma and its app data from this Pin, sets that part up again, then installs the release from your server.",
+  };
+}
+
+function foreignSignerPackageIds(state: InstallControllerState): string[] {
+  const packages = state.inspection?.packages;
+  if (!packages) {
+    return [];
+  }
+  return MANAGED_PACKAGE_ROLES.flatMap((role) =>
+    packages[role].installed &&
+    packages[role].signerIdentity !== PIN_RELEASE_SIGNER_IDENTITY
+      ? [packages[role].packageName]
+      : [],
+  );
+}
+
+function createForeignAppsRequirement(
+  state: InstallControllerState,
+): InstallConfirmationRequirement {
+  return {
+    kind: "foreign-apps",
+    title: "Another project's apps are on this Pin",
+    description:
+      "These apps use Luma’s package names but are signed by a different key:\n\n" +
+      foreignSignerPackageIds(state).join("\n") +
+      "\n\nRecovery removes them with their data, then installs Luma’s signed apps.",
   };
 }
 
@@ -229,6 +297,11 @@ export function createDialogForAction(options: {
   // Same operation as a recovery; only the words differ.
   const firstInstall =
     bootstrapRecovery && inspectionIsFirstInstall(options.state.inspection);
+  // Another project's builds under Luma's package names: nothing Luma-signed
+  // is retained, so the confirm routes through the recovery choice.
+  const foreignApps =
+    options.action === "primary" &&
+    inspectionHasForeignSigners(options.state.inspection);
 
   if (!options.riskAcknowledged) {
     requirements.push(createRiskRequirement());
@@ -246,6 +319,10 @@ export function createDialogForAction(options: {
     requirements.push(createRemoveConflictsRequirement(options.state));
   }
 
+  if (options.action === "remove-unrecognized") {
+    requirements.push(createRemoveUnrecognizedRequirement(options.state));
+  }
+
   if (
     options.action === "primary" &&
     options.state.inspection?.actionState.warnings.newerThanTarget
@@ -255,6 +332,10 @@ export function createDialogForAction(options: {
 
   if (hasKnownConflicts) {
     requirements.push(createKnownConflictsRequirement(options.state));
+  }
+
+  if (foreignApps) {
+    requirements.push(createForeignAppsRequirement(options.state));
   }
 
   if (firstInstall) {
@@ -304,27 +385,33 @@ export function createDialogForAction(options: {
           ? "Uninstall Luma?"
           : options.action === "remove-conflicts"
             ? "Remove conflicting apps?"
-            : getPrimaryActionQuestion(primaryActionLabel),
+            : options.action === "remove-unrecognized"
+              ? "Remove unrecognized apps?"
+              : getPrimaryActionQuestion(primaryActionLabel),
     body:
       options.action === "primary"
         ? getPrimaryActionBody(options.state)
         : options.action === "remove-conflicts"
           ? "Center removes these apps from this Pin. Luma stays as it is."
-          : "Your Pin stops using Luma until you install it again.",
+          : options.action === "remove-unrecognized"
+            ? "Center removes these apps from this Pin. Luma stays as it is."
+            : "Your Pin stops using Luma until you install it again.",
     choices: [
       {
         action:
-          bootstrapRecovery && options.action === "primary"
+          (bootstrapRecovery || foreignApps) && options.action === "primary"
             ? "bootstrap-recovery"
             : options.action,
         label:
           firstInstall
             ? "Install Luma"
+            : foreignApps
+            ? "Replace and install"
             : bootstrapRecovery && options.action === "primary"
             ? "Start recovery"
             : options.action === "primary"
               ? primaryActionLabel
-              : options.action === "remove-conflicts"
+              : options.action === "remove-conflicts" || options.action === "remove-unrecognized"
                   ? "Remove apps"
                   : "Uninstall",
         tone: "primary",
@@ -343,6 +430,7 @@ export function useInstallActionConfirmation(options: {
   }) => Promise<void>;
   runUninstall: () => Promise<void>;
   runRemoveConflicts: () => Promise<void>;
+  runRemoveUnrecognized: () => Promise<void>;
   runFixConflictsThenPrimaryAction: (options?: {
     readonly bootstrapRecoveryConfirmed?: boolean;
   }) => Promise<void>;
@@ -353,6 +441,7 @@ export function useInstallActionConfirmation(options: {
     runPrimaryAction,
     runUninstall,
     runRemoveConflicts,
+    runRemoveUnrecognized,
     runFixConflictsThenPrimaryAction,
   } = options;
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
@@ -394,12 +483,21 @@ export function useInstallActionConfirmation(options: {
       return null;
     }
 
+    if (
+      dialog.action === "remove-unrecognized" &&
+      (!commands.removeUnrecognized.visible || commands.removeUnrecognized.disabled)
+    ) {
+      return null;
+    }
+
     return dialog;
   }, [
     commands.primaryAction.disabled,
     commands.primaryAction.visible,
     commands.removeConflicts.disabled,
     commands.removeConflicts.visible,
+    commands.removeUnrecognized.disabled,
+    commands.removeUnrecognized.visible,
     commands.uninstall.disabled,
     commands.uninstall.visible,
     dialog,
@@ -469,6 +567,18 @@ export function useInstallActionConfirmation(options: {
         return;
       }
 
+      if (action === "remove-unrecognized") {
+        if (
+          !commands.removeUnrecognized.visible ||
+          commands.removeUnrecognized.disabled
+        ) {
+          return;
+        }
+
+        await runRemoveUnrecognized();
+        return;
+      }
+
       if (!commands.uninstall.visible || commands.uninstall.disabled) {
         return;
       }
@@ -480,11 +590,14 @@ export function useInstallActionConfirmation(options: {
       commands.primaryAction.visible,
       commands.removeConflicts.disabled,
       commands.removeConflicts.visible,
+      commands.removeUnrecognized.disabled,
+      commands.removeUnrecognized.visible,
       commands.uninstall.disabled,
       commands.uninstall.visible,
       runFixConflictsThenPrimaryAction,
       runPrimaryAction,
       runRemoveConflicts,
+      runRemoveUnrecognized,
       runUninstall,
     ],
   );
@@ -573,6 +686,36 @@ export function useInstallActionConfirmation(options: {
     unsupportedDeviceConfirmedForSession,
   ]);
 
+  const requestRemoveUnrecognized = useCallback(async () => {
+    if (
+      !commands.removeUnrecognized.visible ||
+      commands.removeUnrecognized.disabled
+    ) {
+      return;
+    }
+
+    const nextDialog = createDialogForAction({
+      action: "remove-unrecognized",
+      state,
+      riskAcknowledged,
+      unsupportedDeviceConfirmedForSession,
+    });
+
+    if (nextDialog) {
+      setDialog(nextDialog);
+      return;
+    }
+
+    await executeAction("remove-unrecognized");
+  }, [
+    commands.removeUnrecognized.disabled,
+    commands.removeUnrecognized.visible,
+    executeAction,
+    riskAcknowledged,
+    state,
+    unsupportedDeviceConfirmedForSession,
+  ]);
+
   const dismissDialog = useCallback(() => {
     setDialog(null);
   }, []);
@@ -617,6 +760,7 @@ export function useInstallActionConfirmation(options: {
     requestPrimaryAction,
     requestUninstall,
     requestRemoveConflicts,
+    requestRemoveUnrecognized,
     dismissDialog,
     confirmDialog,
   };
