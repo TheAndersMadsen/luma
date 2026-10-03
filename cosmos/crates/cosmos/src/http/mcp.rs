@@ -23,6 +23,7 @@ struct McpServerView {
     headers: Vec<String>,
     enabled: bool,
     allow_actions: bool,
+    allow_when_locked: bool,
     /// What the last contact showed: `untested`, `connected`, `unauthorized`,
     /// `unreachable`, `timed_out` or `invalid_response`.
     status: McpState,
@@ -75,6 +76,7 @@ fn mcp_view(store: &crate::mcp::McpStore) -> McpView {
                     url: server.url,
                     enabled: server.enabled,
                     allow_actions: server.allow_actions,
+                    allow_when_locked: server.allow_when_locked,
                 }
             })
             .collect(),

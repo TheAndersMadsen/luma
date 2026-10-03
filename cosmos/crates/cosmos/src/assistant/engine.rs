@@ -1618,6 +1618,19 @@ fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> V
     if !explicit_playback_request(current_utterance(req)) {
         tools.retain(|tool| tool.name != "music_discover");
     }
+    // Content-free: which gates applied and how many tools survived them, so
+    // "the Pin was not offered that tool" can be answered from the log.
+    tracing::info!(
+        is_locked = context.is_locked,
+        subscribed,
+        excluded = req.excluded_tools.len(),
+        offered = tools.len(),
+        mcp_offered = tools
+            .iter()
+            .filter(|tool| crate::mcp::is_tool_name(&tool.name))
+            .count(),
+        "assistant catalog resolved"
+    );
     tools
 }
 

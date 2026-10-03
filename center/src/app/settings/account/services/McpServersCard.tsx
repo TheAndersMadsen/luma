@@ -31,6 +31,7 @@ type McpServer = {
   headers: string[];
   enabled: boolean;
   allow_actions: boolean;
+  allow_when_locked: boolean;
   status: McpStatus;
   checked_at_ms: number | null;
   tools: McpTool[];
@@ -71,6 +72,7 @@ function parseView(value: unknown): McpView | null {
       !server.headers.every((header) => typeof header === "string") ||
       typeof server.enabled !== "boolean" ||
       typeof server.allow_actions !== "boolean" ||
+      typeof server.allow_when_locked !== "boolean" ||
       typeof server.status !== "string" ||
       !STATUSES.has(server.status) ||
       !Array.isArray(server.tools)
@@ -103,6 +105,7 @@ function parseView(value: unknown): McpView | null {
       headers: server.headers as string[],
       enabled: server.enabled,
       allow_actions: server.allow_actions,
+      allow_when_locked: server.allow_when_locked,
       status: server.status as McpStatus,
       checked_at_ms: typeof server.checked_at_ms === "number" ? server.checked_at_ms : null,
       tools,
@@ -366,7 +369,8 @@ export function McpServersCard({ operator }: { operator: boolean }) {
       <div className={styles.providerNote}>
         <strong>How it works</strong>
         <span>
-          Tools from a server that is switched on are offered from your next request, while your Pin is unlocked.
+          Tools from a server that is switched on are offered from your next request. They need an unlocked Pin unless
+          you turn on Use while locked for that server.
           Say &ldquo;turn off the &hellip; tools&rdquo; to switch a server by voice.
         </span>
         <span>
@@ -418,6 +422,23 @@ export function McpServersCard({ operator }: { operator: boolean }) {
                       `actions-${server.id}`,
                       { id: server.id, allow_actions },
                       allow_actions ? `Action tools are allowed for ${server.name}.` : `Only read-only tools are offered for ${server.name}.`,
+                    )
+                  }
+                />
+              </div>
+              <div className={styles.settingRow}>
+                <span>
+                  <strong>Use while locked</strong>
+                  <small>Your Pin is locked whenever it is off your body, on its charger for example. Anyone holding it could then use these tools.</small>
+                </span>
+                <Switch
+                  checked={server.allow_when_locked}
+                  ariaLabel={`Use ${server.name} while locked`}
+                  onChange={(allow_when_locked) =>
+                    void save(
+                      `locked-${server.id}`,
+                      { id: server.id, allow_when_locked },
+                      allow_when_locked ? `${server.name} can be used while your Pin is locked.` : `${server.name} needs an unlocked Pin.`,
                     )
                   }
                 />

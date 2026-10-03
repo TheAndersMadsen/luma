@@ -1457,9 +1457,9 @@ pub fn withheld_on_keyguard(name: &str) -> bool {
         return !tool.keyguard;
     }
     // INFERRED: an MCP tool reaches whatever the owner connected, so a locked
-    // Pin runs none of them.
+    // Pin runs none of them unless the owner allowed that server while locked.
     if crate::mcp::is_tool_name(name) {
-        return true;
+        return !crate::mcp::allowed_when_locked(name);
     }
     !ALLOWED_WHEN_LOCKED.contains(&name)
         && DEVICE_TOOL_SET.iter().any(|(offered, _)| *offered == name)

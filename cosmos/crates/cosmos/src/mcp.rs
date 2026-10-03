@@ -22,7 +22,10 @@
 //!   offered only when it declares `readOnlyHint`, unless the owner allowed
 //!   actions for that server. Luma's spoken confirmation covers a fixed list of
 //!   its own actions and does not reach these tools.
-//! * **A locked Pin is offered none of them** (`catalog::withheld_on_keyguard`).
+//! * **A locked Pin is offered none of them** (`catalog::withheld_on_keyguard`),
+//!   unless the owner allowed a server while locked. A Pin is locked whenever
+//!   it is off the body, on its charger for one, so a server the owner wants
+//!   there says so explicitly.
 //!
 //! ## How this can fail, and what each failure does
 //!
@@ -140,6 +143,8 @@ pub struct McpServer {
     pub enabled: bool,
     /// Offer tools that do not declare `readOnlyHint`. Off by default.
     pub allow_actions: bool,
+    /// Offer this server's tools while the Pin is locked. Off by default.
+    pub allow_when_locked: bool,
 }
 
 /// One request header for a server. The value is a credential.
@@ -167,6 +172,7 @@ impl std::fmt::Debug for McpServer {
             .field("name", &self.name)
             .field("enabled", &self.enabled)
             .field("allow_actions", &self.allow_actions)
+            .field("allow_when_locked", &self.allow_when_locked)
             .field("headers", &self.headers)
             .finish()
     }
@@ -201,6 +207,7 @@ pub struct McpServerInput {
     pub headers: Option<Vec<McpHeaderInput>>,
     pub enabled: Option<bool>,
     pub allow_actions: Option<bool>,
+    pub allow_when_locked: Option<bool>,
 }
 
 /// One header as the owner sends it.
@@ -346,6 +353,8 @@ pub struct OfferedTool {
     pub tool_name: String,
     pub description: String,
     pub parameters: Value,
+    /// Whether the owner lets a locked Pin use this tool's server.
+    pub allow_when_locked: bool,
 }
 
 /// What one assistant-side call produced: the observation the model reads and
@@ -484,6 +493,9 @@ impl McpStore {
                 if let Some(allow) = input.allow_actions {
                     server.allow_actions = allow;
                 }
+                if let Some(allow) = input.allow_when_locked {
+                    server.allow_when_locked = allow;
+                }
                 server.clone()
             }
             None => {
@@ -501,6 +513,7 @@ impl McpStore {
                     bearer_token: None,
                     enabled: input.enabled.unwrap_or(true),
                     allow_actions: input.allow_actions.unwrap_or(false),
+                    allow_when_locked: input.allow_when_locked.unwrap_or(false),
                 };
                 next.servers.push(server.clone());
                 server
@@ -646,6 +659,7 @@ impl McpStore {
                     tool_name: tool.name.clone(),
                     description: describe(&server.name, &tool.description),
                     parameters: parameters(&tool.input_schema),
+                    allow_when_locked: server.allow_when_locked,
                 });
             }
         }
@@ -964,6 +978,15 @@ pub fn active() -> Arc<McpStore> {
 /// only then.
 pub fn any_configured() -> bool {
     !active().snapshot().servers.is_empty()
+}
+
+/// Whether a locked Pin may be offered, and run, the MCP tool `name`: only a
+/// tool that is offered now, from a server the owner allowed while locked.
+pub fn allowed_when_locked(name: &str) -> bool {
+    active()
+        .offered()
+        .iter()
+        .any(|tool| tool.model_name == name && tool.allow_when_locked)
 }
 
 /// Whether `name` is the model-facing name of an MCP tool. A name test, not an
@@ -1520,6 +1543,7 @@ mod tests {
             bearer_token: None,
             enabled,
             allow_actions,
+            allow_when_locked: false,
         }
     }
 
@@ -1579,6 +1603,27 @@ mod tests {
 
         let trusting = store_with(vec![server("Home", true, true)], tools);
         assert_eq!(trusting.offered().len(), 2);
+    }
+
+    #[test]
+    fn a_locked_pin_gets_only_the_servers_the_owner_allowed_while_locked() {
+        let mut open = server("Open", true, false);
+        open.allow_when_locked = true;
+        let store = McpStore::memory(McpSettings {
+            schema_version: 1,
+            servers: vec![open.clone(), server("Closed", true, false)],
+        });
+        for known in store.snapshot().servers {
+            store.record(&known, Ok(vec![tool("read", true)]));
+        }
+        let offered = store.offered();
+        assert_eq!(offered.len(), 2);
+        let allowed: Vec<&str> = offered
+            .iter()
+            .filter(|tool| tool.allow_when_locked)
+            .map(|tool| tool.model_name.as_str())
+            .collect();
+        assert_eq!(allowed, ["mcp_open_read"]);
     }
 
     #[test]
