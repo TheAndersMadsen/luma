@@ -111,7 +111,9 @@ function deploymentScript(name, args, envFile = ENV_FILE, options = {}) {
     allowFailure: throwOnFailure,
   });
   if (throwOnFailure && result.status !== 0) {
-    stop(`${name} exited with status ${result.status || 1}`, options, result.status || 1);
+    // The script printed its own reason just before it stopped.
+    stop(`${name} stopped with exit status ${result.status || 1}; the error printed above says why`,
+      options, result.status || 1);
   }
   return values;
 }

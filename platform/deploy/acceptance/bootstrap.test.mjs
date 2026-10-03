@@ -166,6 +166,36 @@ test("bootstrap explains missing and unsupported host release information", (t) 
   }
 });
 
+test("bootstrap waits for Ubuntu's package lock and names a failed root command", (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "luma-bootstrap-"));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const bin = path.join(temporary, "bin");
+  const log = path.join(temporary, "apt.log");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "sudo"), '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
+  // A fresh server's unattended-upgrades holds the lock; apt-get exits 100.
+  fs.writeFileSync(path.join(bin, "apt-get"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\n[ "$3" = install ] && exit 100\nexit 0\n`, { mode: 0o700 });
+  const result = runSourcedBootstrap(
+    'trap unexpected_failure ERR; set -E; CURRENT_STAGE="Host and prerequisites"; ' +
+      'apt_get update; apt_get install -y ca-certificates curl',
+    [],
+    { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  );
+  assert.equal(result.status, 100);
+  assert.equal(fs.readFileSync(log, "utf8"), [
+    "-o DPkg::Lock::Timeout=300 update",
+    "-o DPkg::Lock::Timeout=300 install -y ca-certificates curl",
+    "",
+  ].join("\n"));
+  assert.match(result.stderr,
+    /What failed: The command `apt-get -o DPkg::Lock::Timeout=300 install -y ca-certificates curl` stopped with exit status 100\./u);
+  assert.equal(result.stderr.match(/Setup stopped/gu).length, 1);
+  // Every apt-get call goes through the waiting wrapper.
+  const source = fs.readFileSync(bootstrap, "utf8").split("# STAGES:")[1];
+  assert.doesNotMatch(source, /as_root apt-get (?!-o DPkg::Lock::Timeout=300 "\$@")/u);
+});
+
 test("bootstrap has bounded capacity, privilege, Docker, and GitHub recovery checks", () => {
   const source = fs.readFileSync(bootstrap, "utf8");
   assert.match(source, /MINIMUM_AVAILABLE_KIB/u);
@@ -525,6 +555,10 @@ test("bootstrap runs the unattended install with explicit setup flags, the DuckD
   assert.match(failed.result.stderr, /Setup stopped · Prove the deployment plan \(deploy --dry-run\)/u);
   assert.match(failed.result.stderr, /State: Host tools, operator access, and the production configuration were preserved\. Production was not deployed\./u);
   assert.match(failed.result.stderr, /Safe retry: Sign in as root and run the interactive install/u);
+  // One stop block, naming the command that failed as the owner would type it.
+  assert.equal(failed.result.stderr.match(/Setup stopped/gu).length, 1, failed.result.stderr);
+  assert.match(failed.result.stderr,
+    /What failed: The command `\.\/luma deploy production --dry-run` stopped with exit status 3\. Its own error message is just above this block\./u);
   assert.doesNotMatch(fs.readFileSync(commands, "utf8"), /deploy production --confirm/u);
   assert.doesNotMatch(failed.result.stderr, /fixture-(?:github|duckdns)-token/u);
 });

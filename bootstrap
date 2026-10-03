@@ -229,6 +229,7 @@ GH_TOKEN=""
 DUCKDNS_TOKEN=""
 UNATTENDED=false
 CURRENT_STAGE="Startup"
+WRAPPED_COMMAND=""
 CHANGE_STATE="Nothing was changed."
 
 report_failure() {
@@ -246,9 +247,15 @@ die() {
   exit 1
 }
 
+# BASH_COMMAND is the failed command as the script writes it, before any
+# expansion, so a token held in a variable shows only as its variable name.
+# The wrappers as_root and run_luma run "$@", so they record the command they
+# run (never one that carries a secret) in WRAPPED_COMMAND for this message.
 unexpected_failure() {
-  local status="$?"
-  report_failure "A required command stopped with exit status $status. Its diagnostic is immediately above."
+  local status="$?" command="${BASH_COMMAND//$'\n'/ }"
+  [[ "$command" != *'"$@"'* || -z "$WRAPPED_COMMAND" ]] || command="$WRAPPED_COMMAND"
+  (( ${#command} <= 200 )) || command="${command:0:200}..."
+  report_failure "The command \`$command\` stopped with exit status $status. Its own error message is just above this block."
   exit "$status"
 }
 
@@ -260,7 +267,15 @@ cleanup() {
 }
 
 as_root() {
+  WRAPPED_COMMAND="$*"
   if (( EUID == 0 )); then "$@"; else sudo "$@"; fi
+}
+
+# apt_get ARGS... runs apt-get as root. A fresh Ubuntu server runs
+# unattended-upgrades right after boot and holds the package lock, so apt-get
+# waits up to five minutes for it instead of stopping at once.
+apt_get() {
+  as_root apt-get -o DPkg::Lock::Timeout=300 "$@"
 }
 
 # approve "question" is the y/N gate of the interactive install. An
@@ -360,6 +375,7 @@ unattended_inputs() {
 # Docker group when this user is not root, with this process's stdin.
 run_luma() {
   local command argument
+  WRAPPED_COMMAND="./luma $*"
   if [[ "$DOCKER_MODE" == "direct" ]]; then
     (cd "$OPERATOR_DIR" && ./luma "$@")
   else
@@ -515,8 +531,8 @@ install_bun() {
 
 install_docker() {
   local key="$BOOTSTRAP_TMP/docker.asc" fingerprint architecture
-  as_root apt-get update
-  as_root apt-get install -y ca-certificates curl gnupg
+  apt_get update
+  apt_get install -y ca-certificates curl gnupg
   curl --fail --location --proto '=https' --tlsv1.2 \
     --output "$key" https://download.docker.com/linux/ubuntu/gpg
   fingerprint="$(gpg --batch --show-keys --with-colons "$key" 2>/dev/null |
@@ -534,8 +550,8 @@ install_docker() {
     "Architectures: $architecture" \
     'Signed-By: /etc/apt/keyrings/docker.asc' |
     as_root tee /etc/apt/sources.list.d/docker.sources >/dev/null
-  as_root apt-get update
-  as_root apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_get update
+  apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   as_root systemctl enable --now docker
   if (( EUID != 0 )); then as_root usermod -aG docker "$(id -un)"; fi
   compose_is_supported || die "Docker Compose 2.34+ was not available after installation."
@@ -550,7 +566,7 @@ docker_mode() {
         END { exit(found ? 0 : 1) }'; then
     printf 'group'
   else
-    die "Docker is installed, but this user cannot reach it. Start a new login session and rerun."
+    die "Docker is installed, but this user cannot use it yet. Log out, sign in again over SSH, and run the install again."
   fi
 }
 
@@ -760,10 +776,10 @@ if (( EUID != 0 )) && ! sudo -v; then
 fi
 check_available_capacity "$HOME"
 CHANGE_STATE="Ubuntu host packages may have changed. Operator configuration and production were not changed."
-as_root apt-get update
-as_root apt-get install -y ca-certificates curl unzip gnupg
+apt_get update
+apt_get install -y ca-certificates curl unzip gnupg
 if ! bun_is_supported; then
-  approve "Install the pinned Bun $BUN_VERSION runtime under /usr/local?" || die "Bun installation declined."
+  approve "Install the pinned Bun $BUN_VERSION runtime under /usr/local?" || die "You declined the Bun installation. Luma needs Bun to run."
   install_bun
 else
   say "Bun $BUN_VERSION is already available."
@@ -773,7 +789,7 @@ if ! compose_is_supported; then
   [[ -z "$conflicts" ]] ||
     die "An incompatible Docker package is installed: $conflicts. Luma did not remove it because that could stop other containers. Use a fresh VPS, or remove the conflicting package after reviewing its workloads, then rerun."
   approve "Install or upgrade Docker Engine and Compose from Docker's official repository?" ||
-    die "Docker installation declined."
+    die "You declined the Docker installation. Luma needs Docker to run."
   install_docker
 else
   say "Docker Engine and Compose 2.34+ are already available."
@@ -902,7 +918,7 @@ if $UNATTENDED; then
 else
   say "The operator now asks only for the domain, certificate email, owner, features, public Pin IPv4, and how this server gets updates."
   if ! run_operator "$DOCKER_MODE" "$OPERATOR_DIR"; then
-    die "Operator onboarding did not finish. Follow its stage-specific recovery check above, then safely rerun this bootstrap."
+    die "Onboarding did not finish. Run the Recovery check command it printed above, fix what it reports, then run this install again."
   fi
 fi
 note "Operator release: $OPERATOR_DIR"

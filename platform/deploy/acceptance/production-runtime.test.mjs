@@ -28,6 +28,9 @@ function fixture(t, dockerScript) {
     ["ss", "#!/bin/sh\nprintf '%s\\n' 'LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:((nginx))'\n"],
     ["bun", "#!/bin/sh\nexit 0\n"],
     ["getent", "#!/bin/sh\nprintf '%s\\n' '203.0.113.10 STREAM pin.example.test'\n"],
+    // No default route unless a test gives one, so the host's own network
+    // never decides a result.
+    ["ip", "#!/bin/sh\nexit 1\n"],
   ]) {
     fs.writeFileSync(path.join(bin, name), contents, { mode: 0o700 });
   }
@@ -61,6 +64,47 @@ exit 0
   assert.match(result.stderr, /public DNS name pin\.example\.test does not resolve/u);
   assert.match(result.stderr, /A or AAAA record/u);
   assert.match(result.stderr, /\.\/luma doctor production/u);
+});
+
+test("production preflight warns, without failing, when the public name points to another server", (t) => {
+  const docker = `#!/bin/sh
+case "$*" in
+  *"compose version --short"*) printf '%s\n' 2.34.0; exit 0 ;;
+  *"config --quiet"*) exit 0 ;;
+  *"ps --status running --services traefik"*) printf '%s\\n' traefik; exit 0 ;;
+esac
+exit 0
+`;
+  const preflightWith = (environment, route) => {
+    const { env } = fixture(t, docker);
+    if (route) {
+      fs.writeFileSync(path.join(env.PATH.split(":")[0], "ip"),
+        `#!/bin/sh\nprintf '%s\\n' '1.1.1.1 via 10.0.0.1 dev eth0 src ${route} uid 0'\n`, { mode: 0o700 });
+    }
+    return spawnSync("bash", [preflight], { cwd: root, env: { ...env, ...environment }, encoding: "utf8" });
+  };
+
+  const wrong = preflightWith({ LUMA_DEVICE_EDGE_IPV4: "198.51.100.7" });
+  assert.equal(wrong.status, 0, wrong.stderr);
+  assert.match(wrong.stderr,
+    /Warning: pin\.example\.test points to 203\.0\.113\.10, but this server's public IPv4 is 198\.51\.100\.7 \(LUMA_DEVICE_EDGE_IPV4/u);
+  assert.match(wrong.stderr, /correct it at your DNS provider/u);
+  assert.match(wrong.stderr, /load balancer or NAT router/u);
+
+  const right = preflightWith({ LUMA_DEVICE_EDGE_IPV4: "203.0.113.10" });
+  assert.equal(right.status, 0, right.stderr);
+  assert.doesNotMatch(right.stderr, /Warning/u);
+
+  // Without a saved Pin address, a public default-route address is the
+  // server's own. A private one (behind NAT) proves nothing and is skipped.
+  const routed = preflightWith({}, "198.51.100.9");
+  assert.equal(routed.status, 0, routed.stderr);
+  assert.match(routed.stderr, /public IPv4 is 198\.51\.100\.9 \(the address of this server's default route\)/u);
+  for (const address of ["10.0.0.5", "172.20.1.2", "192.168.1.4", "100.64.0.3"]) {
+    const nat = preflightWith({}, address);
+    assert.equal(nat.status, 0, nat.stderr);
+    assert.doesNotMatch(nat.stderr, /Warning/u, address);
+  }
 });
 
 test("production preflight hides Compose's resolver noise unless the application cannot be read", (t) => {

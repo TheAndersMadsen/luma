@@ -186,7 +186,9 @@ function setupCommand(args, options = {}) {
       if (result.credentials) {
         info(`First sign-in: ${result.credentials} (delete it after you sign in).`);
       }
-      if (result.pinTrustRoot) info(`Generated Pin trust root: ${result.pinTrustRoot}`);
+      if (result.pinTrustRoot) {
+        info(`${result.pinTrustRootCreated ? 'Generated a new' : 'Kept the existing'} Pin trust root: ${result.pinTrustRoot}`);
+      }
       info(`Updates: this server asks ${result.updateSource || '(no update source)'} for newer releases.`);
       info(result.automaticUpdates.message);
       for (const command of result.automaticUpdates.commands ?? []) info(`  ${command}`);

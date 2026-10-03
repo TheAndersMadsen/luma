@@ -193,6 +193,40 @@ if command -v getent >/dev/null 2>&1 && ! getent ahosts "$public_host" >/dev/nul
   exit 1
 fi
 
+# A name that resolves to the wrong server passes the check above, and then
+# the certificate request and Center's sign-in fail after deployment. So
+# compare its IPv4 addresses with this server's: the Pin address setup saved,
+# or else the address of the default route when that address is public. A load
+# balancer or NAT in front of the server is legitimate, so this only warns.
+is_public_ipv4() {
+  local a b
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r a b _ <<< "$1"
+  ! (( a == 10 || a == 127 || a == 0 || (a == 100 && b >= 64 && b <= 127) ||
+       (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) ))
+}
+expected_ipv4="${LUMA_DEVICE_EDGE_IPV4:-}"
+expected_source="LUMA_DEVICE_EDGE_IPV4, the address setup saved for the Pin"
+if [[ -z "$expected_ipv4" ]] && command -v ip >/dev/null 2>&1; then
+  route_ipv4="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1 || true)"
+  if is_public_ipv4 "$route_ipv4"; then
+    expected_ipv4="$route_ipv4"
+    expected_source="the address of this server's default route"
+  fi
+fi
+if [[ -n "$expected_ipv4" ]] && command -v getent >/dev/null 2>&1; then
+  resolved_ipv4="$(getent ahostsv4 "$public_host" 2>/dev/null | awk '{ print $1 }' | sort -u || true)"
+  if ! grep -qxF -- "$expected_ipv4" <<< "$resolved_ipv4"; then
+    if [[ -n "$resolved_ipv4" ]]; then
+      echo "Warning: $public_host points to ${resolved_ipv4//$'\n'/, }, but this server's public IPv4 is $expected_ipv4 ($expected_source)." >&2
+    else
+      echo "Warning: $public_host has no A record (IPv4), but this server's public IPv4 is $expected_ipv4 ($expected_source)." >&2
+    fi
+    echo "If the A record is wrong, correct it at your DNS provider, wait for the change to reach this server, then rerun ./luma doctor production." >&2
+    echo "If a load balancer or NAT router forwards ports 80 and 443 to this server, the addresses can differ and you can ignore this warning." >&2
+  fi
+fi
+
 # A running Traefik container in this project already owns the ports during a
 # normal update. Otherwise, fail before Compose reaches a vague bind error.
 if ! docker compose "${compose[@]}" ps --status running --services traefik 2>/dev/null |

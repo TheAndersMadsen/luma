@@ -5,6 +5,7 @@ const net = require('node:net');
 
 const {
   PRODUCTION_PROFILE_NAMES,
+  reservedExampleEmail,
   validProductionDomain,
   validProductionEmail,
 } = require('./production-setup');
@@ -52,8 +53,10 @@ function guidedProductionArguments(current = {}, io = {}, options = {}) {
     ...(io.routeAddress ? { routeAddress: io.routeAddress } : {}),
   };
 
-  // Keep the six setup stages stable when optional Pin questions are skipped.
-  const stages = 6;
+  // Seven numbered questions and the review. The numbering stays the same
+  // when the Pin questions are skipped. Follow-up questions (DuckDNS, the Pin
+  // archive) are indented under the question that asks for them.
+  const stages = 8;
   const needsPinArchive = options.pinReleaseStaged === false;
 
   function ask(stage, label, defaultValue, validate, error) {
@@ -107,8 +110,9 @@ function guidedProductionArguments(current = {}, io = {}, options = {}) {
     domain = registerDuckDns({ subdomain, token, ipv4, ...network });
     write(`\n  ${domain} now points at ${ipv4}.\n`);
   }
-  const acmeEmail = ask(2, 'TLS certificate email', current.LUMA_ACME_EMAIL || '', validProductionEmail,
-    'Enter a valid email address.');
+  const acmeEmail = ask(2, 'TLS certificate email', current.LUMA_ACME_EMAIL || '',
+    (value) => validProductionEmail(value) && !reservedExampleEmail(value),
+    'Enter a real email address. Let\'s Encrypt refuses example.com, example.net, and example.org.');
   const operatorEmail = ask(3, 'First Center owner email', current.LUMA_FIRST_OPERATOR_EMAIL || '', validProductionEmail,
     'Enter a valid email address.');
 
@@ -138,14 +142,14 @@ function guidedProductionArguments(current = {}, io = {}, options = {}) {
   // Where the server asks for newer releases and whether it installs them
   // itself. The saved answer is the default, then the Center the installer
   // came from (bootstrap passes it), then the release's own update source.
-  const updateSource = ask(0, 'Where should this server check for updates?',
+  const updateSource = ask(6, 'Where should this server check for updates?',
     current.LUMA_UPDATE_SOURCE || options.updateSource || '',
     (value) => value === '' || isUpdateSourceOrigin(value.replace(/\/$/u, '')),
     'Enter the https address of a Luma Center, such as https://center.example.com.').replace(/\/$/u, '');
   const automatic = current.LUMA_AUTO_UPDATES !== 'off';
   let autoUpdates;
   while (!autoUpdates) {
-    write(`\n  Install updates automatically at night? [${automatic ? 'Y/n' : 'y/N'}]: `);
+    write(`\n[7/${stages}] Install updates automatically at night? [${automatic ? 'Y/n' : 'y/N'}]: `);
     const answer = readLine().trim();
     if (answer === '') autoUpdates = automatic ? 'on' : 'off';
     else if (/^(?:y|yes)$/iu.test(answer)) autoUpdates = 'on';

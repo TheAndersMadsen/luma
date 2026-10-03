@@ -126,7 +126,18 @@ test("production Center mounts only the operator-local Pin release tree", (conte
     "--public-ip", "203.0.113.42",
   ], { cwd: operatorRoot, env: environment, encoding: "utf8" });
   assert.equal(pinSetup.status, 0, pinSetup.stderr);
+  assert.match(pinSetup.stdout, /Generated a new Pin trust root: /u);
+  // A rerun reuses the established root and says so.
+  const pinRerun = spawnSync(process.execPath, [operatorCli, "setup", "production"], {
+    cwd: operatorRoot, env: environment, encoding: "utf8",
+  });
+  assert.equal(pinRerun.status, 0, pinRerun.stderr);
+  assert.match(pinRerun.stdout, /Kept the existing Pin trust root: /u);
+  assert.doesNotMatch(pinRerun.stdout, /Generated a new Pin trust root/u);
   const operatorCompose = path.join(environment.LUMA_CONFIG_DIR, "production", "operator.compose.yaml");
+  // Outside Swarm, Compose ignores a file secret's mode and warns about it
+  // when it creates each container. The host files' own 0444 mode applies.
+  assert.doesNotMatch(fs.readFileSync(operatorCompose, "utf8"), /\bmode:/u);
   assert.match(
     fs.readFileSync(operatorCompose, "utf8"),
     /target: \/var\/lib\/luma\/pin-releases\n\s+read_only: true\n\s+bind: \{ create_host_path: false \}/,

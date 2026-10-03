@@ -177,7 +177,7 @@ test("production onboarding stops after the dry-run when deployment is declined"
     verify: () => calls.push("verify"),
     readLine: () => "no",
     write: () => {},
-  }), /deployment cancelled/u);
+  }), /You cancelled the deployment/u);
   assert.deepEqual(calls, ["setup", "doctor", "dry-run"]);
 });
 
@@ -186,19 +186,19 @@ test("production onboarding reports a safe stage-specific recovery after every f
     {
       operation: "setup",
       expected: /stage 1\/5 \(configuration\)/u,
-      state: /production deployment was not started/iu,
+      state: /Nothing was deployed\. Configuration files that setup wrote before it stopped were kept/u,
       recovery: /\.\/luma setup production --guided/u,
     },
     {
       operation: "doctor",
-      expected: /stage 2\/5 \(preflight\)/u,
-      state: /production deployment was not started/iu,
+      expected: /stage 2\/5 \(server checks\)/u,
+      state: /Nothing was deployed\. Your configuration was kept/u,
       recovery: /\.\/luma doctor production/u,
     },
     {
       operation: "dryRun",
-      expected: /stage 3\/5 \(safe deployment preview\)/u,
-      state: /production deployment was not started/iu,
+      expected: /stage 3\/5 \(deployment preview\)/u,
+      state: /Nothing was deployed\. Your checked configuration was kept/u,
       recovery: /\.\/luma deploy production --dry-run/u,
     },
     {
@@ -210,7 +210,7 @@ test("production onboarding reports a safe stage-specific recovery after every f
     {
       operation: "verify",
       expected: /stage 5\/5 \(verification\)/u,
-      state: /deployed server state was preserved/iu,
+      state: /deployed server was left as it is/u,
       recovery: /\.\/luma verify production/u,
     },
   ];
@@ -233,6 +233,7 @@ test("production onboarding reports a safe stage-specific recovery after every f
       assert.match(error.message, failed.expected);
       assert.match(error.message, failed.state);
       assert.match(error.message, failed.recovery);
+      assert.match(error.message, /^What failed: provider password=\[redacted\]/mu);
       assert.match(error.message, /safe retry: \.\/luma onboard production/iu);
       assert.match(error.message, /No Pin was contacted or changed/u);
       assert.doesNotMatch(error.message, /never-print-this|ghp_/u);
@@ -251,8 +252,8 @@ test("declining deployment explains exactly what the safe rerun preserves", () =
     readLine: () => "no",
     write: () => {},
   }), (error) => {
-    assert.match(error.message, /deployment was not started/u);
-    assert.match(error.message, /configuration was preserved/u);
+    assert.match(error.message, /nothing was deployed/u);
+    assert.match(error.message, /configuration was kept/u);
     assert.match(error.message, /safe retry: \.\/luma onboard production/iu);
     return true;
   });
@@ -390,11 +391,11 @@ test("guided setup without the Pin feature never asks for an archive and preserv
     assert.ok(!args.includes("--pin-release-archive"));
     assert.doesNotMatch(scripted.output(), /Path to this release's Pin archive/u);
     assert.match(scripted.output(), /No physical Pin is needed/u);
-    for (let stage = 1; stage <= 6; stage += 1) {
-      assert.ok(scripted.output().includes(`[${stage}/6] `));
+    for (let stage = 1; stage <= 8; stage += 1) {
+      assert.ok(scripted.output().includes(`[${stage}/8] `));
     }
-    assert.match(scripted.output(), /\[5\/6\] Pin feature is off; no Pin address or archive is needed/u);
-    assert.doesNotMatch(scripted.output(), /\[[0-9]\/7\]/u);
+    assert.match(scripted.output(), /\[5\/8\] Pin feature is off; no Pin address or archive is needed/u);
+    assert.doesNotMatch(scripted.output(), /\[[0-9]\/[0-79]\]/u);
   }
 });
 
@@ -420,16 +421,18 @@ test("guided production setup collects one reviewed newcomer configuration", () 
     "--profile", "spotify",
     "--auto-updates", "on",
   ]);
-  // Six numbered stages: five questions and the review, in order.
-  for (const stage of ["[1/6]", "[2/6]", "[3/6]", "[4/6]", "[5/6]", "[6/6]"]) {
+  // Eight numbered stages: seven questions and the review, in order.
+  for (const stage of ["[1/8]", "[2/8]", "[3/8]", "[4/8]", "[5/8]", "[6/8]", "[7/8]", "[8/8]"]) {
     assert.match(scripted.output(), new RegExp(`${stage.replace(/[/[\]]/gu, "\\$&")} `, "u"));
   }
-  assert.match(scripted.output(), /\[1\/6\] Public Center domain \(blank or "duckdns" for a free DuckDNS name\)/u);
+  assert.match(scripted.output(), /\[1\/8\] Public Center domain \(blank or "duckdns" for a free DuckDNS name\)/u);
   // Without a saved or detected address the Pin prompt offers no default and says why.
   assert.match(scripted.output(),
     /Could not detect this server's public IPv4: the default route has no usable IPv4 address \(no route in tests\)\./u);
-  assert.match(scripted.output(), /\[5\/6\] Server public IPv4 for the Pin: /u);
-  assert.match(scripted.output(), /\[6\/6\] Review/u);
+  assert.match(scripted.output(), /\[5\/8\] Server public IPv4 for the Pin: /u);
+  assert.match(scripted.output(), /\[6\/8\] Where should this server check for updates\?: /u);
+  assert.match(scripted.output(), /\[7\/8\] Install updates automatically at night\? \[Y\/n\]: /u);
+  assert.match(scripted.output(), /\[8\/8\] Review/u);
   assert.match(scripted.output(), /does not deploy or change a Pin/u);
   assert.match(scripted.output(), /deployment remains a separate confirmed command/u);
 });
@@ -474,6 +477,22 @@ test("guided setup accepts a domain typed with capitals and stores it in lowerca
   assert.match(scripted.output(), /Center: https:\/\/center\.example\.test\n/u);
 });
 
+test("guided setup re-asks an example-domain certificate email instead of refusing it after the review", () => {
+  const scripted = guidedIo([
+    "center.example.test", "acme@example.com", "acme@mail.example.org", "acme@example.test",
+    "owner@example.test", "none", "", "", "yes",
+  ]);
+  assert.deepEqual(guidedProductionArguments({}, scripted.io), [
+    "--domain", "center.example.test",
+    "--acme-email", "acme@example.test",
+    "--operator-email", "owner@example.test",
+    "--no-profiles",
+    "--auto-updates", "on",
+  ]);
+  const refusals = scripted.output().match(/Enter a real email address\. Let's Encrypt refuses example\.com, example\.net, and example\.org\./gu);
+  assert.equal(refusals?.length, 2);
+});
+
 test("guided setup offers a free DuckDNS name and points it at the detected address", () => {
   const scripted = guidedIo([
     "", // blank domain: DuckDNS
@@ -504,7 +523,7 @@ test("guided setup offers a free DuckDNS name and points it at the detected addr
   assert.match(output, /DuckDNS subdomain \(NAME in NAME\.duckdns\.org\): /u);
   assert.match(output, /Server public IPv4 for my-center\.duckdns\.org \[203\.0\.113\.10\]: /u);
   assert.match(output, /my-center\.duckdns\.org now points at 203\.0\.113\.10\./u);
-  assert.match(output, /\[5\/6\] Server public IPv4 for the Pin \[203\.0\.113\.10\]: /u);
+  assert.match(output, /\[5\/8\] Server public IPv4 for the Pin \[203\.0\.113\.10\]: /u);
   assert.match(output, /Center: https:\/\/my-center\.duckdns\.org\n/u);
   // The token is typed hidden, sent once in the DuckDNS query, and never shown.
   assert.deepEqual(scripted.hidden, ["\n  DuckDNS token (not shown, not stored): "]);
@@ -545,7 +564,7 @@ test("guided setup offers no Pin address when the route and the echo disagree or
   ]);
   assert.match(nat.output(),
     /Could not detect this server's public IPv4: this server's own address 10\.0\.0\.5 differs from the address the internet sees \(203\.0\.113\.10\), so it is probably behind NAT/u);
-  assert.match(nat.output(), /\[5\/6\] Server public IPv4 for the Pin: /u);
+  assert.match(nat.output(), /\[5\/8\] Server public IPv4 for the Pin: /u);
   assert.deepEqual(nat.requests, ["https://api.ipify.org"]);
 
   const offline = guidedIo(["c.test", "a@example.test", "o@example.test", "pin", "198.51.100.7", "", "", "yes"],
@@ -588,12 +607,12 @@ test("guided setup asks for the Pin archive when nothing is staged", () => {
     "--auto-updates", "on",
   ]);
   const output = scripted.output();
-  for (const stage of ["[1/6]", "[2/6]", "[3/6]", "[4/6]", "[5/6]", "[6/6]"]) {
+  for (const stage of ["[1/8]", "[2/8]", "[3/8]", "[4/8]", "[5/8]", "[6/8]", "[7/8]", "[8/8]"]) {
     assert.match(output, new RegExp(`${stage.replace(/[/[\]]/gu, "\\$&")} `, "u"));
   }
   assert.match(output, /\n  Path to this release's Pin archive/u);
-  assert.match(output, /\[6\/6\] Review/u);
-  assert.doesNotMatch(output, /\[[0-9]\/7\]/u);
+  assert.match(output, /\[8\/8\] Review/u);
+  assert.doesNotMatch(output, /\[[0-9]\/[0-79]\]/u);
   assert.match(output, new RegExp(`Pin release archive: ${archive.replaceAll(".", "\\.")}`, "u"));
   fs.rmSync(directory, { recursive: true, force: true });
 });
@@ -634,7 +653,7 @@ test("guided setup waits at each prompt of a real terminal", { skip: !terminalAv
     "no",
   ], { cwd: root, env });
   assert.doesNotMatch(run.output, /EAGAIN/u);
-  assert.match(run.output, /\[4\/6\] Features/u);
+  assert.match(run.output, /\[4\/8\] Features/u);
   assert.match(run.output, /Center: https:\/\/center\.example\.test/u);
   assert.match(run.output, /cancelled; no configuration was written/u);
   assert.equal(run.status, 1, run.output);
@@ -1350,6 +1369,31 @@ process.stdout.write(JSON.stringify(results));
   return JSON.parse(result.stdout);
 }
 
+test("an onboarding stop after a failed deployment script points at the error that script printed", (t) => {
+  const { env } = productionInstallation(t);
+  const script = `
+const context = require(${JSON.stringify(path.join(root, "platform/cli/context.js"))});
+context.run = () => ({ status: 1 });
+const { productionDoctor } = require(${JSON.stringify(path.join(root, "platform/cli/production.js"))});
+const { runProductionOnboarding } = require(${JSON.stringify(path.join(root, "platform/cli/onboard.js"))});
+try {
+  runProductionOnboarding({
+    setup: () => {},
+    doctor: () => productionDoctor([], { throwOnFailure: true }),
+    write: () => {},
+  });
+} catch (error) {
+  process.stdout.write(error.message);
+}
+`;
+  const result = spawnSync(process.execPath, ["-e", script], { cwd: root, env, encoding: "utf8", timeout: 30_000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Onboarding stopped during stage 2\/5 \(server checks\)\.$/mu);
+  assert.match(result.stdout,
+    /^What failed: preflight\.sh stopped with exit status 1; the error printed above says why$/mu);
+  assert.match(result.stdout, /^Recovery check: \.\/luma doctor production$/mu);
+});
+
 function productionInstallation(t) {
   const { env } = fixture(t);
   const setup = invoke(
@@ -1471,8 +1515,8 @@ test("owner Traefik extras are mounted, and setup and deploy never write them", 
   assert.equal(confirmed.extraNetworks, "owner-apps", "preflight receives the network setting");
   const overlay = confirmed.overlay;
   for (const expected of [
-    "      - { source: traefik_dynamic, target: /etc/traefik/dynamic/10-luma.yaml, mode: 0444 }\n" +
-      "      - { source: traefik_extra, target: /etc/traefik/dynamic/20-extra.yaml, mode: 0444 }",
+    "      - { source: traefik_dynamic, target: /etc/traefik/dynamic/10-luma.yaml }\n" +
+      "      - { source: traefik_extra, target: /etc/traefik/dynamic/20-extra.yaml }",
     `  traefik_extra: { file: ${JSON.stringify(file)} }`,
     [
       "    volumes:",
@@ -1739,7 +1783,7 @@ test("confirmed deploy re-renders an older installation's edge and its mounts fr
   const overlayFile = path.join(production, "operator.compose.yaml");
   const currentOverlay = fs.readFileSync(overlayFile, "utf8");
   const oldOverlay = currentOverlay
-    .replace(/^ {6}- \{ source: traefik_dynamic, target: \/etc\/traefik\/dynamic\/10-luma\.yaml, mode: 0444 \}\n/mu, "");
+    .replace(/^ {6}- \{ source: traefik_dynamic, target: \/etc\/traefik\/dynamic\/10-luma\.yaml \}\n/mu, "");
   assert.notEqual(oldOverlay, currentOverlay);
   fs.writeFileSync(overlayFile, oldOverlay);
 
@@ -1798,7 +1842,7 @@ process.stdout.write(JSON.stringify({ withoutPin, overlayWithoutPin, unbound, re
   assert.equal(result.status, 0, result.stderr);
   const { withoutPin, overlayWithoutPin, unbound, refusal } = JSON.parse(result.stdout);
   assert.equal(withoutPin, false);
-  assert.match(overlayWithoutPin, /- \{ source: traefik_dynamic, target: \/etc\/traefik\/dynamic\/10-luma\.yaml, mode: 0444 \}/u);
+  assert.match(overlayWithoutPin, /- \{ source: traefik_dynamic, target: \/etc\/traefik\/dynamic\/10-luma\.yaml \}/u);
   assert.match(overlayWithoutPin, /searxng_settings/u);
   assert.doesNotMatch(overlayWithoutPin, /envoy_config/u);
   assert.equal(
@@ -1809,7 +1853,11 @@ process.stdout.write(JSON.stringify({ withoutPin, overlayWithoutPin, unbound, re
   );
   assert.equal(fs.statSync(envoy).mode & 0o777, 0o444);
   const withPin = fs.readFileSync(overlay, "utf8");
-  assert.match(withPin, /- \{ source: envoy_config, target: \/etc\/cosmos-edge\/envoy\.yaml, mode: 0444 \}/u);
+  assert.match(withPin, /- \{ source: envoy_config, target: \/etc\/cosmos-edge\/envoy\.yaml \}/u);
+  // Compose ignores a file secret's mode outside Swarm and warns on every
+  // command; the host files' own 0444 mode is what the containers see.
+  assert.doesNotMatch(withPin, /\bmode:/u);
+  assert.doesNotMatch(overlayWithoutPin, /\bmode:/u);
   assert.equal(withPin.includes(`envoy_config: { file: ${JSON.stringify(envoy)} }`), true);
   assert.equal(withPin.includes(`LUMA_PIN_RELEASE_EXPECTED_ID: ${JSON.stringify(binding.releaseId)}`), true);
   assert.equal(fs.statSync(overlay).mode & 0o777, 0o600);

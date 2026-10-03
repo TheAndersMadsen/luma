@@ -14,35 +14,35 @@ const ONBOARD_STAGES = Object.freeze([
     operation: 'setup',
     heading: '[1/5] Configure this production server',
     label: 'stage 1/5 (configuration)',
-    state: 'Production deployment was not started. Configuration files created before the failure were preserved.',
+    state: 'Nothing was deployed. Configuration files that setup wrote before it stopped were kept.',
     recovery: './luma setup production --guided',
   }),
   Object.freeze({
     operation: 'doctor',
     heading: '[2/5] Check host, release, and configuration',
-    label: 'stage 2/5 (preflight)',
-    state: 'Production deployment was not started. The external configuration was preserved.',
+    label: 'stage 2/5 (server checks)',
+    state: 'Nothing was deployed. Your configuration was kept.',
     recovery: './luma doctor production',
   }),
   Object.freeze({
     operation: 'dryRun',
     heading: '[3/5] Prove the deployment plan without changing production',
-    label: 'stage 3/5 (safe deployment preview)',
-    state: 'Production deployment was not started. The checked configuration was preserved.',
+    label: 'stage 3/5 (deployment preview)',
+    state: 'Nothing was deployed. Your checked configuration was kept.',
     recovery: './luma deploy production --dry-run',
   }),
   Object.freeze({
     operation: 'deploy',
     heading: '[4/5] Deploy the verified release',
     label: 'stage 4/5 (deployment)',
-    state: 'The deployment command started, so server containers may have changed. Configuration was preserved.',
+    state: 'Deployment started, so some server containers may have changed. Your configuration was kept.',
     recovery: './luma verify production',
   }),
   Object.freeze({
     operation: 'verify',
     heading: '[5/5] Verify production and hand off to Center',
     label: 'stage 5/5 (verification)',
-    state: 'The deployed server state was preserved so it can be inspected and retried safely.',
+    state: 'The deployed server was left as it is, so you can inspect it and retry safely.',
     recovery: './luma verify production',
   }),
 ]);
@@ -75,7 +75,7 @@ function onboardingFailure(stage, error, archive = null) {
   const recovery = stage.operation === 'setup' ? `${stage.recovery}${archiveArguments(selected)}` : stage.recovery;
   return new Error([
     `Onboarding stopped during ${stage.label}.`,
-    ...(reason ? [`Reason: ${reason}`] : []),
+    ...(reason ? [`What failed: ${reason}`] : []),
     `State: ${stage.state}`,
     'Device state: No Pin was contacted or changed.',
     `Recovery check: ${recovery}`,
@@ -129,8 +129,8 @@ function runProductionOnboarding(runtime = {}) {
   operations.write('Deploy this verified release now? [y/N]');
   if (!/^(?:y|yes)$/iu.test(operations.readLine().trim())) {
     throw new Error([
-      'Production deployment cancelled; deployment was not started.',
-      'The verified configuration was preserved and no Pin was contacted or changed.',
+      'You cancelled the deployment, so nothing was deployed.',
+      'Your checked configuration was kept, and no Pin was contacted or changed.',
       `Safe retry: ./luma onboard production${archiveArguments(archive)}`,
     ].join('\n'));
   }

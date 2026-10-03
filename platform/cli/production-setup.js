@@ -133,6 +133,11 @@ function validProductionEmail(value) {
   return /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u.test(value);
 }
 
+// Let's Encrypt refuses an account email at the reserved example domains.
+function reservedExampleEmail(value) {
+  return /@(?:[^@]+\.)?example\.(?:com|net|org)$/iu.test(value);
+}
+
 function replaceEnvironmentValues(contents, updates) {
   const pending = new Map(Object.entries(updates));
   const lines = contents.split(/\r?\n/u).map((line) => {
@@ -243,7 +248,7 @@ function parseOptions(args, current = {}) {
     throw new Error('a public DNS name is required with --domain');
   }
   if (!validProductionEmail(options.acmeEmail)) throw new Error('a valid address is required with --acme-email');
-  if (/@(?:[^@]+\.)?example\.(?:com|net|org)$/iu.test(options.acmeEmail)) {
+  if (reservedExampleEmail(options.acmeEmail)) {
     throw new Error("--acme-email needs a real address: Let's Encrypt refuses example.com, example.net, and example.org");
   }
   if (!validProductionEmail(options.operatorEmail)) throw new Error('a valid address is required with --operator-email');
@@ -995,14 +1000,18 @@ function readableTree(directory) {
   fs.chmodSync(directory, 0o755);
 }
 
+// Outside Swarm, Compose bind-mounts a file secret and ignores its `mode`,
+// `uid`, and `gid`, with a warning each time it creates a container. The
+// container sees the host file's own mode, which setup writes and checks as 0444
+// (validateProductionArtifacts), so the secrets here carry no `mode`.
 function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetworks = []) {
   const enabled = new Set(profiles);
   const pinReleases = path.join(DATA_DIR, 'pin-releases');
   const traefik = [
     '  traefik:',
     '    secrets:',
-    '      - { source: traefik_static, target: /etc/traefik/traefik.yml, mode: 0444 }',
-    '      - { source: traefik_dynamic, target: /etc/traefik/dynamic/10-luma.yaml, mode: 0444 }',
+    '      - { source: traefik_static, target: /etc/traefik/traefik.yml }',
+    '      - { source: traefik_dynamic, target: /etc/traefik/dynamic/10-luma.yaml }',
   ];
   const secrets = [
     `  identity_realm: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'realm.json'))} }`,
@@ -1012,7 +1021,7 @@ function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetwork
   const networks = [];
   // Directory mode loads only .yaml, .yml, and .toml files. JSON is YAML.
   if (fs.lstatSync(TRAEFIK_EXTRA_FILE, { throwIfNoEntry: false })?.isFile()) {
-    traefik.push('      - { source: traefik_extra, target: /etc/traefik/dynamic/20-extra.yaml, mode: 0444 }');
+    traefik.push('      - { source: traefik_extra, target: /etc/traefik/dynamic/20-extra.yaml }');
     secrets.push(`  traefik_extra: { file: ${safeYaml(TRAEFIK_EXTRA_FILE)} }`);
   }
   if (fs.lstatSync(TRAEFIK_EXTRA_CERTS_DIR, { throwIfNoEntry: false })?.isDirectory()) {
@@ -1040,7 +1049,7 @@ function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetwork
         bind: { create_host_path: false }`,
     `  keycloak:
     secrets:
-      - { source: identity_realm, target: /opt/keycloak/data/import/realm.json, mode: 0444 }`,
+      - { source: identity_realm, target: /opt/keycloak/data/import/realm.json }`,
     traefik.join('\n'),
   ];
   const centerEnvironment = [];
@@ -1058,20 +1067,20 @@ function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetwork
       COSMOS_DEVICE_STATUS_CA_CERT: /etc/cosmos-attest/ca.crt
       COSMOS_ONBOARDING_ENDPOINT: \${COSMOS_ONBOARDING_ENDPOINT:?run luma setup production}
     secrets:
-      - { source: attestation_ca_cert, target: /etc/cosmos-attest/ca.crt, mode: 0444 }
-      - { source: attestation_ca_key, target: /etc/cosmos-attest/ca.key, mode: 0444 }
-      - { source: edge_ca_cert, target: /etc/cosmos-attest/root.crt, mode: 0444 }`,
+      - { source: attestation_ca_cert, target: /etc/cosmos-attest/ca.crt }
+      - { source: attestation_ca_key, target: /etc/cosmos-attest/ca.key }
+      - { source: edge_ca_cert, target: /etc/cosmos-attest/root.crt }`,
       `  provisioning:
     secrets:
-      - { source: duc_ca_cert, target: /etc/cosmos-duc/duc-ca.crt, mode: 0444 }
-      - { source: duc_ca_key, target: /etc/cosmos-duc/duc-ca.key, mode: 0444 }`,
+      - { source: duc_ca_cert, target: /etc/cosmos-duc/duc-ca.crt }
+      - { source: duc_ca_key, target: /etc/cosmos-duc/duc-ca.key }`,
       `  edge:
     secrets:
-      - { source: envoy_config, target: /etc/cosmos-edge/envoy.yaml, mode: 0444 }
-      - { source: edge_server_cert, target: /etc/cosmos-edge/certs/server.crt, mode: 0444 }
-      - { source: edge_server_key, target: /etc/cosmos-edge/certs/server.key, mode: 0444 }
-      - { source: duc_ca_cert, target: /etc/cosmos-edge/certs/api-client-ca.crt, mode: 0444 }
-      - { source: attestation_ca_cert, target: /etc/cosmos-edge/certs/onboarding-client-ca.crt, mode: 0444 }`,
+      - { source: envoy_config, target: /etc/cosmos-edge/envoy.yaml }
+      - { source: edge_server_cert, target: /etc/cosmos-edge/certs/server.crt }
+      - { source: edge_server_key, target: /etc/cosmos-edge/certs/server.key }
+      - { source: duc_ca_cert, target: /etc/cosmos-edge/certs/api-client-ca.crt }
+      - { source: attestation_ca_cert, target: /etc/cosmos-edge/certs/onboarding-client-ca.crt }`,
     );
     for (const [name, file] of [
       ['edge_ca_cert', EDGE_ROOT.certificate],
@@ -1100,27 +1109,27 @@ function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetwork
     services.push(
       `  center-iroh-bridge:
     secrets:
-      - { source: pin_bridge_control_token, target: /run/secrets/pin_bridge_control_token, mode: 0444 }`,
+      - { source: pin_bridge_control_token, target: /run/secrets/pin_bridge_control_token }`,
     );
     secrets.push(`  pin_bridge_control_token: { file: ${safeYaml(PIN_BRIDGE_TOKEN_FILE)} }`);
     centerEnvironment.push(
       '      LUMA_PIN_BRIDGE_URL: http://center-iroh-bridge:18080',
       '      LUMA_PIN_BRIDGE_TOKEN_FILE: /run/secrets/pin_bridge_control_token',
     );
-    centerSecrets.push('      - { source: pin_bridge_control_token, target: /run/secrets/pin_bridge_control_token, mode: 0444 }');
+    centerSecrets.push('      - { source: pin_bridge_control_token, target: /run/secrets/pin_bridge_control_token }');
   }
   if (enabled.has('spotify')) {
     services.push(
       `  spotify-adapter:
     secrets:
-      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token, mode: 0444 }`,
+      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token }`,
     );
     secrets.push(`  spotify_adapter_token: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'spotify-token'))} }`);
     centerEnvironment.push(
       '      LUMA_SPOTIFY_ADAPTER_URL: http://spotify-adapter:18081',
       '      LUMA_SPOTIFY_ADAPTER_TOKEN_FILE: /run/secrets/spotify_adapter_token',
     );
-    centerSecrets.push('      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token, mode: 0444 }');
+    centerSecrets.push('      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token }');
   }
   // The update status `./luma update production` writes for Center. The mount
   // never creates its source, so the directory is made here, before every
@@ -1143,14 +1152,14 @@ function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetwork
   if (enabled.has('search')) {
     services.push(`  searxng:
     secrets:
-      - { source: searxng_settings, target: /etc/searxng/settings.yml, mode: 0444 }`);
+      - { source: searxng_settings, target: /etc/searxng/settings.yml }`);
     secrets.push(`  searxng_settings: { file: ${safeYaml(path.join(PRODUCTION_DIR, 'searxng-settings.yml'))} }`);
   }
   if (enabled.has('observability')) {
     services.push(
       `  prometheus:
     secrets:
-      - { source: prometheus_config, target: /etc/prometheus/prometheus.yml, mode: 0444 }`,
+      - { source: prometheus_config, target: /etc/prometheus/prometheus.yml }`,
       `  grafana:
     volumes:
       - type: bind
@@ -1488,11 +1497,12 @@ function setupProduction(args, runtime = {}) {
 
   atomicWrite(path.join(PRODUCTION_DIR, 'postgres-init.sql'), 'CREATE DATABASE keycloak OWNER cosmos;\n', 0o444);
 
+  let pinTrustRootCreated = false;
   if (pin) {
     if (!regularFile(PIN_BRIDGE_TOKEN_FILE)) {
       atomicWrite(PIN_BRIDGE_TOKEN_FILE, `${crypto.randomBytes(32).toString('base64url')}\n`, 0o444);
     }
-    ensureProductionPki();
+    pinTrustRootCreated = ensureProductionPki().edgeCa.created;
     const releases = path.join(DATA_DIR, 'pin-releases');
     if (!fs.existsSync(releases)) {
       secureDirectory(releases);
@@ -1541,6 +1551,7 @@ function setupProduction(args, runtime = {}) {
     operatorCompose: OPERATOR_COMPOSE,
     credentials: regularFile(credentials, { mode: 0o600 }) ? credentials : null,
     pinTrustRoot: pin ? EDGE_ROOT.certificate : null,
+    pinTrustRootCreated,
   });
 }
 
@@ -1633,6 +1644,7 @@ module.exports = {
   setupProduction,
   TRAEFIK_EXTRA_FILE,
   validProductionDomain,
+  reservedExampleEmail,
   validProductionEmail,
   validateProductionArtifacts,
   validateTraefikExtra,
