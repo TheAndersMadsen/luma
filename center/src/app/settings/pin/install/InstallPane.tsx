@@ -30,6 +30,12 @@ const InstallView = dynamic(() => import("./InstallView"), {
   ),
 });
 
-export function InstallPane({ terminalHref }: { terminalHref: string | null }) {
-  return <InstallView terminalHref={terminalHref} />;
+export function InstallPane({
+  terminalHref,
+  postInstallLink,
+}: {
+  terminalHref: string | null;
+  postInstallLink: { readonly label: string; readonly href: string };
+}) {
+  return <InstallView terminalHref={terminalHref} postInstallLink={postInstallLink} />;
 }

@@ -18,6 +18,10 @@
  *  - `known-conflicts`, another Ai Pin project's packages are present, which
  *    forces the "remove first" choice rather than a plain continue.
  *  - `bootstrap-recovery`, the setup-helper flow will be re-run and app data wiped.
+ *  - `first-install`, the same setup-helper flow on a Pin with nothing of
+ *    Luma's on it (`inspectionIsFirstInstall`). It is the same operation and
+ *    the same `bootstrap-recovery` choice, worded as the install it is, since
+ *    there is no Luma app data to erase.
  *
  * The `effectiveDialog` memo is also load-bearing: a dialog whose action became
  * invisible or disabled while it was open (an inspection landed, the device
@@ -30,6 +34,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { AdbConnectionInfo } from "@/lib/pin-device/adb";
 import {
   formatDetectedPackageConflicts,
+  inspectionIsFirstInstall,
   inspectionRequiresBootstrapRecovery,
   type InstallControllerCommands,
   type InstallControllerState,
@@ -50,7 +55,8 @@ type ConfirmationRequirementKind =
   | "newer-than-target"
   | "known-conflicts"
   | "remove-conflicts"
-  | "bootstrap-recovery";
+  | "bootstrap-recovery"
+  | "first-install";
 
 export interface InstallConfirmationRequirement {
   readonly kind: ConfirmationRequirementKind;
@@ -194,6 +200,15 @@ function createBootstrapRecoveryRequirement(): InstallConfirmationRequirement {
   };
 }
 
+function createFirstInstallRequirement(): InstallConfirmationRequirement {
+  return {
+    kind: "first-install",
+    title: "What installing does",
+    description:
+      "Center installs Luma’s five apps and changes the Pin’s system software. It turns off Humane’s update and usage-reporting apps and makes Luma the home screen. Luma isn’t on this Pin yet, so there is no Luma data to erase.",
+  };
+}
+
 export function createDialogForAction(options: {
   action: PendingAction;
   state: InstallControllerState;
@@ -211,6 +226,9 @@ export function createDialogForAction(options: {
   const bootstrapRecovery =
     options.action === "primary" &&
     inspectionRequiresBootstrapRecovery(options.state.inspection);
+  // Same operation as a recovery; only the words differ.
+  const firstInstall =
+    bootstrapRecovery && inspectionIsFirstInstall(options.state.inspection);
 
   if (!options.riskAcknowledged) {
     requirements.push(createRiskRequirement());
@@ -239,7 +257,9 @@ export function createDialogForAction(options: {
     requirements.push(createKnownConflictsRequirement(options.state));
   }
 
-  if (bootstrapRecovery) {
+  if (firstInstall) {
+    requirements.push(createFirstInstallRequirement());
+  } else if (bootstrapRecovery) {
     requirements.push(createBootstrapRecoveryRequirement());
   }
 
@@ -256,7 +276,7 @@ export function createDialogForAction(options: {
         ? [
             {
               action: "fix-conflicts-and-bootstrap-recovery",
-              label: "Remove and recover",
+              label: firstInstall ? "Remove and install" : "Remove and recover",
               tone: "primary",
               recommended: true,
             },
@@ -276,7 +296,9 @@ export function createDialogForAction(options: {
   return {
     action: options.action,
     title:
-      bootstrapRecovery && options.action === "primary"
+      firstInstall
+        ? "Install Luma on this Pin?"
+        : bootstrapRecovery && options.action === "primary"
         ? "Recover this Pin?"
         : options.action === "uninstall"
           ? "Uninstall Luma?"
@@ -296,7 +318,9 @@ export function createDialogForAction(options: {
             ? "bootstrap-recovery"
             : options.action,
         label:
-          bootstrapRecovery && options.action === "primary"
+          firstInstall
+            ? "Install Luma"
+            : bootstrapRecovery && options.action === "primary"
             ? "Start recovery"
             : options.action === "primary"
               ? primaryActionLabel

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createInitialInstallControllerState,
   deriveInstallControllerCommands,
+  postInstallLinkFor,
   type InstallControllerState,
   type InstallInspectionResult,
   type ManagedPackageRole,
@@ -95,10 +96,10 @@ function connected(patch: Partial<InstallControllerState>): InstallControllerSta
   } as InstallControllerState;
 }
 
-function show(state: InstallControllerState) {
+function show(state: InstallControllerState, from: string | null = null) {
   const controller = {
     state,
-    commands: deriveInstallControllerCommands(state),
+    commands: deriveInstallControllerCommands(state, { postInstallLink: postInstallLinkFor(from) }),
     connectAndInspect: vi.fn(async () => undefined),
     recheck: vi.fn(async () => undefined),
     runInstallApkFile: vi.fn(async () => undefined),
@@ -194,5 +195,21 @@ describe("Software & updates as three steps", () => {
     expect(screen.getByRole("heading", { name: "Your Pin is up to date" })).toBeInTheDocument();
     expect(step(3)).toHaveAttribute("data-state", "done");
     expect(screen.getByRole("link", { name: "Open Pin settings" })).toBeInTheDocument();
+  });
+
+  it("returns to Guided setup after the install when the wearer came from it", () => {
+    const installed = inspection({ version: TARGET });
+    show(connected({
+      stage: "result",
+      inspection: installed,
+      lastOperationResult: {
+        kind: "install",
+        result: { success: true, warnings: [], inspection: installed, error: null, failedPhase: null, deviceChangesStarted: true },
+      } as InstallControllerState["lastOperationResult"],
+    }), "setup");
+
+    expect(screen.getByRole("heading", { name: "Your Pin is up to date" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Continue Guided setup" })).toHaveAttribute("href", "/settings/pin/setup");
+    expect(screen.queryByRole("link", { name: "Open Pin settings" })).not.toBeInTheDocument();
   });
 });

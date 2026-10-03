@@ -13,11 +13,15 @@
  * `currentSession()` reads cookies, which already opts this route out of static
  * rendering; `dynamic = "force-dynamic"` states it rather than relying on that
  * side effect.
+ *
+ * `?from=setup` (Guided setup's installer link) makes a successful install
+ * lead back to Guided setup instead of the Pin console.
  */
 
 import type { Metadata } from "next";
 import { OPERATOR_PIN_SHELL_PATH } from "@/server/auth";
 import { currentSession } from "@/server/operator";
+import { postInstallLinkFor } from "@/lib/pin-install/app/postInstallLink";
 import { InstallPane } from "./InstallPane";
 
 export const dynamic = "force-dynamic";
@@ -26,9 +30,14 @@ export const metadata: Metadata = {
   title: "Software & updates",
 };
 
-export default async function PinInstallPage() {
-  const session = await currentSession();
+export default async function PinInstallPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string | string[] }>;
+}) {
+  const [session, params] = await Promise.all([currentSession(), searchParams]);
   const terminalHref = session?.operator === true ? OPERATOR_PIN_SHELL_PATH : null;
+  const from = typeof params.from === "string" ? params.from : null;
 
-  return <InstallPane terminalHref={terminalHref} />;
+  return <InstallPane terminalHref={terminalHref} postInstallLink={postInstallLinkFor(from)} />;
 }

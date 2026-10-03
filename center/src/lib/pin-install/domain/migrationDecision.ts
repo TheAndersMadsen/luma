@@ -179,6 +179,24 @@ export function inspectionRequiresBootstrapRecovery(
 }
 
 /**
+ * The bootstrap path on a Pin that holds nothing of Luma's: no managed package
+ * and no Setup Helper. It runs the same operation as a recovery, but there is
+ * no Luma app data to erase, so the wearer is shown a first install rather than
+ * a recovery. Display only (INFERRED: Luma's own install copy); the decision
+ * above and its confirmation are unchanged.
+ */
+export function inspectionIsFirstInstall(
+  inspection: InstallInspectionResult | null,
+): boolean {
+  return (
+    inspection !== null &&
+    inspectionRequiresBootstrapRecovery(inspection) &&
+    !inspection.helperPresentUnexpectedly &&
+    Object.values(inspection.packages).every((pkg) => !pkg.installed)
+  );
+}
+
+/**
  * implemented: derive the only mutation path the installer may use for the
  * inspected device. Any state outside a verified release profile fails
  * closed.

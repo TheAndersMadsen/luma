@@ -20,6 +20,7 @@ import {
   type PinSetupPlan,
   type PinSetupStep,
 } from "@/lib/pin-setup";
+import { INSTALL_FROM_GUIDED_SETUP } from "@/lib/pin-install/app/postInstallLink";
 import { usePinDevice } from "../PinDeviceProvider";
 import { deviceErrorMessage } from "../_lib/deviceErrorPresentation";
 import { remoteLinkMessage } from "../_lib/remoteLinkCopy";
@@ -260,7 +261,7 @@ export default function SetupView({
           );
         }
         return (
-          <Link className={settings.additionLink} href="/settings/pin/install">
+          <Link className={settings.additionLink} href={`/settings/pin/install?from=${INSTALL_FROM_GUIDED_SETUP}`}>
             Open installer
           </Link>
         );

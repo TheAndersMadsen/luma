@@ -84,6 +84,8 @@ export interface UseInstallControllerOptions {
    * installer resets its own state while leaving the device attached.
    */
   readonly releaseDevice?: () => Promise<void>;
+  /** Where the primary action leads after a successful install. */
+  readonly postInstallLink?: { readonly label: string; readonly href: string };
 }
 
 /**
@@ -185,7 +187,7 @@ function createProgressDispatcher(options: {
 export function useInstallController(
   options: UseInstallControllerOptions,
 ): InstallController {
-  const { session, releaseDevice } = options;
+  const { session, releaseDevice, postInstallLink } = options;
   const sessionRef = useRef(session);
   const releaseDeviceRef = useRef(releaseDevice);
   const browserSupport = useMemo(() => getBrowserSupport(), []);
@@ -713,8 +715,8 @@ export function useInstallController(
   useBeforeUnload(state.stage === "operating");
 
   const commands = useMemo(
-    () => deriveInstallControllerCommands(state),
-    [state],
+    () => deriveInstallControllerCommands(state, { postInstallLink }),
+    [state, postInstallLink],
   );
 
   return {

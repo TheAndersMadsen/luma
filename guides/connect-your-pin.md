@@ -46,7 +46,7 @@ Installing Luma replaces what is on the Pin, and there is no button to go
 back. If the Pin runs PenumbraOS v0 (MABL), FusionOS, or OpenPin, the
 **Software & updates** page in Stage 3 lists those apps. When you choose
 **Install Luma**, Center asks **Remove conflicting apps first?** and offers
-**Remove and recover**. That button does three things, in this order:
+**Remove and install**. That button does three things, in this order:
 
 - It uninstalls every installed app that matches this list. Their app data
   goes with them.
@@ -223,15 +223,16 @@ A Pin that is already online goes straight to step 3.
 
 2. Choose **Install Luma VERSION** (VERSION is your server's release).
 
-   You see: a confirmation titled **Recover this Pin?**. Center treats a
-   first install as a recovery, because the Pin has no Luma installer yet.
-   The text names the release and your Pin's serial. Below it are two notes:
-   **This changes your Pin's system software** (a loose cable, or a Pin that
-   locks partway, may need a repair afterwards) and **Recovery erases Luma's
-   app data**. A new Pin has no Luma data to lose.
+   You see: a confirmation titled **Install Luma on this Pin?**. The text
+   names the release and your Pin's serial. Below it are two notes. **This
+   changes your Pin's system software** says a loose cable, or a Pin that
+   locks partway, may need a repair afterwards. **What installing does** says
+   Center installs Luma's five apps, turns off Humane's update and
+   usage-reporting apps, and makes Luma the home screen. Luma isn't on the
+   Pin yet, so there is no Luma data to erase.
 
 3. **Decision:** check that the serial in the confirmation is your Pin's. If
-   it is, choose **Start recovery**. If it is any other device, choose
+   it is, choose **Install Luma**. If it is any other device, choose
    **Cancel** and disconnect the other hardware.
 
    You see: a progress bar under titles such as **Downloading Luma** and
@@ -240,19 +241,24 @@ A Pin that is already online goes straight to step 3.
    reconnects to the same serial by itself. Never pick a different device to
    continue.
 
-4. Wait for **Your Pin is up to date**. Then choose **Open Guided setup** in
-   the **Guided setup** box lower on the page. The big **Open Pin settings**
-   button leads somewhere else.
+4. Wait for **Your Pin is up to date**. Then choose **Continue Guided
+   setup**.
 
    You see: stage 3 green.
 
 A Pin that already runs an older Luma shows **Update to VERSION** instead.
 
+A Pin with only some of Luma's apps, or a broken Luma installer, shows
+**Your Pin needs a repair** and a **Repair** button. Its confirmation is
+titled **Recover this Pin?**, with the note **Recovery erases Luma's app
+data** and the button **Start recovery**. Center removes what is left of
+Luma and installs it again.
+
 > **If stage 3 says known conflicting apps must be removed before
 > installing:** the Pin has apps from another Ai Pin project. Choose **Open
 > installer**, then **Install Luma VERSION**. Center asks **Remove
 > conflicting apps first?** and lists the apps under **Apps from another Ai
-> Pin project**. **Remove and recover** removes them, then installs. Back
+> Pin project**. **Remove and install** removes them, then installs. Back
 > them up before you choose it. See
 > [Coming from PenumbraOS or another Ai Pin project](#coming-from-penumbraos-or-another-ai-pin-project).
 >

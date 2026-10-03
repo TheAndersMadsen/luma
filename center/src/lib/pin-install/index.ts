@@ -45,6 +45,7 @@ export * from "./ops/uninstall";
 export * from "./ops/removeConflicts";
 
 export * from "./app/state";
+export * from "./app/postInstallLink";
 
 export * from "./presentation/managedPackages";
 export * from "./presentation/primaryCardViewModel";

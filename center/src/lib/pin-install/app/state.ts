@@ -10,6 +10,7 @@ import type { RemoveConflictsOperationResult } from "../ops/removeConflicts";
 import type { UninstallOperationResult } from "../ops/uninstall";
 import type { ResolvedInstallTarget } from "../releases/assets";
 import type { TargetLock } from "../releases/targetLock";
+import { DEFAULT_POST_INSTALL_LINK } from "./postInstallLink";
 
 export type InstallControllerStage =
   | "intro"
@@ -165,19 +166,6 @@ export type InstallControllerAction =
 export const PIN_LOCKED_COPY = "Your Pin is locked. Unlock it, then choose Check again.";
 export const PIN_UNLOCK_UNCONFIRMED_COPY =
   "Center couldn’t confirm that your Pin is unlocked. Unlock it, then choose Check again.";
-
-/**
- * Where a successful install hands the wearer off to.
- *
- * The SPA sent them to its own `/setup/` root. In Center the equivalent
- * destination is the Pin console, which is where every configuration pane
- * (server, LLM, services, eSIM, flags, diagnostics) now lives. Overridable so
- * the route layer can retarget it without editing this reducer.
- */
-export const DEFAULT_POST_INSTALL_LINK = Object.freeze({
-  label: "Open Pin settings",
-  href: "/settings/pin",
-});
 
 function createProgressEntry(event: OperationProgressEvent): InstallProgressEntry {
   const line = createDeviceLogLine(event.message);

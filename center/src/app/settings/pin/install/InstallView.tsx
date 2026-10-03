@@ -38,7 +38,10 @@ import { useInstallController } from "./useInstallController";
 
 export default function InstallView({
   terminalHref = null,
+  postInstallLink,
 }: {
+  /** Where a successful install leads: Guided setup when the wearer came from it. */
+  postInstallLink?: { readonly label: string; readonly href: string };
   /**
    * /admin/pin/terminal when the server confirmed an operator session, null
    * otherwise. Passed down rather than derived here: the operator claim is a
@@ -60,6 +63,7 @@ export default function InstallView({
   const controller = useInstallController({
     session,
     releaseDevice: disconnectPinAdbSession,
+    postInstallLink,
   });
 
   const confirmation = useInstallActionConfirmation({

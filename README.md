@@ -292,12 +292,16 @@ and **Check again** reads everything again.
   server's certificates look invalid, so Center checks the clock once the Pin
   is online. Without a cable, **Wi-Fi QR code** (`/wifi`) makes a code the Pin
   can scan.
-- **Install Luma.** On a new Pin the confirmation is titled **Recover this
-  Pin?** and its button is **Start recovery**, because the Pin has no Luma
-  installer yet. Center reconnects to the same serial after each restart.
-  Never pick a different device to continue. If your server has no Pin release
-  yet, this stage tells you to run `./luma pin release acquire --archive` with
-  the Pin archive from your release files.
+- **Install Luma.** On a new Pin the confirmation is titled **Install Luma on
+  this Pin?** and its button is **Install Luma**. If apps from another Ai Pin
+  project are present, the button is **Remove and install**. A Pin with only
+  part of Luma, or a broken Luma, gets **Recover this Pin?** instead, because
+  recovery erases Luma's app data. Center reconnects to the same serial after
+  each restart. Never pick a different device to continue. When the install
+  finishes, **Continue Guided setup** takes you back to the checklist. If
+  your server has no Pin release yet, this stage tells you to run
+  `./luma pin release acquire --archive` with the Pin archive from your
+  release files.
 - **Connect to your Luma.** Cosmos stores the passcode only as an OPAQUE
   password file and can't show it again, which is why stage 6 asks for it once
   more.
