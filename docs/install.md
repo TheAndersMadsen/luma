@@ -38,7 +38,7 @@ Ubuntu 22.04) are fine alternatives. Oracle's free tier works technically but
 its sign-up is unreliable; treat it as advanced. Luma's production stack runs
 15 containers with the default features (17 with every feature), including
 Keycloak and PostgreSQL, so give it 4 GB of
-RAM, 8 GB to be comfortable (INFERRED: the repository pins per-container
+RAM, 8 GB to be comfortable (an estimate: the repository sets per-container
 limits, not a host minimum). The Pin connects to the server's public IPv4
 directly, so an IPv6-only server, a home connection behind CGNAT, Cloudflare's
 proxy ("orange cloud"), Cloudflare Tunnel (no public gRPC), and Tailscale

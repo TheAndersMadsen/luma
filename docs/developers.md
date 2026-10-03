@@ -383,7 +383,7 @@ Luma includes a firmware-specific [rooting helper](../pin/ghostlock/README.md) f
 one exact retail Pin firmware (45.20, slots `_a` and `_b`). Every signed Luma Pin release
 contains the helper's native payload. The optional **Root access** device flag
 lets the Pin re-root itself after each reboot without a computer or ADB
-connection. This boot runner is Luma-owned behavior (INFERRED); the stock Shell
+connection. This boot runner is Luma-owned behavior; the stock Shell
 app supplies only the proven `BOOT_COMPLETED` process start.
 
 The flag is off by default. Connect the exact Pin, open **Center → Settings →

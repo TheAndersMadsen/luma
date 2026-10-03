@@ -39,11 +39,11 @@ No soldering. You need the USB interposer described in the
 activation happen over USB from Center.
 
 
-## AI-assisted setup
+## Can an AI coding assistant install it for me?
 
-The following prompt is intentionally outcome-based and gives Claude, Codex, or
-another coding agent the constraints it needs without prescribing every shell
-step. Copy the release folder to the server first, fill in the bracketed
+Yes. If you use Claude Code, Codex, or a similar tool, give it the prompt below.
+It states the result you want and the rules to follow, and leaves the commands
+to the tool. Copy the release folder to the server first, fill in the bracketed
 values, and run it there:
 
 <details>

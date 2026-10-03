@@ -1,8 +1,7 @@
 # Luma documentation
 
 Reference and design docs for Luma. The [main README](../README.md) is the
-overview and quick start; the [guides](../guides/) are step-by-step how-tos; and
-[llms.txt](../llms.txt) indexes everything for AI agents.
+overview and quick start, and the [guides](../guides/) are step-by-step how-tos.
 
 These docs are organized loosely by the [Diátaxis](https://diataxis.fr/) split:
 reference (what the system is), explanation (why it is that way), and how-to

@@ -67,7 +67,7 @@ Center without a connected Pin. Each row shows the source and target language;
 a request that names no source language is shown as **Auto-detected**, and a
 Pin request that sends an empty source as **unspecified language**. The row
 does not keep the original or translated text. Recording one-off translations is a Luma
-extension (INFERRED); stock recorded language pairs for live translation
+extension; stock recorded language pairs for live translation
 sessions. A failed translation or failed history save returns an error.
 
 Contacts created on the Pin, including by voice, are opened by Cosmos and kept
@@ -122,7 +122,7 @@ existing history. Unknown future preferences are read-only until supported.
 Location access is a Luma consent control, not an Android sensor switch. Local
 stock features, including fitness tracking, can still use the Pin's sensors.
 The last-location and diagnostic views, server-side location checks and shared
-photo metadata filtering are Luma extensions (INFERRED). The stock privacy
+photo metadata filtering are Luma extensions. The stock privacy
 wire keys and key-sharing rules are unchanged.
 
 **Settings → Passcode & password** sets the four digits a Pin asks for during its
@@ -168,13 +168,13 @@ transport, are not on the page; they follow the server's own settings.
 
 Tickle stays closed during Pin setup. Once setup finishes, open it normally.
 Luma discards launches blocked during setup instead of resuming them later
-(Luma safeguard; INFERRED).
+(a Luma safeguard).
 
 Fitness records stay on the Pin and can be reviewed in its device settings.
 Stock automatic fitness bug-report uploads are suppressed by Luma. Camera
 analysis removes image metadata before sending pixels to the configured
-provider; Vision rules do not enable unattended automation. These Luma
-extensions are INFERRED. Final speaker, gesture, paired-phone, eSIM and sensor
+provider; Vision rules do not enable unattended automation. These are Luma
+extensions. Final speaker, gesture, paired-phone, eSIM and sensor
 checks require the physical Pin.
 
 Center's Pin settings reach only what the Pin itself holds, such as fitness

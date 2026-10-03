@@ -179,7 +179,7 @@ signing key as the release it runs.
 
 Center saves your sign-in on this browser and renews it quietly when you return,
 including after closing the browser or restarting the server. This is Luma's
-own behavior (INFERRED): Keycloak keeps ordinary, revocable sessions for ten
+own behavior: Keycloak keeps ordinary, revocable sessions for ten
 years. Its normal session timeouts cannot be set to infinity. Center's encrypted,
 HTTP-only browser cookies last up to 400 days and renew on use; browsers may
 remove them sooner when you clear browsing data or use private browsing.

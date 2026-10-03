@@ -49,7 +49,7 @@ source text's case and punctuation. On the Pin, the assistant issues the stock
 `Translate` action; in Center, Cosmos performs the same translation directly.
 After a successful result, Cosmos saves one language-pair history entry for the
 wearer before returning success. This Center route and one-off history are
-Luma extensions (INFERRED); the stock live-translation history shape is kept.
+Luma extensions; the stock live-translation history shape is kept.
 
 The optional OS3 tool follows the same bounded run without turning Cosmos into
 a background worker. An unlocked wearer's explicit "ask OS3", "tell OS3", or
@@ -72,7 +72,7 @@ Exact owner-authored OS3 stop commands first yield only that account's current
 local OS3 wait, then resume its durable checkpoint to request the remote stop.
 Stopping speech or the Cosmos wait is separate from stopping Rabbit's accepted
 work; only a correlated canceled worker confirms the latter. These session
-and cancellation policies are Luma extensions (INFERRED). Both transports use
+and cancellation policies are Luma extensions. Both transports use
 the stock interstitial followed by one terminal `Respond` for Luma speech;
 the legacy client buffers final actions until RPC completion, so this is not
 streamed progress narration (`SynapseInterpreter.interpretLegacy`,

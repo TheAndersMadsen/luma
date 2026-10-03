@@ -154,7 +154,7 @@ A short reply to a new request may therefore take the full 60 seconds; checking
 saved work uses the shorter status window. If completion is still unconfirmed,
 Luma reads the actual reply,
 says so, and keeps the accepted request available for a later update.
-This waiting and retention policy is a Luma extension (INFERRED). A newly
+This waiting and retention policy is a Luma extension. A newly
 discovered worker with no verified link to the earlier task is not attributed
 to it.
 Task markers and worker updates may arrive before the question's echo. Luma
@@ -169,7 +169,7 @@ Luma conversation. Luma first ends your own local wait so the
 stop request can reach Rabbit promptly, including on the stock legacy
 transport. It keeps the accepted task's checkpoint and never resubmits it.
 An exact stop command uses the same ordinary text protocol; a dedicated remote
-cancel packet has not been verified (INFERRED). Rabbit interprets the request,
+cancel packet has not been verified. Rabbit interprets the request,
 so check OS3 if it has other work running. Luma says "OS3 stopped your task"
 only when the previously correlated workers report `canceled`; an
 acknowledgement is just "Stop requested" until confirmed. This check waits up
@@ -272,14 +272,14 @@ another OS3 account, the next question starts a fresh OS3 conversation.
 Center runs on Bun. YouTube player transformations run in a disposable process
 using QuickJS with a 32 MiB interpreter limit and a one-second process deadline.
 Only the player script and its small string inputs enter it; it receives no
-account credentials or host API objects. This is Luma-owned behavior (INFERRED).
+account credentials or host API objects. This is Luma-owned behavior.
 
 YouTube's content-proof interpreter runs in a separate process with a
 20-second deadline, including its public requests through the Pin. Cancellation
 terminates that process and frees the next request. It inherits no account
 credentials; its browser emulation uses JSDOM, which is not a security sandbox.
 The minter can be reused for up to five minutes, but each proof is bound to the
-requested video. These are Luma-owned limits (INFERRED).
+requested video. These are Luma-owned limits.
 
 Music playback needs the `spotify` optional feature. In **Settings → Music**,
 link your accounts and choose the provider the Pin plays from.
@@ -307,7 +307,7 @@ choice to it. A linked account alone does not switch playback.
   is unavailable with this sign-in flow; Luma reports the limitation rather than
   returning an empty library. Use search or a public playlist instead.
   Genre and featured requests browse a public playlist found by relevance;
-  they are Luma-owned mappings (INFERRED), not YouTube editorial rankings.
+  they are Luma-owned mappings, not YouTube editorial rankings.
   Queue tracks must have verified identity and duration between one second and
   30 minutes. A cancelled lookup never starts the next track or collection request.
   **Disconnect** appears once the account is connected; a pending sign-in that
@@ -347,7 +347,7 @@ Apple Music can be linked in Center: choose it in the provider list and press
 saved as the playback provider until Apple's official Android playback runtime
 is available; previews and web players are not used as a fallback.
 
-YouTube ad filtering is always enabled in Luma's gateway (INFERRED). It removes
+YouTube ad filtering is always enabled in Luma's gateway. It removes
 `playerAds`, `adPlacements`, `adSlots`, and `adBreakHeartbeatParams` from JSON
 responses, blocks advertising hosts, and refuses redirects. Center selects only
 playable, non-DRM audio belonging to the requested video; the Pin receives that
@@ -368,7 +368,7 @@ the owner signs in and performs this listening check.
 The latest YouTube Music or TIDAL playback ticket remains usable after a long
 pause while Device Services keeps running, until another track is issued or
 the Pin's playback provider is changed. Older tickets expire after 45 minutes,
-and at most eight are retained. This Luma-owned lifetime policy (INFERRED)
+and at most eight are retained. This Luma-owned lifetime policy
 lets the stock player resume its saved URI without requiring a new voice request;
 it does not preserve playback through a runtime restart.
 
@@ -377,7 +377,7 @@ request body, for Spotify and the other providers. Spotify searches pass that
 cancellation through Pin ownership checks and the adapter. Native catalog
 queries on the Pin have a 20-second total budget; each Spotify Web API request
 has a 15-second deadline and a 2 MiB JSON limit. These Luma-owned limits
-(INFERRED) bound foreground queries, including pagination and retries. Spotify's
+bound foreground queries, including pagination and retries. Spotify's
 session recovery keeps its own lifecycle and can finish after a query expires.
 
 Center's Spotify controls share one adapter deadline across ownership checks,
