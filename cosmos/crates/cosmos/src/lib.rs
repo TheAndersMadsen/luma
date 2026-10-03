@@ -17,6 +17,7 @@ mod http;
 pub mod integrations;
 pub mod keydirectory;
 pub mod keymaterial;
+pub mod mcp;
 pub mod metrics;
 mod music_api;
 mod notable_api;

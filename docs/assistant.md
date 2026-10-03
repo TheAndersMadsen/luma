@@ -93,6 +93,33 @@ not stop work Rabbit has already accepted. Only a correlated canceled worker
 confirms that Rabbit stopped. These session and cancellation policies are Luma
 extensions.
 
+## MCP servers
+
+MCP servers are an optional Luma extension, like OS3. The owner adds a server
+by name and URL, and the assistant is offered that server's tools beside its
+own while the server is switched on. A switch takes effect on the next request.
+
+- **One transport.** Cosmos speaks Streamable HTTP to remote and local servers
+  alike and never launches a program. A stdio-only server runs behind an HTTP
+  bridge next to Cosmos.
+- **Discovery happens when the owner saves, tests or enables a server.** The
+  listed tools are stored, so a turn never waits on discovery.
+- **Read-only by default.** A tool is offered only when its server marks it
+  `readOnlyHint`, unless the owner allows actions for that server. Luma's
+  spoken confirmation covers a fixed list of its own actions and does not reach
+  MCP tools.
+- **Bounded like every server tool.** A call runs inside the turn's deadline
+  and at most 15 seconds. Its result is cut to a spoken-answer size and reaches
+  the model as untrusted data.
+- **A locked Pin is offered none of them.**
+- **By voice.** While at least one server is set up, the assistant has a
+  built-in `manage_tool_servers` tool that lists the servers and switches one on
+  or off by name ("turn on the home tools").
+
+Tools are named `mcp_<server>_<tool>`. At most 40 are offered at once.
+Settings live in `mcp.json` in the Cosmos state directory, separate from the
+provider settings, so a release without this feature still starts.
+
 Both transports use the stock interstitial followed by one terminal `Respond`
 for Luma speech. The legacy client buffers final actions until the RPC
 completes, so this is not streamed progress narration

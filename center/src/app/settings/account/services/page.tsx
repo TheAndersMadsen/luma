@@ -1,4 +1,5 @@
 import { CosmosServicesCard } from "./CosmosServicesCard";
+import { McpServersCard } from "./McpServersCard";
 import { GuidedSetupReturn } from "@/components/GuidedSetupReturn";
 import { currentSession } from "@/server/operator";
 
@@ -9,6 +10,7 @@ export default async function ServicesPage() {
   return (
     <>
       <CosmosServicesCard operator={session?.operator === true} />
+      <McpServersCard operator={session?.operator === true} />
       <GuidedSetupReturn />
     </>
   );

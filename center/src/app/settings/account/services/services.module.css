@@ -535,3 +535,22 @@
   .integrationGroup > summary::after { grid-column: 2; grid-row: 1 / 3; align-self: center; }
   .integrationGroup > summary .integrationIntroActions { justify-content: flex-start; }
 }
+
+/* Tool servers: what each MCP server listed. */
+.mcpTools {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--luma-space-4, 16px) var(--luma-space-2, 8px);
+  display: grid;
+  gap: 6px;
+}
+.mcpTools > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mcpTools > li > span:first-child { min-width: 0; }
+.mcpTools strong { display: block; font-weight: 500; overflow-wrap: anywhere; }
+.mcpTools small { display: block; opacity: 0.7; overflow-wrap: anywhere; }
+.mcpTools > li[data-offered="false"] strong { opacity: 0.6; }

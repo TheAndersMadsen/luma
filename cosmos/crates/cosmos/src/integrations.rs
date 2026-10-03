@@ -791,7 +791,7 @@ fn validate_url(value: &str, message: &'static str) -> Result<(), IntegrationErr
 }
 
 /// Replace `path` atomically with an owner-only file holding `bytes`.
-fn write_owner_only(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_owner_only(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().expect("state file has a parent");
     fs::create_dir_all(parent)?;
     let temporary = path.with_extension("json.new");
