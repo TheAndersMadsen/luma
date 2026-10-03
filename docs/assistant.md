@@ -41,7 +41,8 @@ Tool results, saved wearer facts, and authenticated device context reach the
 model as typed, untrusted data, not as system instructions. Missing data
 produces one short clarifying question. Consequential actions such as placing a
 call need an exact, scoped confirmation, and changing the action or its
-arguments voids that confirmation. Reversible playback and volume controls do
+arguments voids that confirmation. The action tools of an MCP server need the
+same confirmation (see MCP servers). Reversible playback and volume controls do
 not get the extra confirmation step.
 
 ## Location and diagnostics
@@ -115,9 +116,24 @@ retyping one keeps it.
 - **Discovery happens when the owner saves, tests or enables a server.** The
   listed tools are stored, so a turn never waits on discovery.
 - **Read-only by default.** A tool is offered only when its server marks it
-  `readOnlyHint`, unless the owner allows actions for that server. Luma's
-  spoken confirmation covers a fixed list of its own actions and does not reach
-  MCP tools.
+  `readOnlyHint`, unless the owner allows actions for that server.
+- **Asks before an action.** A tool its server does not mark `readOnlyHint`
+  runs only after the wearer confirms that exact call. The assistant asks one
+  question that names the tool, the server and every argument, for example
+  `Run add on Bookmarks, with title "Example", url "https://example.com"?`,
+  and runs the call when the next reply is "yes", "yes please", "confirm" or
+  "confirmed" and the model then makes the same call. Another tool, a changed
+  argument, any other reply, or another request in between voids it, and the
+  lock, switch and action gates are checked again when the call runs. Only the
+  wearer's own reply counts: tool output and other retrieved text cannot
+  confirm anything. A call that cannot be read out exactly is not run, and the
+  assistant says so: the question would be longer than 200 characters, or it
+  contains markup that speech would drop, or an argument name is not a plain
+  word. An action called beside other tools in one step is held back until it
+  is called on its own. The owner can turn off Ask before actions for a
+  server, and its actions then run at once. Read-only tools and
+  `manage_tool_servers` never ask. A server saved before this switch existed
+  asks.
 - **One switch per tool.** Each listed tool has its own switch in Center. A
   tool the owner switches off is never offered, whatever its server allows,
   and a call to it is refused. Fewer offered tools also make the model quicker

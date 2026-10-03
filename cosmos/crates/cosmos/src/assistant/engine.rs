@@ -1157,6 +1157,21 @@ impl Engine {
                     return;
                 }
 
+                // An MCP action tool runs only for the exact call the wearer
+                // just confirmed. Any other call to one is asked about and ends
+                // the run, like a device action that needs confirming, before
+                // any action node goes out. Every other server tool passes.
+                if let Some(question) =
+                    super::policy::confirmation_question(&req, &tc.name, &tc.arguments)
+                {
+                    run.note_tool_call(&tc.name);
+                    let id = new_id();
+                    finish(&tx, respond(&question, parent, id)).await;
+                    run.finish_recorded("confirmation_required", &self.tools)
+                        .await;
+                    return;
+                }
+
                 // SERVER TOOL, single or batched. Both paths run a backend and
                 // then loop, so both are bounded by the run budget from here on:
                 // if there is not enough left to run one AND still speak, close
@@ -1226,6 +1241,19 @@ impl Engine {
                             || super::policy::keyguard_refusal(request_locked, &extra.name)
                                 .is_some()
                         {
+                            continue;
+                        }
+                        // An action the wearer has not confirmed never rides
+                        // along beside another call. The model is told, so it
+                        // neither answers as if it ran nor loses the request.
+                        if super::policy::confirmation_question(&req, &extra.name, &extra.arguments)
+                            .is_some()
+                        {
+                            messages.push(ChatMessage::tool_result(
+                                &extra.name,
+                                &extra.arguments,
+                                super::policy::CONFIRM_ON_ITS_OWN,
+                            ));
                             continue;
                         }
                         let key = server_tool_call_key(extra, &tool_context);

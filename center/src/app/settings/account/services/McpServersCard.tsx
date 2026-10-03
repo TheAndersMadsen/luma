@@ -36,6 +36,8 @@ type McpServer = {
   allow_when_locked: boolean;
   /** Every tool name you switched off, including ones the server no longer lists. */
   disabled_tools: string[];
+  /** Action tools run without a spoken confirmation. False asks first. */
+  actions_without_asking: boolean;
   status: McpStatus;
   checked_at_ms: number | null;
   tools: McpTool[];
@@ -115,6 +117,8 @@ function parseView(value: unknown): McpView | null {
       allow_actions: server.allow_actions,
       allow_when_locked: server.allow_when_locked,
       disabled_tools: server.disabled_tools as string[],
+      // Anything but an explicit true asks, as Cosmos does.
+      actions_without_asking: server.actions_without_asking === true,
       status: server.status as McpStatus,
       checked_at_ms: typeof server.checked_at_ms === "number" ? server.checked_at_ms : null,
       tools,
@@ -399,8 +403,8 @@ export function McpServersCard({ operator }: { operator: boolean }) {
           Say &ldquo;turn off the &hellip; tools&rdquo; to switch a server by voice.
         </span>
         <span>
-          Only tools a server marks read-only are offered, unless you allow actions for that server. Your Pin does
-          not ask before an action tool runs.
+          Only tools a server marks read-only are offered, unless you allow actions for that server. Your Pin asks
+          you to confirm each action before it runs, unless you turn off Ask before actions for that server.
         </span>
         <span>
           Each tool has its own switch. Switch off the ones you do not use: with fewer tools the assistant answers
@@ -441,7 +445,7 @@ export function McpServersCard({ operator }: { operator: boolean }) {
               <div className={styles.settingRow}>
                 <span>
                   <strong>Allow actions</strong>
-                  <small>Also offers tools the server does not mark read-only. They run without asking you first.</small>
+                  <small>Also offers tools the server does not mark read-only.</small>
                 </span>
                 <Switch
                   checked={server.allow_actions}
@@ -451,6 +455,23 @@ export function McpServersCard({ operator }: { operator: boolean }) {
                       `actions-${server.id}`,
                       { id: server.id, allow_actions },
                       allow_actions ? `Action tools are allowed for ${server.name}.` : `Only read-only tools are offered for ${server.name}.`,
+                    )
+                  }
+                />
+              </div>
+              <div className={styles.settingRow}>
+                <span>
+                  <strong>Ask before actions</strong>
+                  <small>Your Pin reads out each action and runs it only when you answer yes. Turn off to let this server&rsquo;s actions run without asking.</small>
+                </span>
+                <Switch
+                  checked={!server.actions_without_asking}
+                  ariaLabel={`Ask before ${server.name} runs an action`}
+                  onChange={(ask) =>
+                    void save(
+                      `asking-${server.id}`,
+                      { id: server.id, actions_without_asking: !ask },
+                      ask ? `Your Pin asks before ${server.name} runs an action.` : `${server.name} runs actions without asking.`,
                     )
                   }
                 />
