@@ -1167,6 +1167,19 @@ impl BidiSession {
                 continue;
             }
 
+            // An MCP action tool runs only for the exact call the wearer just
+            // confirmed. Any other call to one is asked about and ends the run,
+            // like a device action that needs confirming, before any action
+            // event goes out. Every other server tool passes.
+            if let Some(question) =
+                super::policy::confirmation_question(&req, &tc.name, &tc.arguments)
+            {
+                let flow = self.finish(parent, &question).await;
+                run.finish_recorded("confirmation_required", &self.tools)
+                    .await;
+                return flow;
+            }
+
             // SERVER TOOLS. A same-step batch represents independent work, so
             // execute it concurrently and publish observations in stable request
             // order. The Pin counts emitted actions rather than model rounds;
@@ -1206,6 +1219,15 @@ impl BidiSession {
                         || !tools.iter().any(|tool| tool.name == extra.name)
                         || super::policy::keyguard_refusal(request_locked, &extra.name).is_some()
                     {
+                        continue;
+                    }
+                    // An action the wearer has not confirmed never rides along
+                    // beside another call. The model is told, so it neither
+                    // answers as if it ran nor loses the request.
+                    if super::policy::confirmation_question(&req, &extra.name, &extra.arguments)
+                        .is_some()
+                    {
+                        messages.push(tool_result(extra, super::policy::CONFIRM_ON_ITS_OWN));
                         continue;
                     }
                     let key = super::engine::server_tool_call_key(extra, &tool_context);

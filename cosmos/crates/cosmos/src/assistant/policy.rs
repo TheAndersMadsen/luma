@@ -2,8 +2,9 @@
 //!
 //! Prompt text guides model behavior. It cannot be the authorization boundary.
 //! This module independently checks the small set of consequential actions the
-//! public catalog still exposes. Confirmation is scoped to the exact generated
-//! question, so changing the recipient or operation expires it automatically.
+//! public catalog still exposes, and the action tools of the owner's MCP
+//! servers. Confirmation is scoped to the exact generated question, so changing
+//! the recipient or operation expires it automatically.
 
 use std::collections::HashMap;
 
@@ -45,14 +46,44 @@ const CONFIRMATION_REQUIRED: &[&str] = &[
     "TurnOnCellularRoaming",
 ];
 
+/// The longest question about an MCP call that is still read out. A longer one
+/// is not a short spoken question any more.
+const MAX_MCP_QUESTION_CHARS: usize = 200;
+
+/// What the model reads when it called an action that needs the wearer's
+/// confirmation beside other calls in one step. The action is not run there:
+/// a question ends the run, and its companions would be lost.
+pub const CONFIRM_ON_ITS_OWN: &str = "Not run: this action needs the wearer's confirmation first. \
+     Call it on its own, with no other tool, and Cosmos will ask the wearer.";
+
+/// What a device function call for an MCP action tool answers. It carries no
+/// conversation, so there is no reply of the wearer's that could confirm it.
+pub const CONFIRMATION_NEEDS_A_CONVERSATION: &str =
+    "That needs your confirmation. Ask your assistant for it by voice.";
+
 /// Return a question when this exact action has not already received a strict,
 /// immediately preceding confirmation from the wearer.
+///
+/// The only inputs are the wearer's own live utterance and the question that
+/// ended the preceding run. Tool output, retrieved text and saved notes are
+/// never read here, so none of them can confirm an action.
 pub fn confirmation_question(
     request: &pb::SynapseUnderstandingRequest,
     action: &str,
     input: &str,
 ) -> Option<String> {
-    let question = question_for(action, input)?;
+    let question = if crate::mcp::is_tool_name(action) {
+        // INFERRED: an MCP tool its server does not mark read-only changes
+        // something the owner connected, so it asks like Luma's own
+        // consequential actions unless the owner turned asking off.
+        match mcp_question(&crate::mcp::asks_first(action)?, input) {
+            Ok(question) => question,
+            // Never read out, so no reply of the wearer's can confirm it.
+            Err(not_run) => return Some(not_run),
+        }
+    } else {
+        question_for(action, input)?
+    };
     if strict_assent(super::engine::current_utterance(request))
         && preceding_run_respond(request.device_context.as_ref()).as_deref()
             == Some(question.as_str())
@@ -94,6 +125,59 @@ fn question_for(action: &str, input: &str) -> Option<String> {
         _ => return None,
     };
     Some(question)
+}
+
+/// The question for one call to an MCP action tool: the tool, its server, and
+/// every argument in full.
+///
+/// A confirmation is scoped to the exact question, so the question has to say
+/// the whole call. Each argument is its name and its JSON value, in name
+/// order, which reads back to one set of arguments only. `Err` is the
+/// statement spoken instead when the call cannot be put that way: it is too
+/// long to say, an argument name is not a plain word, or speech clean-up
+/// (`catalog::speakable`) would change the text, so the wearer would hear
+/// something other than what is compared. Such a call is not run.
+fn mcp_question(tool: &crate::mcp::OfferedTool, input: &str) -> Result<String, String> {
+    let action = format!(
+        "{} on {}",
+        tool.tool_name.replace('_', " "),
+        tool.server_name
+    );
+    // What `McpStore::call` sends: an object, or no arguments at all.
+    let arguments = match serde_json::from_str::<Value>(input) {
+        Ok(Value::Object(arguments)) => arguments,
+        _ => serde_json::Map::new(),
+    };
+    let mut named: Vec<(&String, &Value)> = arguments.iter().collect();
+    named.sort_by_key(|(name, _)| *name);
+    let plain_names = named.iter().all(|(name, _)| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    });
+    let question = if named.is_empty() {
+        format!("Run {action}?")
+    } else {
+        let details: Vec<String> = named
+            .iter()
+            .map(|(name, value)| format!("{name} {value}"))
+            .collect();
+        format!("Run {action}, with {}?", details.join(", "))
+    };
+    if plain_names
+        && question.chars().count() <= MAX_MCP_QUESTION_CHARS
+        && super::catalog::speakable(&question) == question
+    {
+        Ok(question)
+    } else {
+        Err(format!(
+            "Running {action} needs your confirmation, and this request is too long or too \
+             unusual to read out exactly, so I did not run it. In Center, {} can be allowed \
+             to act without asking.",
+            tool.server_name
+        ))
+    }
 }
 
 fn first_text(value: &Value) -> Option<&str> {

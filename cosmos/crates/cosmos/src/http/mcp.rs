@@ -24,6 +24,9 @@ struct McpServerView {
     enabled: bool,
     allow_actions: bool,
     allow_when_locked: bool,
+    /// Whether this server's action tools run without the wearer's spoken
+    /// confirmation. False asks first.
+    actions_without_asking: bool,
     /// What the last contact showed: `untested`, `connected`, `unauthorized`,
     /// `unreachable`, `timed_out` or `invalid_response`.
     status: McpState,
@@ -77,6 +80,7 @@ fn mcp_view(store: &crate::mcp::McpStore) -> McpView {
                     enabled: server.enabled,
                     allow_actions: server.allow_actions,
                     allow_when_locked: server.allow_when_locked,
+                    actions_without_asking: server.actions_without_asking,
                 }
             })
             .collect(),

@@ -20,8 +20,9 @@
 //!   bridge beside Cosmos.
 //! * **Offered tools** are named `mcp_<server>_<tool>`. A server's tool is
 //!   offered only when it declares `readOnlyHint`, unless the owner allowed
-//!   actions for that server. Luma's spoken confirmation covers a fixed list of
-//!   its own actions and does not reach these tools.
+//!   actions for that server. A tool that does not declare it runs only after
+//!   the wearer confirms that exact call by voice (`assistant::policy`), unless
+//!   the owner turned asking off for that server.
 //! * **A locked Pin is offered none of them** (`catalog::withheld_on_keyguard`),
 //!   unless the owner allowed a server while locked. A Pin is locked whenever
 //!   it is off the body, on its charger for one, so a server the owner wants
@@ -120,6 +121,10 @@ pub const MANAGE_TOOL: &str = "manage_tool_servers";
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
+/// Appended to the description of a tool the wearer must confirm. Guidance
+/// for the model only: `assistant::policy` decides whether the call runs.
+const ASKS_FIRST_NOTE: &str = " Cosmos asks the wearer to confirm this call before it runs. \
+     When the wearer then says yes, make the same call again with the same arguments.";
 /// Left for the model to turn the result into a spoken answer.
 const CALL_RESERVE: Duration = Duration::from_secs(2);
 const MIN_CALL_TIME: Duration = Duration::from_secs(1);
@@ -145,6 +150,9 @@ pub struct McpServer {
     pub allow_actions: bool,
     /// Offer this server's tools while the Pin is locked. Off by default.
     pub allow_when_locked: bool,
+    /// Run this server's action tools without the wearer's spoken
+    /// confirmation. Off by default: the assistant asks first.
+    pub actions_without_asking: bool,
 }
 
 /// One request header for a server. The value is a credential.
@@ -173,6 +181,7 @@ impl std::fmt::Debug for McpServer {
             .field("enabled", &self.enabled)
             .field("allow_actions", &self.allow_actions)
             .field("allow_when_locked", &self.allow_when_locked)
+            .field("actions_without_asking", &self.actions_without_asking)
             .field("headers", &self.headers)
             .finish()
     }
@@ -208,6 +217,7 @@ pub struct McpServerInput {
     pub enabled: Option<bool>,
     pub allow_actions: Option<bool>,
     pub allow_when_locked: Option<bool>,
+    pub actions_without_asking: Option<bool>,
 }
 
 /// One header as the owner sends it.
@@ -355,6 +365,12 @@ pub struct OfferedTool {
     pub parameters: Value,
     /// Whether the owner lets a locked Pin use this tool's server.
     pub allow_when_locked: bool,
+    /// The server's name, as the owner wrote it.
+    pub server_name: String,
+    /// Whether the wearer must confirm a call before it runs: the server does
+    /// not mark the tool read-only, and the owner has not turned asking off
+    /// for that server.
+    pub asks_first: bool,
 }
 
 /// What one assistant-side call produced: the observation the model reads and
@@ -496,6 +512,9 @@ impl McpStore {
                 if let Some(allow) = input.allow_when_locked {
                     server.allow_when_locked = allow;
                 }
+                if let Some(without_asking) = input.actions_without_asking {
+                    server.actions_without_asking = without_asking;
+                }
                 server.clone()
             }
             None => {
@@ -514,6 +533,7 @@ impl McpStore {
                     enabled: input.enabled.unwrap_or(true),
                     allow_actions: input.allow_actions.unwrap_or(false),
                     allow_when_locked: input.allow_when_locked.unwrap_or(false),
+                    actions_without_asking: input.actions_without_asking.unwrap_or(false),
                 };
                 next.servers.push(server.clone());
                 server
@@ -653,13 +673,20 @@ impl McpStore {
                 if !names.insert(model_name.clone()) {
                     continue;
                 }
+                let asks_first = !tool.read_only && !server.actions_without_asking;
+                let mut description = describe(&server.name, &tool.description);
+                if asks_first {
+                    description.push_str(ASKS_FIRST_NOTE);
+                }
                 offered.push(OfferedTool {
                     model_name,
                     server_id: server.id.clone(),
                     tool_name: tool.name.clone(),
-                    description: describe(&server.name, &tool.description),
+                    description,
                     parameters: parameters(&tool.input_schema),
                     allow_when_locked: server.allow_when_locked,
+                    server_name: server.name.clone(),
+                    asks_first,
                 });
             }
         }
@@ -968,7 +995,20 @@ impl McpStore {
 
 static ACTIVE: OnceLock<Arc<McpStore>> = OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own store, used in place of the process-wide one on the
+    /// test's thread, so a test can drive the assistant against its own
+    /// servers without any other test seeing them.
+    static ACTIVE_FOR_TEST: std::cell::RefCell<Option<Arc<McpStore>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 pub fn active() -> Arc<McpStore> {
+    #[cfg(test)]
+    if let Some(store) = ACTIVE_FOR_TEST.with(|active| active.borrow().clone()) {
+        return store;
+    }
     ACTIVE
         .get_or_init(|| McpStore::load(std::env::var("COSMOS_STATE_DIR").ok().as_deref()))
         .clone()
@@ -987,6 +1027,16 @@ pub fn allowed_when_locked(name: &str) -> bool {
         .offered()
         .iter()
         .any(|tool| tool.model_name == name && tool.allow_when_locked)
+}
+
+/// The offered MCP tool `name`, when the wearer must confirm a call to it
+/// before it runs. A tool that is not offered now has nothing to confirm:
+/// `McpStore::call` refuses it.
+pub fn asks_first(name: &str) -> Option<OfferedTool> {
+    active()
+        .offered()
+        .into_iter()
+        .find(|tool| tool.model_name == name && tool.asks_first)
 }
 
 /// Whether `name` is the model-facing name of an MCP tool. A name test, not an
@@ -1531,6 +1581,10 @@ fn response_for(message: &Value, expect: u64) -> Option<Result<Value, McpCallErr
 }
 
 #[cfg(test)]
+#[path = "mcp_confirm_tests.rs"]
+mod confirm_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1544,6 +1598,7 @@ mod tests {
             enabled,
             allow_actions,
             allow_when_locked: false,
+            actions_without_asking: false,
         }
     }
 
