@@ -34,6 +34,10 @@ import { McpServersCard } from "./McpServersCard";
  * 13. Sign in is offered for a server that uses a typed Authorization header,
  *     is missing for one that asks for a sign-in, or sends the browser to an
  *     address that is not a web page.
+ * 14. Adding a server the owner signs in to sends a header they typed before
+ *     choosing sign-in, starts the sign-in on another server, starts one for
+ *     a server that did not ask, or loses the added server when the sign-in
+ *     cannot start.
  *
  * Controls are found by role and name, never by position, so a new control on
  * a server does not move them.
@@ -471,6 +475,77 @@ describe("McpServersCard", () => {
     await user.click(within(group).getByRole("button", { name: "Sign in to Hosted" }));
 
     expect(await screen.findByText("That server does not offer a sign-in.")).toBeInTheDocument();
+  });
+
+  it("adds a server the owner signs in to with no headers, then starts that server's sign-in", async () => {
+    const hosted = server({ id: "hosted", name: "Hosted", url: "https://hosted.example.test/mcp", headers: [], status: "sign_in_required", tools: [] });
+    const sent = center([server()], (request) =>
+      request.url === "/api/admin/mcp"
+        ? Response.json({ servers: [server(), hosted] })
+        : Response.json({ error: "That server does not offer a sign-in." }, { status: 400 }),
+    );
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const add = await open(user, "Add a tool server");
+    await user.type(within(add).getByRole("textbox", { name: /^Name/ }), "Hosted");
+    await user.type(within(add).getByRole("textbox", { name: /^Server URL/ }), "https://hosted.example.test/mcp");
+    // A value typed before choosing sign-in is not sent.
+    await user.type(within(add).getByLabelText("Value for Authorization"), "Bearer left-over");
+    await user.click(within(add).getByRole("radio", { name: "Sign in with the provider (OAuth)" }));
+    expect(within(add).queryByLabelText("Value for Authorization")).not.toBeInTheDocument();
+    await user.click(within(add).getByRole("button", { name: "Add and sign in" }));
+
+    expect(
+      await screen.findByText("Hosted was added, but its sign-in did not start. That server does not offer a sign-in."),
+    ).toBeInTheDocument();
+    expect(sent).toStrictEqual([
+      saveOf({ name: "Hosted", url: "https://hosted.example.test/mcp", headers: [] }),
+      { url: "/api/admin/mcp/hosted/oauth", method: "POST", body: undefined },
+    ]);
+    // The server is kept, with Sign in to try again.
+    expect(within(screen.getByRole("group", { name: "Hosted" })).getByRole("button", { name: "Sign in to Hosted" })).toBeInTheDocument();
+  });
+
+  it("starts no sign-in for an added server that did not ask for one", async () => {
+    const open_ = server({ id: "open", name: "Open", headers: [], status: "connected" });
+    const sent = center([], () => Response.json({ servers: [open_] }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const add = await screen.findByRole("group", { name: "Add a tool server" });
+    await user.type(within(add).getByRole("textbox", { name: /^Name/ }), "Open");
+    await user.type(within(add).getByRole("textbox", { name: /^Server URL/ }), "https://open.example.test/mcp");
+    await user.click(within(add).getByRole("radio", { name: "Sign in with the provider (OAuth)" }));
+    await user.click(within(add).getByRole("button", { name: "Add and sign in" }));
+
+    expect(await screen.findByText("Open was added. It did not ask for a sign-in.")).toBeInTheDocument();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("says why when an added server could not be asked for its sign-in", async () => {
+    const down = server({ id: "down", name: "Down", headers: [], status: "unreachable", tools: [] });
+    const sent = center([], () => Response.json({ servers: [down] }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const add = await screen.findByRole("group", { name: "Add a tool server" });
+    await user.type(within(add).getByRole("textbox", { name: /^Name/ }), "Down");
+    await user.type(within(add).getByRole("textbox", { name: /^Server URL/ }), "https://down.example.test/mcp");
+    await user.click(within(add).getByRole("radio", { name: "Sign in with the provider (OAuth)" }));
+    await user.click(within(add).getByRole("button", { name: "Add and sign in" }));
+
+    expect(await screen.findByText(/Down was added, but it did not ask for a sign-in\..*could not be reached/)).toBeInTheDocument();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("does not offer the sign-in choice when editing a saved server", async () => {
+    center([server()]);
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const home = await openEdit(user, "Home");
+    expect(within(home).queryByRole("radio")).not.toBeInTheDocument();
   });
 
   it("signs out of the server the owner chose and shows Cosmos's answer", async () => {

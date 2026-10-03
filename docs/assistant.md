@@ -150,6 +150,8 @@ retyping one keeps it.
   or off by name ("turn on the home tools").
 - **Sign-in instead of a header.** A server that asks for an OAuth sign-in
   (the MCP authorization flow, revision 2025-06-18) shows Sign in on its card.
+  When adding a server, choose "Sign in with the provider" to save it without
+  headers and go straight to its sign-in.
   Cosmos finds where the server signs in, registers itself there, and sends
   your browser to the provider; when you come back it keeps the tokens in
   `mcp-oauth.json` beside `mcp.json` and renews them on its own. Center never

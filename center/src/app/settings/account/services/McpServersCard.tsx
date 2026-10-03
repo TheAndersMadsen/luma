@@ -216,6 +216,23 @@ function takeSignInReturn(): Message | null {
     : { tone: "error", text: "The sign-in did not finish. Choose Sign in to try again." };
 }
 
+/**
+ * Ask Cosmos where this server signs in and send this browser there. Answers
+ * with what to say when that did not happen, or null once the browser is on
+ * its way to the provider.
+ */
+async function startSignIn(server: McpServer): Promise<Message | null> {
+  const response = await fetch(`/api/admin/mcp/${server.id}/oauth`, { method: "POST" });
+  if (!response.ok) return readError(response);
+  const body = (await response.json().catch(() => null)) as { authorization_url?: unknown } | null;
+  const address = signInAddress(body?.authorization_url);
+  if (!address) {
+    return { tone: "error", text: "Cosmos answered with a sign-in address this page cannot open." };
+  }
+  window.location.assign(address);
+  return null;
+}
+
 let nextRowKey = 1;
 
 function blankRow(name = ""): HeaderRow {
@@ -235,7 +252,8 @@ function ServerForm({
   server?: McpServer;
   busy: boolean;
   submitLabel: string;
-  onSubmit: (body: Record<string, unknown>) => Promise<boolean>;
+  /** `signIn` is true when the owner chose to sign in with the provider right after adding. */
+  onSubmit: (body: Record<string, unknown>, signIn: boolean) => Promise<boolean>;
 }) {
   const [name, setName] = useState(server?.name ?? "");
   const [url, setUrl] = useState(server?.url ?? "");
@@ -244,14 +262,19 @@ function ServerForm({
       ? server.headers.map((header) => ({ key: nextRowKey++, name: header, value: "", saved: true }))
       : [blankRow("Authorization")],
   );
+  // Only a new server asks how it lets the owner in. A saved one shows Sign in
+  // beside Test when it needs it.
+  const [access, setAccess] = useState<"headers" | "sign-in">("headers");
+  const signsIn = !server && access === "sign-in";
   const nameId = useId();
   const urlId = useId();
+  const accessId = useId();
 
   const setRow = (key: number, change: Partial<HeaderRow>) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
 
   const submit = async () => {
-    const headers = rows
+    const headers = (signsIn ? [] : rows)
       .map((row) => ({ name: row.name.trim(), value: row.value.trim(), saved: row.saved }))
       // A row with no name is a blank row. A new row with no value has nothing to send.
       .filter((row) => row.name && (row.value || row.saved))
@@ -261,7 +284,7 @@ function ServerForm({
       name: name.trim(),
       url: url.trim(),
       headers,
-    });
+    }, signsIn);
     if (saved && !server) {
       setName("");
       setUrl("");
@@ -292,6 +315,28 @@ function ServerForm({
         </label>
         <input id={urlId} className={styles.integrationInput} type="url" value={url} placeholder="https://example.com/mcp" autoCapitalize="none" autoCorrect="off" onChange={(event) => setUrl(event.target.value)} />
       </div>
+      {!server ? (
+        <div className={styles.integrationField} role="radiogroup" aria-labelledby={accessId}>
+          <span className={styles.mcpHeaderLabel}>
+            <strong id={accessId}>How it lets you in</strong>
+            <small>
+              Hosted servers usually have you sign in with the provider. Your own servers usually take a token in a
+              request header, or nothing.
+            </small>
+          </span>
+          <div className={styles.mcpAccess}>
+            <label>
+              <input type="radio" name={accessId} checked={access === "headers"} onChange={() => setAccess("headers")} />
+              Request headers, or nothing
+            </label>
+            <label>
+              <input type="radio" name={accessId} checked={access === "sign-in"} onChange={() => setAccess("sign-in")} />
+              Sign in with the provider (OAuth)
+            </label>
+          </div>
+        </div>
+      ) : null}
+      {signsIn ? null : (
       <div className={styles.integrationField}>
         <span className={styles.mcpHeaderLabel}>
           <strong>Request headers</strong>
@@ -342,9 +387,10 @@ function ServerForm({
           ) : null}
         </div>
       </div>
+      )}
       <div className={styles.integrationTestActions}>
         <button className={styles.primaryButton} type="button" disabled={busy || !name.trim() || !url.trim()} onClick={() => void submit()}>
-          {submitLabel}
+          {signsIn && !busy ? "Add and sign in" : submitLabel}
         </button>
       </div>
     </>
@@ -436,24 +482,71 @@ export function McpServersCard({ operator }: { operator: boolean }) {
     setBusy(`signin-${server.id}`);
     setMessage(null);
     try {
-      const response = await fetch(`/api/admin/mcp/${server.id}/oauth`, { method: "POST" });
-      if (!response.ok) {
-        setMessage(await readError(response));
-        return;
-      }
-      const body = (await response.json().catch(() => null)) as { authorization_url?: unknown } | null;
-      const address = signInAddress(body?.authorization_url);
-      if (!address) {
-        setMessage({ tone: "error", text: "Cosmos answered with a sign-in address this page cannot open." });
-        return;
-      }
-      window.location.assign(address);
+      const failed = await startSignIn(server);
+      if (failed) setMessage(failed);
     } catch {
       setMessage({ tone: "error", text: "Center could not reach your server. Try again." });
     } finally {
       setBusy(null);
     }
   }, []);
+
+  /**
+   * Add a server the owner signs in to: save it with no headers, then start
+   * its sign-in at once. The server stays added whatever the sign-in does, so
+   * Sign in beside Test can be tried again.
+   */
+  const addAndSignIn = useCallback(
+    async (body: Record<string, unknown>) => {
+      setBusy("add");
+      setMessage(null);
+      try {
+        const known = new Set((view?.servers ?? []).map((server) => server.id));
+        const response = await fetch("/api/admin/mcp", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          setMessage(await readError(response));
+          return false;
+        }
+        const parsed = parseView(await response.json().catch(() => null));
+        if (!parsed) {
+          setMessage({ tone: "error", text: "Cosmos answered with a tool server list this page cannot read." });
+          return false;
+        }
+        setView(parsed);
+        const added = parsed.servers.find((server) => !known.has(server.id));
+        if (!added) {
+          setMessage({ tone: "ok", text: "Tool server added." });
+          return true;
+        }
+        if (added.status === "connected") {
+          setMessage({ tone: "ok", text: `${added.name} was added. It did not ask for a sign-in.` });
+          return true;
+        }
+        if (!offersSignIn(added)) {
+          setMessage({
+            tone: "error",
+            text: `${added.name} was added, but it did not ask for a sign-in. ${summary(added).text}`,
+          });
+          return true;
+        }
+        const failed = await startSignIn(added);
+        if (failed) {
+          setMessage({ ...failed, text: `${added.name} was added, but its sign-in did not start. ${failed.text}` });
+        }
+        return true;
+      } catch {
+        setMessage({ tone: "error", text: "Center could not reach your server. Try again." });
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [view],
+  );
 
   if (!operator) return null;
 
@@ -682,7 +775,7 @@ export function McpServersCard({ operator }: { operator: boolean }) {
           <ServerForm
             busy={busy !== null}
             submitLabel={busy === "add" ? "Adding…" : "Add server"}
-            onSubmit={(body) => save("add", body, "Tool server added.")}
+            onSubmit={(body, signIn) => (signIn ? addAndSignIn(body) : save("add", body, "Tool server added."))}
           />
         </details>
 

@@ -563,6 +563,9 @@
 .mcpHeaderRow .integrationInput { flex: 1; min-width: 0; width: auto; }
 .mcpHeaderRow .integrationInput:first-child { flex: 0 1 180px; }
 
+.mcpAccess { display: grid; gap: 8px; color: var(--luma-colors-white); font-size: 14px; }
+.mcpAccess label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
 .mcpEdit { border-top: 1px solid var(--luma-divider); }
 .mcpEdit > summary {
   cursor: pointer;
