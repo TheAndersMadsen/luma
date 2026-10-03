@@ -21,6 +21,8 @@ type McpTool = {
   read_only: boolean;
   /** Whether the assistant is offered this tool right now. */
   offered: boolean;
+  /** Whether you have this tool switched on. It can be on and still not offered. */
+  enabled: boolean;
 };
 
 type McpServer = {
@@ -32,6 +34,8 @@ type McpServer = {
   enabled: boolean;
   allow_actions: boolean;
   allow_when_locked: boolean;
+  /** Every tool name you switched off, including ones the server no longer lists. */
+  disabled_tools: string[];
   status: McpStatus;
   checked_at_ms: number | null;
   tools: McpTool[];
@@ -73,6 +77,8 @@ function parseView(value: unknown): McpView | null {
       typeof server.enabled !== "boolean" ||
       typeof server.allow_actions !== "boolean" ||
       typeof server.allow_when_locked !== "boolean" ||
+      !Array.isArray(server.disabled_tools) ||
+      !server.disabled_tools.every((name) => typeof name === "string") ||
       typeof server.status !== "string" ||
       !STATUSES.has(server.status) ||
       !Array.isArray(server.tools)
@@ -87,7 +93,8 @@ function parseView(value: unknown): McpView | null {
         typeof tool.name !== "string" ||
         typeof tool.description !== "string" ||
         typeof tool.read_only !== "boolean" ||
-        typeof tool.offered !== "boolean"
+        typeof tool.offered !== "boolean" ||
+        typeof tool.enabled !== "boolean"
       ) {
         return null;
       }
@@ -96,6 +103,7 @@ function parseView(value: unknown): McpView | null {
         description: tool.description,
         read_only: tool.read_only,
         offered: tool.offered,
+        enabled: tool.enabled,
       });
     }
     parsed.push({
@@ -106,6 +114,7 @@ function parseView(value: unknown): McpView | null {
       enabled: server.enabled,
       allow_actions: server.allow_actions,
       allow_when_locked: server.allow_when_locked,
+      disabled_tools: server.disabled_tools as string[],
       status: server.status as McpStatus,
       checked_at_ms: typeof server.checked_at_ms === "number" ? server.checked_at_ms : null,
       tools,
@@ -125,7 +134,7 @@ function summary(server: McpServer): { tone: StatusTone; label: string; text: st
         tone: "live",
         label: "Connected",
         text:
-          offered === 0 && server.tools.length > 0
+          offered === 0 && server.tools.length > 0 && server.tools.every((tool) => tool.enabled)
             ? `It lists ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}, but none is marked read-only. Turn on Allow actions to offer them.`
             : `${offered} of ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"} offered to the assistant.`,
       };
@@ -140,6 +149,15 @@ function summary(server: McpServer): { tone: StatusTone; label: string; text: st
     default:
       return { tone: "off", label: "Not tested", text: "Not contacted yet. Choose Test to list its tools." };
   }
+}
+
+/** A tool row's chip: offered, or the first reason it is not. */
+function toolState(server: McpServer, tool: McpTool): string {
+  if (tool.offered) return "Offered";
+  if (!tool.enabled) return "Switched off";
+  if (!server.enabled) return "Server off";
+  if (!tool.read_only && !server.allow_actions) return "Action";
+  return "Not offered";
 }
 
 async function readError(response: Response): Promise<Message> {
@@ -278,9 +296,9 @@ function ServerForm({
 
 /**
  * The owner's MCP tool servers: add one by name, URL and request headers,
- * edit it, switch it on or off, allow its action tools, test it, and see which
- * tools the assistant is offered. Every change goes to Cosmos, which answers
- * with the new list.
+ * edit it, switch it on or off, allow its action tools, test it, switch single
+ * tools off, and see which tools the assistant is offered. Every change goes
+ * to Cosmos, which answers with the new list.
  */
 export function McpServersCard({ operator }: { operator: boolean }) {
   const [view, setView] = useState<McpView | null>(null);
@@ -377,6 +395,10 @@ export function McpServersCard({ operator }: { operator: boolean }) {
           Only tools a server marks read-only are offered, unless you allow actions for that server. Your Pin does
           not ask before an action tool runs.
         </span>
+        <span>
+          Each tool has its own switch. Switch off the ones you do not use: with fewer tools the assistant answers
+          sooner and picks the right one more often.
+        </span>
       </div>
 
       <fieldset className={styles.integrationSettings} disabled={busy !== null}>
@@ -451,10 +473,25 @@ export function McpServersCard({ operator }: { operator: boolean }) {
                         <strong>{tool.name}</strong>
                         <small>{tool.description || "No description."}</small>
                       </span>
-                      <StatusChip
-                        tone={tool.offered ? "live" : "off"}
-                        label={tool.offered ? "Offered" : tool.read_only ? "Not offered" : "Action"}
-                      />
+                      <span className={styles.mcpToolControls}>
+                        <StatusChip tone={tool.offered ? "live" : "off"} label={toolState(server, tool)} />
+                        <Switch
+                          checked={tool.enabled}
+                          ariaLabel={`Use ${tool.name} from ${server.name}`}
+                          onChange={(enabled) =>
+                            void save(
+                              `tool-${server.id}-${tool.name}`,
+                              {
+                                id: server.id,
+                                disabled_tools: enabled
+                                  ? server.disabled_tools.filter((name) => name !== tool.name)
+                                  : [...server.disabled_tools, tool.name],
+                              },
+                              enabled ? `${tool.name} is on.` : `${tool.name} is off.`,
+                            )
+                          }
+                        />
+                      </span>
                     </li>
                   ))}
                 </ul>

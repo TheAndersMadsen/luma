@@ -111,6 +111,12 @@ retyping one keeps it.
   `readOnlyHint`, unless the owner allows actions for that server. Luma's
   spoken confirmation covers a fixed list of its own actions and does not reach
   MCP tools.
+- **One switch per tool.** Each listed tool has its own switch in Center. A
+  tool the owner switches off is never offered, whatever its server allows,
+  and a call to it is refused. Fewer offered tools also make the model quicker
+  and less likely to pick the wrong one. The choice is kept by tool name: it
+  survives a new listing, and a tool the server stops listing is still off if
+  it comes back. A new tool starts switched on.
 - **Bounded like every server tool.** A call runs inside the turn's deadline
   and at most 15 seconds. Its result is cut to a spoken-answer size and reaches
   the model as untrusted data.
@@ -120,7 +126,9 @@ retyping one keeps it.
   built-in `manage_tool_servers` tool that lists the servers and switches one on
   or off by name ("turn on the home tools").
 
-Tools are named `mcp_<server>_<tool>`. At most 40 are offered at once.
+Tools are named `mcp_<server>_<tool>`. At most 40 are offered at once, and a
+tool that is switched off does not count, so switching tools off makes room
+for others. Cosmos keeps the first 48 tools a server lists.
 Settings live in `mcp.json` in the Cosmos state directory, separate from the
 provider settings, so a release without this feature still starts.
 
