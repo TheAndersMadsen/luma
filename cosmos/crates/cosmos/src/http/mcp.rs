@@ -18,7 +18,9 @@ struct McpServerView {
     id: String,
     name: String,
     url: String,
-    bearer_token_configured: bool,
+    /// The names of the request headers saved for this server. Their values
+    /// are credentials and are never sent back.
+    headers: Vec<String>,
     enabled: bool,
     allow_actions: bool,
     /// What the last contact showed: `untested`, `connected`, `unauthorized`,
@@ -63,7 +65,11 @@ fn mcp_view(store: &crate::mcp::McpStore) -> McpView {
                         .collect(),
                     status: known.state,
                     checked_at_ms: known.checked_at_ms,
-                    bearer_token_configured: server.bearer_token.is_some(),
+                    headers: server
+                        .headers
+                        .iter()
+                        .map(|header| header.name.clone())
+                        .collect(),
                     id: server.id,
                     name: server.name,
                     url: server.url,

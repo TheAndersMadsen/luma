@@ -96,8 +96,11 @@ extensions.
 ## MCP servers
 
 MCP servers are an optional Luma extension, like OS3. The owner adds a server
-by name and URL, and the assistant is offered that server's tools beside its
-own while the server is switched on. A switch takes effect on the next request.
+by name and URL, with any request headers it needs (usually `Authorization`),
+and the assistant is offered that server's tools beside its own while the
+server is switched on. A switch takes effect on the next request. Header
+values stay in Cosmos and are never shown again; editing a server without
+retyping one keeps it.
 
 - **One transport.** Cosmos speaks Streamable HTTP to remote and local servers
   alike and never launches a program. A stdio-only server runs behind an HTTP

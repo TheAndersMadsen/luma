@@ -55,7 +55,14 @@
 //!     a spoken-answer-sized observation, other content is named and omitted.
 //! 13. The turn is nearly out of time: the call is refused instead of started.
 //! 14. A redirect points somewhere else: not followed. The owner configured one
-//!     URL, and a token must not travel to another host.
+//!     URL, and a credential must not travel to another host.
+//! 15. A header the owner typed would break the request or the protocol (a
+//!     name with a space, a value with a line break, `Host`, `Content-Type`,
+//!     the session or protocol-version headers): refused when saved.
+//! 16. The owner edits a server without retyping a header's value: the stored
+//!     value for that name is kept, so Center never has to show it.
+//! 17. Settings saved before headers existed carry `bearer_token`: folded into
+//!     an `Authorization` header on load and not written again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -77,7 +84,21 @@ const MAX_TOOLS_PER_SERVER: usize = 48;
 const MAX_SERVER_NAME_CHARS: usize = 48;
 const MAX_SERVER_ID_CHARS: usize = 24;
 const MAX_URL_BYTES: usize = 2048;
-const MAX_TOKEN_BYTES: usize = 8192;
+const MAX_HEADERS: usize = 8;
+const MAX_HEADER_NAME_CHARS: usize = 64;
+const MAX_HEADER_VALUE_BYTES: usize = 8192;
+/// Headers this client sets itself, or that would change how the request is
+/// framed. The owner cannot override them.
+const RESERVED_HEADERS: &[&str] = &[
+    "accept",
+    "connection",
+    "content-length",
+    "content-type",
+    "host",
+    "mcp-protocol-version",
+    "mcp-session-id",
+    "transfer-encoding",
+];
 const MAX_TOOL_NAME_CHARS: usize = 128;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024;
@@ -109,10 +130,33 @@ pub struct McpServer {
     pub id: String,
     pub name: String,
     pub url: String,
+    /// Request headers the server needs, such as `Authorization` or an API
+    /// key header. Sent on every request to this server and nowhere else.
+    pub headers: Vec<McpHeader>,
+    /// Read from settings saved before headers existed. Folded into `headers`
+    /// on load and never written again.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bearer_token: Option<String>,
     pub enabled: bool,
     /// Offer tools that do not declare `readOnlyHint`. Off by default.
     pub allow_actions: bool,
+}
+
+/// One request header for a server. The value is a credential.
+#[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for McpHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpHeader")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for McpServer {
@@ -123,7 +167,7 @@ impl std::fmt::Debug for McpServer {
             .field("name", &self.name)
             .field("enabled", &self.enabled)
             .field("allow_actions", &self.allow_actions)
-            .field("bearer_token_configured", &self.bearer_token.is_some())
+            .field("headers", &self.headers)
             .finish()
     }
 }
@@ -152,10 +196,30 @@ pub struct McpServerInput {
     pub id: Option<String>,
     pub name: Option<String>,
     pub url: Option<String>,
-    /// Missing preserves the existing token. An empty value removes it.
-    pub bearer_token: Option<String>,
+    /// Missing preserves the existing headers. Present replaces them all: a
+    /// header sent without a value keeps the value stored under that name.
+    pub headers: Option<Vec<McpHeaderInput>>,
     pub enabled: Option<bool>,
     pub allow_actions: Option<bool>,
+}
+
+/// One header as the owner sends it.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpHeaderInput {
+    pub name: String,
+    /// Missing or empty keeps the stored value for this name.
+    pub value: Option<String>,
+}
+
+impl std::fmt::Debug for McpHeaderInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpHeaderInput")
+            .field("name", &self.name)
+            .field("value_supplied", &self.value.is_some())
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for McpServerInput {
@@ -166,7 +230,7 @@ impl std::fmt::Debug for McpServerInput {
             .field("name", &self.name)
             .field("enabled", &self.enabled)
             .field("allow_actions", &self.allow_actions)
-            .field("bearer_token_supplied", &self.bearer_token.is_some())
+            .field("headers", &self.headers)
             .finish()
     }
 }
@@ -330,6 +394,10 @@ impl McpStore {
                 fs::read(path)
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<McpSettings>(&bytes).ok())
+                    .map(|mut settings| {
+                        settings.servers.iter_mut().for_each(fold_legacy_token);
+                        settings
+                    })
                     .filter(|settings| validate(settings).is_ok())
                     .unwrap_or_else(|| {
                         tracing::warn!(
@@ -407,8 +475,8 @@ impl McpStore {
                 if let Some(url) = input.url {
                     server.url = url.trim().to_owned();
                 }
-                if let Some(token) = input.bearer_token {
-                    server.bearer_token = optional(&token);
+                if let Some(headers) = input.headers {
+                    server.headers = merged_headers(&server.headers, headers)?;
                 }
                 if let Some(enabled) = input.enabled {
                     server.enabled = enabled;
@@ -429,7 +497,8 @@ impl McpStore {
                     id: unique_id(&name, &taken),
                     name,
                     url: input.url.unwrap_or_default().trim().to_owned(),
-                    bearer_token: input.bearer_token.as_deref().and_then(optional),
+                    headers: merged_headers(&[], input.headers.unwrap_or_default())?,
+                    bearer_token: None,
                     enabled: input.enabled.unwrap_or(true),
                     allow_actions: input.allow_actions.unwrap_or(false),
                 };
@@ -1127,14 +1196,88 @@ fn validate(settings: &McpSettings) -> Result<(), McpError> {
             return Err(McpError::Invalid("server name is already used"));
         }
         validate_url(&server.url)?;
-        if let Some(token) = server.bearer_token.as_deref()
-            && (token.len() > MAX_TOKEN_BYTES
-                || !token.bytes().all(|byte| (b' '..=b'~').contains(&byte)))
+        validate_headers(&server.headers)?;
+    }
+    Ok(())
+}
+
+fn validate_headers(headers: &[McpHeader]) -> Result<(), McpError> {
+    if headers.len() > MAX_HEADERS {
+        return Err(McpError::Invalid("too many headers"));
+    }
+    let mut names = BTreeSet::new();
+    for header in headers {
+        let name = header.name.to_ascii_lowercase();
+        // RFC 9110 field names are tokens.
+        let token = !name.is_empty()
+            && name.len() <= MAX_HEADER_NAME_CHARS
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte));
+        if !token {
+            return Err(McpError::Invalid("header name is invalid"));
+        }
+        if RESERVED_HEADERS.contains(&name.as_str()) {
+            return Err(McpError::Invalid("that header cannot be set"));
+        }
+        if !names.insert(name) {
+            return Err(McpError::Invalid("header name is repeated"));
+        }
+        if header.value.is_empty()
+            || header.value.len() > MAX_HEADER_VALUE_BYTES
+            || !header
+                .value
+                .bytes()
+                .all(|byte| (b' '..=b'~').contains(&byte))
         {
-            return Err(McpError::Invalid("server token is invalid"));
+            return Err(McpError::Invalid("header value is invalid"));
         }
     }
     Ok(())
+}
+
+/// The headers an edit leaves: every row the owner sent, with the stored value
+/// kept for a row sent without one. A row with neither name nor value is a
+/// blank form row and is dropped.
+fn merged_headers(
+    stored: &[McpHeader],
+    input: Vec<McpHeaderInput>,
+) -> Result<Vec<McpHeader>, McpError> {
+    let mut merged = Vec::new();
+    for header in input {
+        let name = header.name.trim().to_owned();
+        let value = header.value.as_deref().and_then(optional);
+        if name.is_empty() && value.is_none() {
+            continue;
+        }
+        let value = match value {
+            Some(value) => value,
+            None => stored
+                .iter()
+                .find(|known| known.name.eq_ignore_ascii_case(&name))
+                .map(|known| known.value.clone())
+                .ok_or(McpError::Invalid("header value is required"))?,
+        };
+        merged.push(McpHeader { name, value });
+    }
+    Ok(merged)
+}
+
+/// Settings saved before headers existed held one bearer token.
+fn fold_legacy_token(server: &mut McpServer) {
+    let Some(token) = server.bearer_token.take().as_deref().and_then(optional) else {
+        return;
+    };
+    if !server
+        .headers
+        .iter()
+        .any(|header| header.name.eq_ignore_ascii_case("authorization"))
+    {
+        server.headers.push(McpHeader {
+            name: "Authorization".to_owned(),
+            value: format!("Bearer {token}"),
+        });
+    }
 }
 
 fn validate_url(value: &str) -> Result<(), McpError> {
@@ -1162,7 +1305,16 @@ fn endpoint_digest(server: &McpServer) -> String {
             .chain_update(b"luma.mcp.endpoint\0")
             .chain_update(server.url.as_bytes())
             .chain_update(b"\0")
-            .chain_update(server.bearer_token.as_deref().unwrap_or("").as_bytes())
+            .chain_update(
+                server
+                    .headers
+                    .iter()
+                    .map(|header| {
+                        format!("{}\0{}\0", header.name.to_ascii_lowercase(), header.value)
+                    })
+                    .collect::<String>()
+                    .as_bytes(),
+            )
             .finalize()
     )
 }
@@ -1226,8 +1378,8 @@ async fn rpc(
         )
         .header("MCP-Protocol-Version", PROTOCOL_VERSION)
         .json(&body);
-    if let Some(token) = server.bearer_token.as_deref() {
-        request = request.bearer_auth(token);
+    for header in &server.headers {
+        request = request.header(header.name.as_str(), header.value.as_str());
     }
     if let Some(session) = session {
         request = request.header("Mcp-Session-Id", session);
@@ -1364,6 +1516,7 @@ mod tests {
             id: unique_id(name, &BTreeSet::new()),
             name: name.to_owned(),
             url: "http://127.0.0.1:9/mcp".to_owned(),
+            headers: Vec::new(),
             bearer_token: None,
             enabled,
             allow_actions,
@@ -1497,9 +1650,80 @@ mod tests {
         scheme.servers[0].url = "file:///etc/passwd".to_owned();
         assert!(validate(&scheme).is_err());
 
-        let mut token = settings;
-        token.servers[0].bearer_token = Some("line\nbreak".to_owned());
-        assert!(validate(&token).is_err());
+        let header = |name: &str, value: &str| McpHeader {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        };
+        let with = |headers: Vec<McpHeader>| {
+            let mut changed = settings.clone();
+            changed.servers[0].headers = headers;
+            validate(&changed)
+        };
+        assert!(
+            with(vec![
+                header("Authorization", "Bearer abc"),
+                header("X-Api-Key", "k")
+            ])
+            .is_ok()
+        );
+        assert!(with(vec![header("X-Api-Key", "line\nbreak")]).is_err());
+        assert!(with(vec![header("Bad Name", "v")]).is_err());
+        assert!(with(vec![header("X-Api-Key", "")]).is_err());
+        assert!(with(vec![header("Host", "elsewhere")]).is_err());
+        assert!(with(vec![header("Mcp-Session-Id", "s1")]).is_err());
+        assert!(with(vec![header("X-Key", "a"), header("x-key", "b")]).is_err());
+    }
+
+    #[test]
+    fn an_edit_keeps_the_stored_value_of_a_header_sent_without_one() {
+        let stored = vec![McpHeader {
+            name: "Authorization".to_owned(),
+            value: "Bearer kept".to_owned(),
+        }];
+        let input = |name: &str, value: Option<&str>| McpHeaderInput {
+            name: name.to_owned(),
+            value: value.map(str::to_owned),
+        };
+        let merged = merged_headers(
+            &stored,
+            vec![
+                input("authorization", None),
+                input("X-Api-Key", Some(" new ")),
+                input("", None),
+            ],
+        )
+        .expect("merged");
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].value, "Bearer kept");
+        assert_eq!(merged[1].value, "new");
+        // A new header has no stored value to fall back on.
+        assert!(merged_headers(&stored, vec![input("X-Other", None)]).is_err());
+        // Leaving a header out removes it.
+        assert!(
+            merged_headers(&stored, Vec::new())
+                .expect("merged")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_token_saved_before_headers_existed_becomes_an_authorization_header() {
+        let directory = state_dir("legacy");
+        fs::write(
+            Path::new(&directory).join(SETTINGS_FILE),
+            br#"{"schema_version":1,"servers":[{"id":"old","name":"Old","url":"http://127.0.0.1:9/mcp","bearer_token":"abc","enabled":true,"allow_actions":false}]}"#,
+        )
+        .expect("written");
+        let store = McpStore::load(Some(&directory));
+        let server = store.snapshot().servers.remove(0);
+        assert_eq!(server.headers.len(), 1);
+        assert_eq!(server.headers[0].name, "Authorization");
+        assert_eq!(server.headers[0].value, "Bearer abc");
+        // The next save writes headers only.
+        store.set_enabled("old", false).expect("saved");
+        let written = fs::read_to_string(Path::new(&directory).join(SETTINGS_FILE)).expect("read");
+        assert!(!written.contains("bearer_token"));
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -1727,7 +1951,10 @@ mod tests {
             .upsert(McpServerInput {
                 name: Some("Stand In".to_owned()),
                 url: Some(url.clone()),
-                bearer_token: Some("good".to_owned()),
+                headers: Some(vec![McpHeaderInput {
+                    name: "Authorization".to_owned(),
+                    value: Some("Bearer good".to_owned()),
+                }]),
                 ..McpServerInput::default()
             })
             .expect("the server is saved");
@@ -1807,12 +2034,15 @@ mod tests {
             "Stand In is now on with 2 tools. They are available from the next request."
         );
 
-        // A changed token is a different endpoint: what the old one listed is
-        // forgotten, and the refusal is recorded for Center.
+        // A changed header is a different endpoint: what the old one listed
+        // is forgotten, and the refusal is recorded for Center.
         restarted
             .upsert(McpServerInput {
                 id: Some(saved.id.clone()),
-                bearer_token: Some("wrong".to_owned()),
+                headers: Some(vec![McpHeaderInput {
+                    name: "authorization".to_owned(),
+                    value: Some("Bearer wrong".to_owned()),
+                }]),
                 ..McpServerInput::default()
             })
             .expect("saved");

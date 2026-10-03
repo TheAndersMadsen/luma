@@ -27,7 +27,8 @@ type McpServer = {
   id: string;
   name: string;
   url: string;
-  bearer_token_configured: boolean;
+  /** Names of the saved request headers. Cosmos never sends their values back. */
+  headers: string[];
   enabled: boolean;
   allow_actions: boolean;
   status: McpStatus;
@@ -39,6 +40,9 @@ type McpView = { servers: McpServer[] };
 
 type Message = { tone: "ok" | "error"; text: string; signIn?: boolean };
 
+/** One header row in a form. `saved` rows keep their stored value when left blank. */
+type HeaderRow = { key: number; name: string; value: string; saved: boolean };
+
 const STATUSES: ReadonlySet<string> = new Set([
   "untested",
   "connected",
@@ -47,6 +51,8 @@ const STATUSES: ReadonlySet<string> = new Set([
   "timed_out",
   "invalid_response",
 ]);
+
+const MAX_HEADERS = 8;
 
 /** Accept only the shape this card renders. Cosmos is another process. */
 function parseView(value: unknown): McpView | null {
@@ -61,7 +67,8 @@ function parseView(value: unknown): McpView | null {
       typeof server.id !== "string" ||
       typeof server.name !== "string" ||
       typeof server.url !== "string" ||
-      typeof server.bearer_token_configured !== "boolean" ||
+      !Array.isArray(server.headers) ||
+      !server.headers.every((header) => typeof header === "string") ||
       typeof server.enabled !== "boolean" ||
       typeof server.allow_actions !== "boolean" ||
       typeof server.status !== "string" ||
@@ -93,7 +100,7 @@ function parseView(value: unknown): McpView | null {
       id: server.id,
       name: server.name,
       url: server.url,
-      bearer_token_configured: server.bearer_token_configured,
+      headers: server.headers as string[],
       enabled: server.enabled,
       allow_actions: server.allow_actions,
       status: server.status as McpStatus,
@@ -114,14 +121,17 @@ function summary(server: McpServer): { tone: StatusTone; label: string; text: st
       return {
         tone: "live",
         label: "Connected",
-        text: `${offered} of ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"} offered to the assistant.`,
+        text:
+          offered === 0 && server.tools.length > 0
+            ? `It lists ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}, but none is marked read-only. Turn on Allow actions to offer them.`
+            : `${offered} of ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"} offered to the assistant.`,
       };
     case "unauthorized":
-      return { tone: "absent", label: "Token refused", text: "The server refused the token. Enter a new one, then Test." };
+      return { tone: "absent", label: "Refused", text: "The server refused the request. Check its headers below, then Save." };
     case "unreachable":
       return { tone: "absent", label: "Unreachable", text: "The server could not be reached the last time Cosmos tried. Check the URL, then Test." };
     case "timed_out":
-      return { tone: "degraded", label: "Timed out", text: "The server did not answer in time. Test again in a moment." };
+      return { tone: "degraded", label: "Timed out", text: "The server did not answer in time. Check the URL, or Test again in a moment." };
     case "invalid_response":
       return { tone: "absent", label: "Not understood", text: "The server answered, but not as an MCP server over HTTP. Check the URL." };
     default:
@@ -135,21 +145,144 @@ async function readError(response: Response): Promise<Message> {
   return { tone: "error", text, signIn: response.status === 401 };
 }
 
+let nextRowKey = 1;
+
+function blankRow(name = ""): HeaderRow {
+  return { key: nextRowKey++, name, value: "", saved: false };
+}
+
 /**
- * The owner's MCP tool servers: add one by name and URL, switch it on or off,
- * allow its action tools, test it, and see which tools the assistant is
- * offered. Every change goes to Cosmos, which answers with the new list.
+ * Name, URL and request headers for one server. Used to add a server and to
+ * edit one. A saved header's value is never shown: leaving it blank keeps it.
+ */
+function ServerForm({
+  server,
+  busy,
+  submitLabel,
+  onSubmit,
+}: {
+  server?: McpServer;
+  busy: boolean;
+  submitLabel: string;
+  onSubmit: (body: Record<string, unknown>) => Promise<boolean>;
+}) {
+  const [name, setName] = useState(server?.name ?? "");
+  const [url, setUrl] = useState(server?.url ?? "");
+  const [rows, setRows] = useState<HeaderRow[]>(() =>
+    server
+      ? server.headers.map((header) => ({ key: nextRowKey++, name: header, value: "", saved: true }))
+      : [blankRow("Authorization")],
+  );
+  const nameId = useId();
+  const urlId = useId();
+
+  const setRow = (key: number, change: Partial<HeaderRow>) =>
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
+
+  const submit = async () => {
+    const headers = rows
+      .map((row) => ({ name: row.name.trim(), value: row.value.trim(), saved: row.saved }))
+      // A row with no name is a blank row. A new row with no value has nothing to send.
+      .filter((row) => row.name && (row.value || row.saved))
+      .map((row) => (row.value ? { name: row.name, value: row.value } : { name: row.name }));
+    const saved = await onSubmit({
+      ...(server ? { id: server.id } : {}),
+      name: name.trim(),
+      url: url.trim(),
+      headers,
+    });
+    if (saved && !server) {
+      setName("");
+      setUrl("");
+      setRows([blankRow("Authorization")]);
+    }
+  };
+
+  return (
+    <>
+      <div className={styles.integrationField}>
+        <label htmlFor={nameId}>
+          <strong>Name</strong>
+          <small>What you will call it, for example Home or Notes.</small>
+        </label>
+        <input id={nameId} className={styles.integrationInput} type="text" value={name} maxLength={48} placeholder="Home" onChange={(event) => setName(event.target.value)} />
+      </div>
+      <div className={styles.integrationField}>
+        <label htmlFor={urlId}>
+          <strong>Server URL</strong>
+          <small>Its Streamable HTTP address, for example https://example.com/mcp</small>
+        </label>
+        <input id={urlId} className={styles.integrationInput} type="url" value={url} placeholder="https://example.com/mcp" autoCapitalize="none" autoCorrect="off" onChange={(event) => setUrl(event.target.value)} />
+      </div>
+      <div className={styles.integrationField}>
+        <span className={styles.mcpHeaderLabel}>
+          <strong>Request headers</strong>
+          <small>
+            Optional. Most servers want Authorization with the value Bearer followed by your token. Values stay on
+            your server and are never shown again.
+          </small>
+        </span>
+        <div className={styles.mcpHeaders}>
+          {rows.map((row) => (
+            <div className={styles.mcpHeaderRow} key={row.key}>
+              <input
+                className={styles.integrationInput}
+                type="text"
+                aria-label="Header name"
+                value={row.name}
+                maxLength={64}
+                placeholder="Header name"
+                autoCapitalize="none"
+                autoCorrect="off"
+                onChange={(event) => setRow(row.key, { name: event.target.value })}
+              />
+              <input
+                className={styles.integrationInput}
+                type="password"
+                aria-label={`Value for ${row.name || "header"}`}
+                value={row.value}
+                placeholder={row.saved ? "Saved. Leave blank to keep it" : row.name.toLowerCase() === "authorization" ? "Bearer your-token" : "Value"}
+                autoComplete="new-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                onChange={(event) => setRow(row.key, { value: event.target.value })}
+              />
+              <button
+                className={styles.inlineButton}
+                type="button"
+                aria-label={`Remove header ${row.name || ""}`.trim()}
+                onClick={() => setRows((current) => current.filter((other) => other.key !== row.key))}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {rows.length < MAX_HEADERS ? (
+            <button className={styles.inlineButton} type="button" onClick={() => setRows((current) => [...current, blankRow()])}>
+              Add a header
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className={styles.integrationTestActions}>
+        <button className={styles.primaryButton} type="button" disabled={busy || !name.trim() || !url.trim()} onClick={() => void submit()}>
+          {submitLabel}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The owner's MCP tool servers: add one by name, URL and request headers,
+ * edit it, switch it on or off, allow its action tools, test it, and see which
+ * tools the assistant is offered. Every change goes to Cosmos, which answers
+ * with the new list.
  */
 export function McpServersCard({ operator }: { operator: boolean }) {
   const [view, setView] = useState<McpView | null>(null);
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  const [token, setToken] = useState("");
-  const nameId = useId();
-  const urlId = useId();
-  const tokenId = useId();
 
   const load = useCallback(async () => {
     const response = await fetch("/api/admin/mcp", { cache: "no-store" });
@@ -216,19 +349,6 @@ export function McpServersCard({ operator }: { operator: boolean }) {
 
   if (!operator) return null;
 
-  const add = async () => {
-    const added = await save(
-      "add",
-      { name: name.trim(), url: url.trim(), ...(token.trim() ? { bearer_token: token.trim() } : {}) },
-      "Tool server added.",
-    );
-    if (added) {
-      setName("");
-      setUrl("");
-      setToken("");
-    }
-  };
-
   return (
     <section className={`${settings.section} ${styles.servicesCard}`} data-testid="mcp-servers-card">
       <div className={styles.serviceHead}>
@@ -288,7 +408,7 @@ export function McpServersCard({ operator }: { operator: boolean }) {
               <div className={styles.settingRow}>
                 <span>
                   <strong>Allow actions</strong>
-                  <small>Also offers tools that can change things. They run without asking you first.</small>
+                  <small>Also offers tools the server does not mark read-only. They run without asking you first.</small>
                 </span>
                 <Switch
                   checked={server.allow_actions}
@@ -318,6 +438,17 @@ export function McpServersCard({ operator }: { operator: boolean }) {
                   ))}
                 </ul>
               ) : null}
+              <details className={styles.mcpEdit}>
+                <summary>Edit name, URL and headers</summary>
+                {/* Re-created when Cosmos answers, so the form shows what was saved. */}
+                <ServerForm
+                  key={`${server.id}:${server.name}:${server.url}:${server.headers.join(",")}`}
+                  server={server}
+                  busy={busy !== null}
+                  submitLabel={busy === `edit-${server.id}` ? "Saving…" : "Save changes"}
+                  onSubmit={(body) => save(`edit-${server.id}`, body, `${server.name} was saved.`)}
+                />
+              </details>
               <div className={styles.integrationTestActions}>
                 <button
                   className={styles.inlineButton}
@@ -360,32 +491,11 @@ export function McpServersCard({ operator }: { operator: boolean }) {
               <small>A remote MCP server, or one running next to your Luma server.</small>
             </span>
           </summary>
-          <div className={styles.integrationField}>
-            <label htmlFor={nameId}>
-              <strong>Name</strong>
-              <small>What you will call it, for example Home or Notes.</small>
-            </label>
-            <input id={nameId} className={styles.integrationInput} type="text" value={name} maxLength={48} placeholder="Home" onChange={(event) => setName(event.target.value)} />
-          </div>
-          <div className={styles.integrationField}>
-            <label htmlFor={urlId}>
-              <strong>Server URL</strong>
-              <small>Its Streamable HTTP address, for example https://example.com/mcp</small>
-            </label>
-            <input id={urlId} className={styles.integrationInput} type="url" value={url} placeholder="https://example.com/mcp" autoCapitalize="none" autoCorrect="off" onChange={(event) => setUrl(event.target.value)} />
-          </div>
-          <div className={styles.integrationField}>
-            <label htmlFor={tokenId}>
-              <strong>Bearer token</strong>
-              <small>Optional. Kept on your server and never shown again.</small>
-            </label>
-            <input id={tokenId} className={styles.integrationInput} type="password" value={token} placeholder="Paste token" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" onChange={(event) => setToken(event.target.value)} />
-          </div>
-          <div className={styles.integrationTestActions}>
-            <button className={styles.primaryButton} type="button" disabled={busy !== null || !name.trim() || !url.trim()} onClick={() => void add()}>
-              {busy === "add" ? "Adding…" : "Add server"}
-            </button>
-          </div>
+          <ServerForm
+            busy={busy !== null}
+            submitLabel={busy === "add" ? "Adding…" : "Add server"}
+            onSubmit={(body) => save("add", body, "Tool server added.")}
+          />
         </details>
 
         {message ? (
