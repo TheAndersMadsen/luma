@@ -43,19 +43,28 @@ and link services before you do any of the physical steps below.
 ### Coming from PenumbraOS or another Ai Pin project
 
 Installing Luma replaces what is on the Pin, and there is no button to go
-back. If the Pin runs PenumbraOS v0 (MABL), FusionOS, or OpenPin, Stage 3
-offers **Remove and install**. That button does two things:
+back. If the Pin runs PenumbraOS v0 (MABL), FusionOS, or OpenPin, the
+**Software & updates** page in Stage 3 lists those apps. When you choose
+**Install Luma**, Center asks **Remove conflicting apps first?** and offers
+**Remove and recover**. That button does three things, in this order:
 
-- It uninstalls those apps. For PenumbraOS v0 that means
-  `com.penumbraos.mabl`, `com.penumbraos.plugins.*`, `com.penumbraos.sdk.*`,
-  `com.penumbraos.bridge*`, and `com.penumbraos.pinitd`. Their app data goes
-  with them.
-- It re-enables Humane's Ironman, Onboarding, and System Navigation apps,
-  clears PenumbraOS's expanded logging (`persist.log.tag`), and reboots the
-  Pin.
+- It uninstalls every installed app that matches this list. Their app data
+  goes with them.
+  - PenumbraOS v0: `com.penumbraos.mabl`, `com.penumbraos.plugins.*`,
+    `com.penumbraos.sdk.*`, `com.penumbraos.bridge*`, and
+    `com.penumbraos.pinitd`.
+  - FusionOS: `com.ghost.fuionwebhost` and `com.ghost.fusion*`.
+  - OpenPin: `org.openpin.primaryapp`.
+- It restarts the Pin.
+- It installs Luma. First it re-enables Humane's Ironman, Onboarding, and
+  System Navigation apps and clears PenumbraOS's expanded logging
+  (`persist.log.tag`).
 
-It leaves PenumbraOS's files in `/sdcard/penumbra` and `/data/local/tmp/bin`
-alone.
+The page also has a **Remove conflicting apps…** link. It does only the first
+two things: it uninstalls the apps and restarts the Pin.
+
+Neither one touches PenumbraOS's files in `/sdcard/penumbra` and
+`/data/local/tmp/bin`.
 
 Back up first, with the ADB access you used to install PenumbraOS:
 
@@ -69,11 +78,15 @@ of your OpenAI-compatible endpoint. The same endpoint works in Luma. Enter it
 in Center under **Settings → Assistant & voice**. Keep the backup as private as
 a password, because it holds that key.
 
-To go back to PenumbraOS later, choose **Uninstall** on Center's
-**Software & updates** page. It removes Luma's apps and re-enables the stock
-apps Luma had turned off, but it does not reinstall PenumbraOS. Reinstall it
-with PenumbraOS's own installer ([penumbraos.com](https://penumbraos.com)),
-then restore your settings from the backup.
+To go back to PenumbraOS later, connect the Pin and open
+**Settings → Advanced → Software & updates**. Open the **More tools** menu
+(the **⋯** button), choose **Uninstall Luma…**, and confirm with
+**Uninstall**. Center removes Luma's five apps. It then turns back on the
+Humane apps that installing Luma turned off: Bort, Bort OTA, the Memfault
+usage reporter, the metric reporter, and Humane OTA. It does not restart the
+Pin, and it does not reinstall PenumbraOS. Reinstall that with PenumbraOS's
+own installer ([penumbraos.com](https://penumbraos.com)), then restore your
+settings from the backup.
 
 One Luma server serves one Pin. So if you want to try Luma first, set up a
 server and Center, and connect the Pin only when you are ready to move it.
@@ -123,14 +136,18 @@ time. Unplug other Android devices too.
 2. In desktop Chrome or Edge, open `https://YOUR_DOMAIN` and sign in. Open
    **Settings → My Ai Pin** and choose **Open guided setup**.
 
-   You see: **Set up your Ai Pin**, with seven stages listed. A stage turns
-   green only when Center has read something from the Pin or your server.
-   **Check again** re-reads everything.
+   **Settings → Set up a Pin** opens the same page.
 
-> **If the page says "This browser can't reach your Pin" or "WebUSB is not
-> supported in this browser":** you are in Safari, Firefox, a phone browser,
-> or on an address without HTTPS. Open the `https://` address in desktop
-> Chrome, Chromium, or Edge.
+   You see: the **Guided setup** page. Its **Set up your Ai Pin** section
+   reads **0 of 7 steps complete**, and **Your setup** lists the seven
+   stages. A stage turns green only when Center has read something from the
+   Pin or your server. **Check again** re-reads everything.
+
+> **If the page says "This browser cannot reach a Pin over USB":** the reason
+> under it is "WebUSB is not available in this browser" or "The installer
+> requires a secure context (HTTPS or localhost)". You are in Safari, Firefox,
+> a phone browser, or on an address without HTTPS. Open the `https://` address
+> in desktop Chrome, Chromium, or Edge.
 
 ## Stage 1: Connect your Pin
 
@@ -144,12 +161,13 @@ time. Unplug other Android devices too.
 
 2. Select the Pin and choose **Connect**.
 
-   You see: **Checking your Pin…**. If the Pin asks whether to allow this
-   computer, accept on its Laser Ink display.
+   You see: the button reads **Connecting…**. If the Pin asks whether to
+   allow this computer, accept on its Laser Ink display.
 
 3. Read the serial number Center shows.
 
-   You see: stage 1 turns green with the Pin's serial.
+   You see: stage 1 turns green and reads **Connected over USB · SERIAL**,
+   with your Pin's serial.
 
 > **If the chooser is empty:** the Pin is locked or still booting, the cable
 > is charge-only, or (on Linux) the udev rules are not active yet. See
@@ -164,14 +182,18 @@ time. Unplug other Android devices too.
 *Center turns on the Pin's Wi-Fi, joins your network over USB, and checks
 the Pin's clock.*
 
-1. Choose **Turn on Wi-Fi**.
+A Pin that is already online goes straight to step 3.
+
+1. If the stage shows **Turn on Wi-Fi**, choose it.
 
    You see: **Turning on Wi-Fi…**, then **Waiting to see whether the Pin
    rejoins a network it already knows…**. A Pin that knows a nearby network
    rejoins it by itself. In that case, skip to step 3.
 
-2. Otherwise, under **Wi-Fi networks your Pin can see**, pick your network
-   (or **Other network** for a hidden one), type its password, and join.
+2. Otherwise, Center looks for networks and lists the ones the Pin can see.
+   Pick your network (or **Other network** for a hidden one), type its
+   password, and choose **Join network**. If your network is missing, choose
+   **Scan again**.
 
    The password goes from the browser to the Pin over the cable, and the Pin
    saves it like any other network. It never reaches your server.
@@ -182,11 +204,12 @@ the Pin's clock.*
 
    A Pin that sat unused often reads February 2025. That date makes every
    certificate look "not yet valid". Android fixes it within seconds of going
-   online, and Center sets the clock only if it stays wrong.
+   online. If it stays wrong, Center sets it. If the stage shows **Set the
+   Pin's clock**, choose it.
 
-> **Decision: no cable at hand?** **Wi-Fi QR code** (`/wifi` in Center) makes
-> a code the Pin can scan instead. A Pin already online over mobile data
-> needs no Wi-Fi at all.
+> **Decision: no cable at hand?** **No cable? Make a Wi-Fi QR code instead**
+> opens the **Wi-Fi** page (`/wifi` in Center), which makes a code the Pin can
+> scan. A Pin already online over mobile data needs no Wi-Fi at all.
 
 ## Stage 3: Install Luma
 
@@ -195,42 +218,54 @@ the Pin's clock.*
 1. Choose **Open installer**.
 
    You see: the **Software & updates** page. It reads what is on the Pin and
-   shows **Luma isn't installed yet**, with the release it will install, the
-   current and target versions, and the serial.
+   shows **Luma isn't installed yet**. Below that are the Pin's name and
+   serial and a list of the Luma apps, each **Not installed**.
 
-2. Choose **Install**.
+2. Choose **Install Luma VERSION** (VERSION is your server's release).
 
-   You see: a confirmation, **Install Luma on this Pin?**, naming the release
-   and the serial. It carries the note **This changes your Pin's system
-   software** and warns that a loose cable, or a Pin that locks partway, may
-   need a repair afterwards.
+   You see: a confirmation titled **Recover this Pin?**. Center treats a
+   first install as a recovery, because the Pin has no Luma installer yet.
+   The text names the release and your Pin's serial. Below it are two notes:
+   **This changes your Pin's system software** (a loose cable, or a Pin that
+   locks partway, may need a repair afterwards) and **Recovery erases Luma's
+   app data**. A new Pin has no Luma data to lose.
 
 3. **Decision:** check that the serial in the confirmation is your Pin's. If
-   it is, confirm. If it is any other device, cancel and disconnect the other
-   hardware.
+   it is, choose **Start recovery**. If it is any other device, choose
+   **Cancel** and disconnect the other hardware.
 
-   You see: a progress bar. It takes a few minutes, and the Pin restarts.
-   Keep the tab open, the Pin unlocked, and the cable connected. Center
+   You see: a progress bar under titles such as **Downloading Luma** and
+   **Installing Luma**. It takes a few minutes, and the Pin restarts. Keep
+   the tab open, the Pin unlocked, and the cable connected. Center
    reconnects to the same serial by itself. Never pick a different device to
    continue.
 
-4. Wait for **Your Pin is up to date**, then go back to **Guided setup**.
+4. Wait for **Your Pin is up to date**. Then choose **Open Guided setup** in
+   the **Guided setup** box lower on the page. The big **Open Pin settings**
+   button leads somewhere else.
 
    You see: stage 3 green.
 
-> **If the page says "Apps from another Ai Pin project":** the Pin has apps
-> that conflict with Luma. Center lists them and offers **Remove and
-> install**, which removes those apps first and then continues. Back them up
-> before you choose it. See
+A Pin that already runs an older Luma shows **Update to VERSION** instead.
+
+> **If stage 3 says known conflicting apps must be removed before
+> installing:** the Pin has apps from another Ai Pin project. Choose **Open
+> installer**, then **Install Luma VERSION**. Center asks **Remove
+> conflicting apps first?** and lists the apps under **Apps from another Ai
+> Pin project**. **Remove and recover** removes them, then installs. Back
+> them up before you choose it. See
 > [Coming from PenumbraOS or another Ai Pin project](#coming-from-penumbraos-or-another-ai-pin-project).
 >
-> **If it says "No Pin release to install":** the server has no Pin archive
-> staged. On the server, run `./luma pin release acquire --check`. If that
-> reports none, run `./luma pin release acquire --archive ../luma-pin-*.tar.gz`
-> from the operator folder. Then choose **Check again**.
+> **If stage 3 shows a command instead of Open installer:** your server has
+> no Pin release to install yet. The **Software & updates** page says **No
+> Pin release to install** in the same case. On the server, run
+> `./luma pin release acquire --check`. If that reports none, run
+> `./luma pin release acquire --archive ../luma-pin-*.tar.gz` from the
+> operator folder. Then choose **Check again**.
 >
 > **If the Pin shows a lock screen after restarting:** unlock it with the
-> passcode it had before Luma and leave it on the cable. Center continues.
+> passcode it had before Luma and leave it on the cable. If the page shows
+> **Unlock your Pin**, choose **Check again** once it is unlocked.
 
 ## Stage 4: Required services
 
@@ -238,9 +273,11 @@ the Pin's clock.*
 
 1. Read the stage.
 
-   You see: green if you completed Part H of the server guide. Otherwise it
-   links to **Settings → Assistant & voice**. Fill in the fields marked
-   **Needs setup**, choose **Test** and **Save changes**, and come back.
+   You see: green if you completed Part H of the server guide. Otherwise
+   choose **Open Assistant & voice**, which opens **Settings → Assistant &
+   voice**. Fill in the fields marked **Needs setup**, choose **Test** and
+   **Save changes**, then choose **Open Guided setup** at the bottom of the
+   page.
 
 Weather, nearby places, music, and food logging are optional. You can add
 them later in **Settings → Assistant & voice** or **Settings → Music**.
@@ -251,32 +288,39 @@ them later in **Settings → Assistant & voice** or **Settings → Music**.
 
 1. **Decision:** does this Pin still need its own first setup? That is the
    case if it never went through Humane's original setup, or if it was reset.
-   If so, first choose four digits in **Settings → Passcode & password**.
+   If so, choose **Set your Pin passcode** first. It opens
+   **Settings → Passcode & password**. Under **Ai Pin passcode**, choose
+   **Set passcode**, type four digits twice, and choose **Save passcode**.
    Cosmos immediately turns them into a password file it cannot read back, so
    stage 6 asks you to type them once more. A Pin that already finished
    Humane's setup skips this, and Guided setup says so.
 
    You see: the stage shows **Set your Pin passcode** while this is missing.
 
-2. Choose **Open Provisioning**. The page is **Settings → Advanced → Connect
-   to your server**. Keep the Pin on the cable. If asked, choose **Connect
-   over USB** and select the same Pin.
+2. Choose **Open Provisioning**. The page is headed **Connect your Pin**. In
+   the menu it is **Settings → Advanced → Connect to your server**. Keep the
+   Pin on the cable. If the page shows **Connect over USB**, choose it and
+   select the same Pin.
 
 3. Choose **Connect this Pin to Cosmos**.
 
-   You see: Center reads the hardware ID and pairs it with your signed-in
-   account. It creates the Pin's one-time identity, installs the server
-   address and trust roots, and verifies the activation on that exact device.
+   You see: **Connecting to Cosmos…**. Center reads the hardware ID and pairs
+   it with your signed-in account. It creates the Pin's one-time identity,
+   installs the server address and trust roots, and verifies the activation
+   on that exact device. Then the page shows **Connected to Cosmos** and
+   **Remote access is ready**.
 
-4. Go back to **Guided setup**.
+4. Choose **Open Guided setup** lower on the page.
 
    You see: stage 5 green. If it offers **Turn on remote access**, choose it,
    so Center can reach this Pin later without the cable.
 
-> **If it says "USB is connected, but Luma isn't responding yet":** keep the
-> Pin unlocked and connected. Center keeps trying, and **Check connection**
-> retries at once. **Retry remote access** keeps the identity already
-> installed on the Pin.
+> **If Connect your Pin says "USB is connected, but Luma isn't responding
+> yet":** keep the Pin unlocked and connected, then choose **Check
+> connection**. If Luma still doesn't answer, **Install or repair Luma**
+> opens the installer. If the page shows **Remote access pending**, choose
+> **Retry remote access**. It keeps the identity already installed on the
+> Pin.
 
 ## Stage 6: Pin passcode
 
@@ -312,7 +356,8 @@ to your touch.*
 
 2. Choose **Confirm microphone, speaker & gesture**.
 
-   You see: **Your Pin is ready.** All seven stages are green.
+   You see: **Your Pin is ready.** and **7 of 7 steps complete**. All seven
+   stages are green.
 
 The Pin stores that confirmation itself, tied to its serial, the installed
 release, and your server. A new release or a new server asks for it again.

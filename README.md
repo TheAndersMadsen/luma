@@ -260,21 +260,23 @@ You need:
 - [ ] The Pin charged, switched on, unlocked, and finished booting.
 - [ ] Your Wi-Fi name and password, unless the Pin has a working mobile line.
 
-Place the Pin on the interposer, open **Center → Settings → Set up a Pin**, and
-choose **Connect over USB**. Continue only when the serial Center shows is the
+Place the Pin on the interposer and open **Guided setup**: in Center, choose
+**Settings → Set up a Pin**, or **Settings → My Ai Pin → Open guided setup**.
+Then choose **Connect over USB**. Continue only when the serial Center shows is the
 one on your Pin. Linux USB permissions and other details are in
 [docs/connect-a-pin.md](docs/connect-a-pin.md).
 
 ### 2. Follow Guided setup
 
-Guided setup has seven stages. Each turns green only after Center has checked
-it on the Pin or your server, and **Check again** reads everything again.
+Guided setup has seven stages and counts them (**0 of 7 steps complete**).
+Each turns green only after Center has checked it on the Pin or your server,
+and **Check again** reads everything again.
 
 | Stage | What happens |
 | --- | --- |
 | 1. **Connect your Pin.** | You pick the Pin in the browser's USB prompt. |
 | 2. **Network & time.** | The Pin joins Wi-Fi, and Center fixes its clock if needed. |
-| 3. **Install Luma.** | Center installs the five Luma apps. Keep the tab open and the cable in while the Pin restarts. |
+| 3. **Install Luma.** | **Open installer**, then **Install Luma VERSION**, installs the five Luma apps. Keep the tab open and the cable in while the Pin restarts. |
 | 4. **Required services.** | Center checks the assistant and speech are ready. |
 | 5. **Connect to your Luma.** | You choose a four-digit passcode, and the Pin is paired with your server. |
 | 6. **Pin passcode.** | You enter the same four digits once more, and they go straight to the Pin. |
@@ -290,7 +292,9 @@ it on the Pin or your server, and **Check again** reads everything again.
   server's certificates look invalid, so Center checks the clock once the Pin
   is online. Without a cable, **Wi-Fi QR code** (`/wifi`) makes a code the Pin
   can scan.
-- **Install Luma.** Center reconnects to the same serial after each restart.
+- **Install Luma.** On a new Pin the confirmation is titled **Recover this
+  Pin?** and its button is **Start recovery**, because the Pin has no Luma
+  installer yet. Center reconnects to the same serial after each restart.
   Never pick a different device to continue. If your server has no Pin release
   yet, this stage tells you to run `./luma pin release acquire --archive` with
   the Pin archive from your release files.
@@ -309,14 +313,15 @@ Set your Pin passcode before this step. After the Pin connects to your Luma,
 Guided setup asks you to re-enter those digits once and hands them directly to
 the Pin over USB. Center never sends that copy to the server or stores it.
 
-1. Keep the Pin connected over USB and open **Center → Settings → Advanced →
-   Connect to your server**. If needed, choose **Connect over USB** and select
-   the same Pin.
+1. Keep the Pin connected over USB and choose **Open Provisioning** in stage 5
+   (or open **Settings → Advanced → Connect to your server**). The page is
+   headed **Connect your Pin**. If needed, choose **Connect over USB** and
+   select the same Pin.
 2. Choose **Connect this Pin to Cosmos**. Center reads the Pin's hardware ID,
    pairs it with your account, creates its one-time identity, installs the
    Cosmos address and trust roots, and checks the whole activation on that
    exact Pin.
-3. Return to **Guided setup**, enter the same four digits under **Pin
+3. Choose **Open Guided setup**, enter the same four digits under **Pin
    passcode**, and choose **Finish setup on this Pin**. Then ask the Pin one
    real question and choose **Confirm microphone, speaker & gesture**.
 
@@ -331,8 +336,8 @@ confirm again.
   **Guided setup**. If its pairing was removed, choose **Pair this Pin**, then
   **Turn on remote access**.
 - **If USB connects but Luma stops answering,** Center tries to restart Device
-  Services. Keep the Pin connected and unlocked, and use **Check connection**
-  to retry.
+  Services. Keep the Pin connected and unlocked, and choose **Check
+  connection** on **Connect your Pin** to retry.
 - **Mobile lines:** the Pin rechecks its LTE settings at boot and when the SIM
   changes. If the carrier doesn't publish the phone number, Cellular Settings
   says so instead of making one up.
