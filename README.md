@@ -36,7 +36,7 @@ humane.center in the browser.
 
 ```mermaid
 flowchart LR
-    Pin["Your Ai Pin"] -->|voice, photos, music| Cosmos
+    Pin["Your Ai Pin<br/>voice, photos, music"] --> Cosmos
     You["You, in a browser"] --> Center
     subgraph Server["Your server"]
         Center["Center<br/>your humane.center"] --> Cosmos["Cosmos<br/>the Pin's cloud"]
