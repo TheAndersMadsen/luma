@@ -119,6 +119,15 @@ retyping one keeps it.
 - **By voice.** While at least one server is set up, the assistant has a
   built-in `manage_tool_servers` tool that lists the servers and switches one on
   or off by name ("turn on the home tools").
+- **Sign-in instead of a header.** A server that asks for an OAuth sign-in
+  (the MCP authorization flow, revision 2025-06-18) shows Sign in on its card.
+  Cosmos finds where the server signs in, registers itself there, and sends
+  your browser to the provider; when you come back it keeps the tokens in
+  `mcp-oauth.json` beside `mcp.json` and renews them on its own. Center never
+  sees them. If a renewal is refused, the card asks you to sign in again. This
+  needs Center on an `https` address and a provider that allows dynamic client
+  registration. A server with an `Authorization` header of its own keeps using
+  that header.
 
 Tools are named `mcp_<server>_<tool>`. At most 40 are offered at once.
 Settings live in `mcp.json` in the Cosmos state directory, separate from the

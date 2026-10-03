@@ -11,6 +11,7 @@ type McpStatus =
   | "untested"
   | "connected"
   | "unauthorized"
+  | "sign_in_required"
   | "unreachable"
   | "timed_out"
   | "invalid_response";
@@ -33,6 +34,8 @@ type McpServer = {
   allow_actions: boolean;
   allow_when_locked: boolean;
   status: McpStatus;
+  /** Whether you are signed in to it through its own sign-in. Cosmos keeps the tokens. */
+  signed_in: boolean;
   checked_at_ms: number | null;
   tools: McpTool[];
 };
@@ -48,6 +51,7 @@ const STATUSES: ReadonlySet<string> = new Set([
   "untested",
   "connected",
   "unauthorized",
+  "sign_in_required",
   "unreachable",
   "timed_out",
   "invalid_response",
@@ -107,6 +111,7 @@ function parseView(value: unknown): McpView | null {
       allow_actions: server.allow_actions,
       allow_when_locked: server.allow_when_locked,
       status: server.status as McpStatus,
+      signed_in: server.signed_in === true,
       checked_at_ms: typeof server.checked_at_ms === "number" ? server.checked_at_ms : null,
       tools,
     });
@@ -131,6 +136,8 @@ function summary(server: McpServer): { tone: StatusTone; label: string; text: st
       };
     case "unauthorized":
       return { tone: "absent", label: "Refused", text: "The server refused the request. Check its headers below, then Save." };
+    case "sign_in_required":
+      return { tone: "absent", label: "Sign-in needed", text: "The server asks you to sign in, or your sign-in has run out. Choose Sign in." };
     case "unreachable":
       return { tone: "absent", label: "Unreachable", text: "The server could not be reached the last time Cosmos tried. Check the URL, then Test." };
     case "timed_out":
@@ -146,6 +153,45 @@ async function readError(response: Response): Promise<Message> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
   const text = typeof body?.error === "string" ? body.error : "That did not work. Try again.";
   return { tone: "error", text, signIn: response.status === 401 };
+}
+
+/**
+ * Whether to offer Sign in: the server refused the last request, you are not
+ * signed in, and no Authorization header of your own is saved for it.
+ */
+function offersSignIn(server: McpServer): boolean {
+  return (
+    !server.signed_in &&
+    (server.status === "sign_in_required" || server.status === "unauthorized") &&
+    !server.headers.some((header) => header.toLowerCase() === "authorization")
+  );
+}
+
+/** The provider's sign-in page, when it is a web address this browser may open. */
+function signInAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A tool server's sign-in ends on Center's callback, which sends the owner
+ * back here with `?mcp=signed-in` or `?mcp=sign-in-failed`. Read it once and
+ * drop it from the address bar so a reload does not repeat the notice.
+ */
+function takeSignInReturn(): Message | null {
+  const url = new URL(window.location.href);
+  const outcome = url.searchParams.get("mcp");
+  if (outcome !== "signed-in" && outcome !== "sign-in-failed") return null;
+  url.searchParams.delete("mcp");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  return outcome === "signed-in"
+    ? { tone: "ok", text: "You are signed in to that tool server." }
+    : { tone: "error", text: "The sign-in did not finish. Choose Sign in to try again." };
 }
 
 let nextRowKey = 1;
@@ -303,7 +349,13 @@ export function McpServersCard({ operator }: { operator: boolean }) {
 
   useEffect(() => {
     if (!operator) return;
-    void load().catch(() => setMessage({ tone: "error", text: "Your tool servers could not be loaded." }));
+    const returned = takeSignInReturn();
+    void load()
+      .then(() => {
+        // Back from a tool server's sign-in: say how it ended.
+        if (returned) setMessage((current) => current ?? returned);
+      })
+      .catch(() => setMessage({ tone: "error", text: "Your tool servers could not be loaded." }));
   }, [load, operator]);
 
   /** One change: send it, then show the list Cosmos answers with. */
@@ -350,6 +402,30 @@ export function McpServersCard({ operator }: { operator: boolean }) {
     [change],
   );
 
+  /** Ask Cosmos where this server signs in, then send this browser there. */
+  const signIn = useCallback(async (server: McpServer) => {
+    setBusy(`signin-${server.id}`);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/mcp/${server.id}/oauth`, { method: "POST" });
+      if (!response.ok) {
+        setMessage(await readError(response));
+        return;
+      }
+      const body = (await response.json().catch(() => null)) as { authorization_url?: unknown } | null;
+      const address = signInAddress(body?.authorization_url);
+      if (!address) {
+        setMessage({ tone: "error", text: "Cosmos answered with a sign-in address this page cannot open." });
+        return;
+      }
+      window.location.assign(address);
+    } catch {
+      setMessage({ tone: "error", text: "Center could not reach your server. Try again." });
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
   if (!operator) return null;
 
   return (
@@ -395,6 +471,7 @@ export function McpServersCard({ operator }: { operator: boolean }) {
               </summary>
               <p className={styles.providerNote} data-testid={`mcp-status-${server.id}`} data-status={server.status}>
                 <span>{state.text}</span>
+                {server.signed_in ? <span>Signed in. Your server renews the sign-in on its own.</span> : null}
               </p>
               <div className={styles.settingRow}>
                 <span>
@@ -500,6 +577,31 @@ export function McpServersCard({ operator }: { operator: boolean }) {
                 >
                   {busy === `test-${server.id}` ? "Testing…" : "Test"}
                 </button>
+                {server.signed_in ? (
+                  <button
+                    className={styles.inlineButton}
+                    type="button"
+                    aria-label={`Sign out of ${server.name}`}
+                    onClick={() =>
+                      void change(
+                        `signout-${server.id}`,
+                        () => fetch(`/api/admin/mcp/${server.id}/oauth`, { method: "DELETE" }),
+                        `You are signed out of ${server.name}.`,
+                      )
+                    }
+                  >
+                    {busy === `signout-${server.id}` ? "Signing out…" : "Sign out"}
+                  </button>
+                ) : offersSignIn(server) ? (
+                  <button
+                    className={styles.inlineButton}
+                    type="button"
+                    aria-label={`Sign in to ${server.name}`}
+                    onClick={() => void signIn(server)}
+                  >
+                    {busy === `signin-${server.id}` ? "Opening…" : "Sign in"}
+                  </button>
+                ) : null}
               </div>
             </details>
           );
