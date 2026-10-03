@@ -7,15 +7,16 @@
 > no Humane source code or binaries.
 
 Luma has three parts: Cosmos (the Rust cloud the Pin calls), Center (the Next.js
-web control panel), and the Pin companion apps and runtime. Read the README for
-the overview and quick start, AGENTS.md for the contributor and agent rules, and
-the docs below for depth. Names from the original system (the `humane.*` gRPC
-packages, Android package IDs) appear only as interoperability identifiers.
+web control panel), and the Pin companion apps and runtime. The README has the
+overview and quick start. AGENTS.md has the rules for contributors and coding
+agents, and the docs below go into detail. Names from the original system (the
+`humane.*` gRPC packages and Android package IDs) appear only as
+interoperability identifiers.
 
 ## Start here
 
 - [README](README.md): overview, quick start, and the documentation map
-- [AGENTS.md](AGENTS.md): contributor and AI-agent rules, architecture, commands
+- [AGENTS.md](AGENTS.md): rules for contributors and coding agents, architecture, commands
 - [CONTRIBUTING](CONTRIBUTING.md): set up a checkout and open a pull request
 
 ## Reference

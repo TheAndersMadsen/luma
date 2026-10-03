@@ -1,11 +1,11 @@
 # Luma documentation
 
-Reference and design docs for Luma. The [main README](../README.md) is the
-overview and quick start, and the [guides](../guides/) are step-by-step how-tos.
+Reference and design docs for Luma. The [main README](../README.md) has the
+overview and quick start. The [guides](../guides/) are step-by-step how-tos.
 
-These docs are organized loosely by the [Diátaxis](https://diataxis.fr/) split:
-reference (what the system is), explanation (why it is that way), and how-to
-guides (do a task).
+The docs loosely follow the [Diátaxis](https://diataxis.fr/) split. Reference
+pages say what the system is, explanation pages say why it works that way, and
+how-to guides walk through one task.
 
 ## Reference
 

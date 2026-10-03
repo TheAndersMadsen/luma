@@ -3,40 +3,68 @@
 > Part of the [Luma docs](./README.md). See the [main README](../README.md) for the overview and quick start.
 
 
-**Is this Humane?**
-No. Luma is an independent community project, not affiliated with or endorsed
-by Humane or HP. “Humane” and “Ai Pin” belong to their owners.
+<details>
+<summary><strong>Is this Humane?</strong></summary>
 
-**Why does my Pin need Penumbra?**
-A stock Pin runs only signed, Humane-approved software. The
-[Penumbra](https://github.com/PenumbraOS) device foundation is what lets Luma's
-Device Services and Compatibility Layer load, and the USB interposer is how you
-reach the Pin's service contacts to install them.
+No. Luma is an independent community project. It is not affiliated with or
+endorsed by Humane or HP. “Humane” and “Ai Pin” belong to their owners.
 
-**What happens when my server is offline?**
-The Compatibility Layer fails closed. Stock cloud calls route only to your
-activated Cosmos server, so with the server unreachable the Pin does not
-silently fall back to anyone else's cloud.
+</details>
 
-**What does it cost?**
+<details>
+<summary><strong>Why does my Pin need Penumbra?</strong></summary>
+
+A stock Pin runs only signed, Humane-approved software.
+[Penumbra](https://github.com/PenumbraOS) is the device foundation that lets
+Luma's Device Services and Compatibility Layer load. You install them through
+the USB interposer, which reaches the Pin's service contacts.
+
+</details>
+
+<details>
+<summary><strong>What happens when my server is offline?</strong></summary>
+
+The Pin does not fall back to anyone else's cloud. The Compatibility Layer
+fails closed: stock cloud calls go only to your activated Cosmos server, so
+they fail while that server is unreachable.
+
+</details>
+
+<details>
+<summary><strong>What does it cost?</strong></summary>
+
 The software is free. You pay for your own server and for any providers you
 connect, under your own accounts.
 
-**Can I use my existing accounts?**
+</details>
+
+<details>
+<summary><strong>Can I use my existing accounts?</strong></summary>
+
 Yes. Bring an OpenAI-compatible API or Codex subscription for the assistant,
-SearXNG or SerpAPI for search, Azure Speech for the voice, and optionally
+SearXNG or SerpAPI for search, and Azure Speech for the voice. Optionally add
 Google Maps, Pirate Weather, Wolfram, Perplexity, Open Food Facts, Rabbit OS3,
 and the music providers.
 
-**Which servers are supported?**
+</details>
+
+<details>
+<summary><strong>Which servers are supported?</strong></summary>
+
 64-bit Ubuntu 24.04 on `amd64/x86_64` or `arm64/aarch64`, with at least 8 GiB
 of free disk. Every project image in a release is published as a
 multi-platform, digest-pinned manifest.
 
-**Do I have to modify the Pin?**
+</details>
+
+<details>
+<summary><strong>Do I have to modify the Pin?</strong></summary>
+
 No soldering. You need the USB interposer described in the
-[interposer guide](https://github.com/PenumbraOS/interposer); installation and
+[interposer guide](https://github.com/PenumbraOS/interposer). Installation and
 activation happen over USB from Center.
+
+</details>
 
 
 ## Can an AI coding assistant install it for me?
@@ -44,7 +72,7 @@ activation happen over USB from Center.
 Yes. If you use Claude Code, Codex, or a similar tool, give it the prompt below.
 It states the result you want and the rules to follow, and leaves the commands
 to the tool. Copy the release folder to the server first, fill in the bracketed
-values, and run it there:
+values, and run the tool there.
 
 <details>
 <summary><strong>Agent setup prompt</strong></summary>

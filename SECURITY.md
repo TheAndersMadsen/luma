@@ -1,9 +1,9 @@
 # Security policy
 
-Luma runs your own Ai Pin cloud: the server holds your captures, notes,
+Luma runs your own Ai Pin cloud. The server holds your captures, notes,
 contacts, provider keys, and the trust roots your Pin relies on. A security
-problem in Luma is a problem in every server that runs it, so please report
-one privately.
+problem in Luma affects every server that runs it, so please report it
+privately.
 
 ## Report a vulnerability
 
@@ -12,11 +12,13 @@ Use GitHub's private vulnerability reporting on the repository:
 <https://github.com/TheAndersMadsen/luma/security/advisories/new>. The
 report is visible only to you and the maintainer.
 
+> [!NOTE]
 > The repository owner has to enable **Private vulnerability reporting** once,
-> under **Settings → Code security**, for that page to accept reports. If the
+> under **Settings → Code security**, before that page accepts reports. If the
 > page says reporting is not enabled, open an issue that only asks
 > [@TheAndersMadsen](https://github.com/TheAndersMadsen) for a private
-> channel, without details of the problem (GitHub has no private messages).
+> channel. Leave out the details of the problem. GitHub has no private
+> messages.
 
 Do not open a public issue, pull request, or discussion for a security
 problem, and do not post it in chat.
@@ -38,13 +40,13 @@ diagnostic file if logs help.
 ## What to expect
 
 - An acknowledgement within seven days, and a first assessment within
-  fourteen. Luma is maintained by one person in their spare time, so please
-  allow that.
-- Coordinated disclosure: the fix ships in a signed release, the README's
-  update section tells operators how to apply it, and the advisory is
-  published afterwards with credit to you unless you prefer otherwise.
+  fourteen. One person maintains Luma in their spare time, so please allow
+  for that.
+- Coordinated disclosure. The fix ships in a signed release, and the README's
+  update section tells operators how to apply it. The advisory is published
+  afterwards, with credit to you unless you prefer otherwise.
 - Only the newest release is supported. Production installs a
-  checksum-verified operator archive; there is no backport branch.
+  checksum-verified operator archive. There is no backport branch.
 
 ## In scope
 
@@ -64,8 +66,8 @@ diagnostic file if logs help.
 ## Out of scope
 
 - Vulnerabilities in the stock Humane software, Android, or the Pin
-  hardware itself, including the PenumbraOS device foundation; report those
-  to the respective projects.
+  hardware itself, including the PenumbraOS device foundation. Report those
+  to the projects that own them.
 - Problems in third-party providers (OpenAI, OpenRouter, Azure, Google,
   Spotify, YouTube, TIDAL, Rabbit, and so on) or in Docker, Traefik, Envoy,
   Keycloak, PostgreSQL, and other upstream images, unless Luma configures
@@ -84,19 +86,20 @@ diagnostic file if logs help.
 - Center delegates ADB authorization to PenumbraOS's remote signing service
   (`adb.penumbraos.workers.dev` by default, proxied server-side through
   `/api/pin/adb/sign`). Luma generates, stores, and ships no ADB private key
-  or certificate; Center's local ADB key generation is disabled, so the
+  or certificate. Center's local ADB key generation is disabled, so the
   remote signer is the only way Center is authorized over WebUSB. The CLI's
   device commands (`./luma pin install`, `pin activate`, `stock decompile
   --from-device`) use the computer's own `adb` and whatever authorization it
   already holds.
-- The Compatibility Layer fails closed: before activation, or with the
-  server unreachable, the Pin talks to no other cloud.
+- The Compatibility Layer fails closed. Before activation, or while the
+  server is unreachable, the Pin talks to no other cloud.
 - Secrets enter through `./luma config set NAME --stdin` and Center's
-  settings, never argv, logs, or the browser; a configured secret is never
+  settings, never argv, logs, or the browser. A configured secret is never
   returned to the browser.
 - Luma collects no telemetry. Cosmos's metric labels are bounded names such
-  as service, method, route, transport, tool, stage, and outcome; nothing a
-  wearer said, captured, or stored, and no account or device identifier.
+  as service, method, route, transport, tool, stage, and outcome. They never
+  hold anything a wearer said, captured, or stored, or any account or device
+  identifier.
 
 See [docs/privacy.md](docs/privacy.md) ("App privacy") and
 [docs/architecture.md](docs/architecture.md) for the trust boundaries these

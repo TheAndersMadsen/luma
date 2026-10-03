@@ -62,7 +62,7 @@ Pick the path that matches what you have:
 
 | You have | Start here | Time |
 | --- | --- | --- |
-| Nothing yet | [Server from nothing](guides/server-from-nothing.md): rent a server, get a free domain, install Luma | About 1 hour |
+| Nothing yet | [Server from nothing](guides/server-from-nothing.md): rent a server, get a free domain, install Luma | About 1.5 hours |
 | An Ubuntu 24.04 server and a domain | The steps below | About 30 minutes |
 | A server running Umbrel OS | [Get Luma](#get-luma) | Varies |
 

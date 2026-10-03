@@ -15,53 +15,54 @@ flowchart LR
 | --- | --- | --- |
 | Center | Your server | Your humane.center: sign-in, settings, provider and music connections, the Pin installer, and provisioning. It reads all cloud data from Cosmos and keeps none |
 | Cosmos | Your server | Humane's cloud: the stock `humane.*` services the Pin calls, the humane.center web API Center reads, the assistant, enrollment, and all storage |
-| Device Services | Ai Pin | Device-local settings, captures, diagnostics, and native action bridges; it holds no provider key |
+| Device Services | Ai Pin | Device-local settings, captures, diagnostics, and native action bridges. It holds no provider key |
 | Compatibility Layer | Ai Pin | Adapts the stock apps to the activated Cosmos server and fails closed before activation |
 
 Search, maps, weather, language-model work, transcription, and speech synthesis
-run in Cosmos. The Pin keeps microphone and sensor capture, cached location,
-native actions, maps presentation, and audio playback close to the hardware.
+run in Cosmos. The Pin keeps the work that needs the hardware: microphone and
+sensor capture, cached location, native actions, maps presentation, and audio
+playback.
 
 ### Code and data ownership
 
 | Concern | Owner and boundary |
 | --- | --- |
-| Cloud records, filtering, counts, provider credentials | Cosmos's `Store` and PostgreSQL. Center forwards the wearer's identity; it has no cloud database |
+| Cloud records, filtering, counts, provider credentials | Cosmos's `Store` and PostgreSQL. Center forwards the wearer's identity and has no cloud database |
 | Sign-in and roles | Keycloak and Center's server auth code. Browser controls never grant permission |
-| Search, filters, page selection | The URL; refresh and browser history preserve navigation |
+| Search, filters, page selection | The URL, so refresh and browser history keep your place |
 | Unsaved edits and cached reads | Component state and React Query. A cache is a view of the server's answer |
-| USB/Iroh connection and device settings | The current Pin session and Device Services; separate from cloud data |
-| Provider quirks | Cosmos `backends/*` and Center's music adapters; application callers receive normalized results |
+| USB/Iroh connection and device settings | The current Pin session and Device Services, kept apart from cloud data |
+| Provider quirks | Cosmos `backends/*` and Center's music adapters. Callers get normalized results |
 
 A Center request goes from the page to an API route, then to its owning
 `center/src/server/domain/*` module and the Cosmos transport in `server/cosmos.ts`.
-Cosmos authenticates the caller, applies domain policy, and accesses the store.
-For example, `/notes?page=2&query=Milk` becomes one account-scoped Cosmos note
-query; Center preserves the returned page and renders it. Stock gRPC calls and
-the recovered web API remain distinct compatibility boundaries.
+Cosmos authenticates the caller, applies domain policy, and reads or writes the
+store. For example, `/notes?page=2&query=Milk` becomes one account-scoped Cosmos
+note query. Center keeps the page Cosmos returns and renders it. Stock gRPC calls
+and the recovered web API stay separate compatibility boundaries.
 
 Center's browser-safe response schemas live by feature in `src/lib/contracts/`.
 Zod Mini supplies their validation and inferred TypeScript types. Cosmos
-transports return `unknown`; each domain validates its response before mapping
+transports return `unknown`, and each domain validates its response before mapping
 it. Browser queries validate again at their own network boundary. A malformed
 success response cannot become a saved note or a connected service, and one
-unreadable dashboard section leaves healthy sections available. Sealed records,
-optional stock fields, and additive page metadata remain supported.
+unreadable dashboard section leaves the healthy sections working. Sealed records,
+optional stock fields, and additive page metadata are still supported.
 
 Provider credentials are validated only on the server, in
-`src/server/musicCredentials.ts`; browser contracts contain public account
-status. The music adapters turn provider responses into the same catalog
-shape, retain bounded requests and token-rotation coordination, and never put
-rejected payloads into validation errors. Type-only imports are enforced by
-TypeScript; the Center checks reject transitive browser imports of server code.
+`src/server/musicCredentials.ts`. Browser contracts hold only public account
+status. The music adapters turn every provider's responses into the same catalog
+shape. They keep requests bounded, coordinate token rotation, and never put
+rejected payloads into validation errors. TypeScript enforces type-only imports,
+and the Center checks reject transitive browser imports of server code.
 Transport failures carry a typed status, and domain refusals carry an explicit
-reason. Changing displayed wording never controls error handling.
+reason. Error handling never depends on the displayed wording.
 
 The browser tab's `src/lib/pin-session/` owns USB. Each connection change
 invalidates its derived transports and clients, including requests still in
-flight. `PinDeviceProvider` owns the displayed device and service state;
-`src/lib/pin-device/events.ts` owns the USB event reader, bounded parsing, stall
-deadline and retries. Leaving a view closes its subscription without releasing
+flight. `PinDeviceProvider` owns the displayed device and service state, and
+`src/lib/pin-device/events.ts` owns the USB event reader, bounded parsing, the
+stall deadline, and retries. Leaving a view closes its subscription without releasing
 the shared USB session. A late probe from a previous Pin cannot change the
 current Pin's state.
 
@@ -89,11 +90,11 @@ edge (`pin`), and Prometheus with Grafana on `127.0.0.1:13001` by default
 Luma's checked-in stock-compatibility contracts show why the device needs a
 compatibility layer. The stock apps are signed together and call exact Android
 packages, service classes, `humane.*` messages, cloud names, and device-identity
-flows. Tidying any of those stock identifiers can turn a working call into a
+flows. Renaming any of those stock identifiers can turn a working call into a
 silent no-op. Repacking the original apps or rewriting the system image would
-also change much more of the device than Luma needs.
+change much more of the device than Luma needs.
 
-Luma therefore leaves the stock experiences in place. At startup, the
+So Luma leaves the stock experiences in place. At startup, the
 Compatibility Loader applies an in-memory configuration only to known stock
 packages. The Compatibility Layer can then adapt their original service calls
 without changing the apps on disk. A normal request follows this path:
@@ -108,7 +109,7 @@ without changing the apps on disk. A normal request follows this path:
 5. Device Services handles local work such as captures, settings, playback, and
    native actions, so the original Pin experience presents the result.
 
-Three links have deliberately separate jobs:
+The three links are kept separate on purpose:
 
 | Link | Purpose | Compatibility rule |
 | --- | --- | --- |
@@ -117,14 +118,14 @@ Three links have deliberately separate jobs:
 | Remote management link | Center installation, activation, status, and recovery through the current browser connection | Bind every device change to the current browser session, exact connected serial, and reviewed plan |
 
 If an optional in-app adapter cannot apply, the stock app must still start.
-Remote routing has the opposite boundary: before activation, with missing
-trust, or for an unknown destination, it stops instead of falling back to the
-retired cloud. Device-side compatibility is reapplied at startup and does not
+Remote routing works the other way. Before activation, with missing trust, or
+for an unknown destination, it stops instead of falling back to the retired
+cloud. Device-side compatibility is reapplied at startup and does not
 rewrite verified firmware.
 
 This section is the sanitized, non-identifying digest of the local device-backup
 review. Raw backup material and device reports stay outside Git, and encrypted
 userdata was not used. For a fresh checkout, the Tier-A registry, wire contracts,
-and equivalence tests are the auditable repository authority; any shape not
-pinned there still requires an exact-device check.
+and equivalence tests are the auditable repository authority. Any shape not
+pinned there still needs a check on an exact device.
 
