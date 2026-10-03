@@ -75,7 +75,7 @@ bash ./bootstrap --tools-only
 </details>
 
 <details>
-<summary><code>Could not get lock /var/lib/dpkg/lock-frontend</code>, then <code>What failed: A required command stopped with exit status 100.</code></summary>
+<summary><code>Could not get lock /var/lib/dpkg/lock-frontend</code>, then <code>stopped with exit status 100</code></summary>
 
 Cause: Ubuntu installs its own security updates in the background for the
 first minutes after a new server starts. While it does, no other program can
@@ -213,7 +213,7 @@ Reconnect over SSH so this session picks up Docker group membership.
 </details>
 
 <details>
-<summary><code>Docker is installed, but this user cannot reach it. Start a new login session and rerun.</code></summary>
+<summary><code>Docker is installed, but this user cannot use it yet.</code></summary>
 
 Cause: Docker is not running, or your user is not in Docker's group yet.
 
@@ -690,11 +690,11 @@ Fix: run `./luma verify production`, then open
 </details>
 
 <details>
-<summary><code>onboard production</code> stopped with <code>Onboarding stopped during ...</code>, or the installer says <code>Operator onboarding did not finish.</code></summary>
+<summary><code>onboard production</code> stopped with <code>Onboarding stopped during ...</code>, or the installer says <code>Onboarding did not finish.</code></summary>
 
 Cause: one of its five stages failed. The message names the reason and a
 `Recovery check` command. The one-line installer runs onboarding too, so its
-`Operator onboarding did not finish.` points at the onboarding message just
+`Onboarding did not finish.` points at the onboarding message just
 above it.
 
 A `Reason:` such as `deploy.sh exited with status 1` or

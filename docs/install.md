@@ -121,7 +121,7 @@ grouped into six numbered steps. Each question offers the saved value as its
 default. In order, setup asks for:
 
 - The domain, at
-  `[1/6] Public Center domain (blank or "duckdns" for a free DuckDNS name):`.
+  `[1/8] Public Center domain (blank or "duckdns" for a free DuckDNS name):`.
   If you leave it blank or type `duckdns`, it asks instead for:
   - the DuckDNS subdomain
   - the server's public IPv4 (filled in for you when the server's own
@@ -142,7 +142,7 @@ default. In order, setup asks for:
 - The Luma Center this server asks for newer releases (its update source).
 - Whether to install updates automatically at night.
 
-Then it shows `[6/6] Review` and asks
+Then it shows `[8/8] Review` and asks
 `Write this production configuration? [y/N]`.
 
 ### 1. Prepare the server

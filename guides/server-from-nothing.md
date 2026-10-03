@@ -446,14 +446,14 @@ It asks you before each step that changes the server.
 
    | Prompt | Type |
    | --- | --- |
-   | `[1/6] Public Center domain (blank or "duckdns" for a free DuckDNS name):` | `YOUR_DOMAIN` from Part C, for example `center.yourdomain.com`. For a DuckDNS name whose record you did not set by hand, type `duckdns`. It then asks `DuckDNS subdomain (NAME in NAME.duckdns.org):` (type `mylumapin`), `Server public IPv4 for mylumapin.duckdns.org [SERVER_IP]:` (press Enter), and `DuckDNS token (not shown, not stored):` (paste the token from the DuckDNS page). It prints `mylumapin.duckdns.org now points at SERVER_IP.` |
-   | `[2/6] TLS certificate email:` | Your email. Let's Encrypt sends certificate notices here. |
-   | `[3/6] First Center owner email:` | Your email again. This becomes your Center sign-in. |
-   | `[4/6] Features (pin, search, spotify, observability; or none) [pin,search,spotify]:` | Press Enter. `pin` is the Pin's connection, `search` is built-in web search, and `spotify` is music. |
-   | `[5/6] Server public IPv4 for the Pin [SERVER_IP]:` | Press Enter. Setup found the address. If no default is shown, type `SERVER_IP`. |
-   | `Where should this server check for updates? [https://...]:` | Press Enter. The address shown is the Luma Center this server asks for newer releases (its [update source](glossary.md)). |
-   | `Install updates automatically at night? [Y/n]:` | Press Enter for yes. The server then installs newer releases by itself between 03:00 and 05:00. It takes a backup first and puts the old release back if anything fails ([Update Luma](update.md)). Type `n` to install them yourself. |
-   | `[6/6] Review` | Read the summary (`Center: https://...`, `Certificate email`, `First owner`, `Features`, `Pin address`, `Updates: from https://..., installed automatically at night`). At `Write this production configuration? [y/N]:` type `y`. |
+   | `[1/8] Public Center domain (blank or "duckdns" for a free DuckDNS name):` | `YOUR_DOMAIN` from Part C, for example `center.yourdomain.com`. For a DuckDNS name whose record you did not set by hand, type `duckdns`. It then asks `DuckDNS subdomain (NAME in NAME.duckdns.org):` (type `mylumapin`), `Server public IPv4 for mylumapin.duckdns.org [SERVER_IP]:` (press Enter), and `DuckDNS token (not shown, not stored):` (paste the token from the DuckDNS page). It prints `mylumapin.duckdns.org now points at SERVER_IP.` |
+   | `[2/8] TLS certificate email:` | Your email. Let's Encrypt sends certificate notices here. |
+   | `[3/8] First Center owner email:` | Your email again. This becomes your Center sign-in. |
+   | `[4/8] Features (pin, search, spotify, observability; or none) [pin,search,spotify]:` | Press Enter. `pin` is the Pin's connection, `search` is built-in web search, and `spotify` is music. |
+   | `[5/8] Server public IPv4 for the Pin [SERVER_IP]:` | Press Enter. Setup found the address. If no default is shown, type `SERVER_IP`. |
+   | `[6/8] Where should this server check for updates? [https://...]:` | Press Enter. The address shown is the Luma Center this server asks for newer releases (its [update source](glossary.md)). |
+   | `[7/8] Install updates automatically at night? [Y/n]:` | Press Enter for yes. The server then installs newer releases by itself between 03:00 and 05:00. It takes a backup first and puts the old release back if anything fails ([Update Luma](update.md)). Type `n` to install them yourself. |
+   | `[8/8] Review` | Read the summary (`Center: https://...`, `Certificate email`, `First owner`, `Features`, `Pin address`, `Updates: from https://..., installed automatically at night`). At `Write this production configuration? [y/N]:` type `y`. |
 
    No server step needs a physical Pin. Keep the default features to prepare
    for your one Pin later.
@@ -471,7 +471,7 @@ It asks you before each step that changes the server.
      (optional profiles: pin, search, spotify).`
    - `First sign-in: /root/.config/luma/production/first-login.txt (delete it
      after you sign in).`
-   - `Generated Pin trust root: ...`
+   - `Generated a new Pin trust root: ...` (a rerun says `Kept the existing Pin trust root: ...`)
    - two update lines, `Updates: this server asks https://... for newer
      releases.` and `Automatic updates are on: ...`
    - `After deployment: https://YOUR_DOMAIN/login?next=%2Fsettings%2Fpin%2Fsetup`
@@ -505,7 +505,7 @@ It asks you before each step that changes the server.
    `[3/5] Prove the deployment plan without changing production`, each
    followed by its output. Nothing on the server changes yet.
 
-   **If it stops with `Onboarding stopped during stage 2/5 (preflight)`**,
+   **If it stops with `Onboarding stopped during stage 2/5 (server checks)`**,
    read the `Reason:` line. One common reason is that the domain does not
    resolve yet. Wait for DNS (see
    [troubleshooting](troubleshooting.md#domain-dns-and-certificates)).

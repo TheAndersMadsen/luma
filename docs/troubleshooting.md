@@ -100,7 +100,7 @@ choose a bigger plan or free space, then rerun `bash ./bootstrap --tools-only`.
 </details>
 
 <details>
-<summary><code>Could not get lock /var/lib/dpkg/lock-frontend</code> (<code>A required command stopped with exit status 100.</code>)</summary>
+<summary><code>Could not get lock /var/lib/dpkg/lock-frontend</code> (<code>stopped with exit status 100</code>)</summary>
 
 Ubuntu is installing its own updates in the background, which a new server
 does for its first minutes. Wait five to ten minutes and run the same command
@@ -373,10 +373,10 @@ Linux often stops one. Check with `free -h` and
 </details>
 
 <details>
-<summary><code>Onboarding stopped during ...</code> with <code>Reason: deploy.sh exited with status 1</code></summary>
+<summary><code>Onboarding stopped during ...</code> with <code>What failed: deploy.sh stopped with exit status 1</code></summary>
 
 The reason names only the step. The real error is printed in the lines above
-the block, and the one-line installer's `Operator onboarding did not finish.`
+the block, and the one-line installer's `Onboarding did not finish.`
 points at the same block. Fix that error, run the `Recovery check`, then the
 `Safe retry` command.
 

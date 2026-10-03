@@ -140,7 +140,7 @@ Pin later.
    for the defaults), the server's public IPv4, where to look for updates,
    and whether to install them at night (press Enter for both). Use real
    email addresses: Let's Encrypt refuses `example.com`. Check the
-   `[6/6] Review` summary, then answer `y` to `Write this production
+   `[8/8] Review` summary, then answer `y` to `Write this production
    configuration?` and to `Deploy this verified release now?`. It ends with
    `Setup complete: https://center.example.com/login?...`.
 
