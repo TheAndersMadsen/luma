@@ -320,7 +320,7 @@ test("release inputs pin the signed Pin archive and harden every image build", (
     "utf8",
   ));
   // Exact coordinates of the signed Pin bundle, built for Luma 0.3.28 and
-  // republished unchanged with 0.3.29, the release that now hosts it. Future
+  // republished unchanged since; 0.3.30 is the release that now hosts it. Future
   // server releases must preserve this verified bundle.
   assert.deepEqual(pinCoordinates, {
     "schemaVersion": 3,
@@ -328,7 +328,7 @@ test("release inputs pin the signed Pin archive and harden every image build", (
     "versionCode": 202609303,
     "signedReleaseSource": {
       "repository": "TheAndersMadsen/luma",
-      "tag": "v0.3.29",
+      "tag": "v0.3.30",
       "archive": "luma-pin-2026-09-30.3.tar.gz",
       "size": 22815615,
       "sha256": "f4eed1446fd31502d70b052f881da6481111396bc4573dd5fa84c1c879141ae7",

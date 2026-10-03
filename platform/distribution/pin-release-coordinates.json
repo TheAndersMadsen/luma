@@ -4,7 +4,7 @@
   "versionCode": 202609303,
   "signedReleaseSource": {
     "repository": "TheAndersMadsen/luma",
-    "tag": "v0.3.29",
+    "tag": "v0.3.30",
     "archive": "luma-pin-2026-09-30.3.tar.gz",
     "size": 22815615,
     "sha256": "f4eed1446fd31502d70b052f881da6481111396bc4573dd5fa84c1c879141ae7",
