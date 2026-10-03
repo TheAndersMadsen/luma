@@ -64,10 +64,9 @@ To turn them off, use `--auto-updates off`. Center still tells you about new
 releases.
 
 > **If it says `the timers start once this server runs a release in ...`:**
-> the server was installed from the five release files, so its release lives
-> in `~/luma-VERSION`. The timers arrive with its first update. Run
-> [Update now](#update-now) from that release's operator folder
-> (`./luma update production`).
+> the server's release lives outside `~/.local/share/luma/operators`, such as
+> in `~/luma-VERSION` from an older guide. The timers arrive with its first
+> update. Run [Update now](#update-now) once.
 >
 > **If it says installing the systemd timers needs root:** run the commands
 > it prints as root (`sudo -i`), once.
@@ -172,18 +171,25 @@ one your server runs.
 
    You see: five files copied to 100%.
 
-2. On the server, check and unpack it, then enter its operator folder:
+   Or download the files straight onto the server into a new folder
+   `~/luma-NEW`, with the commands in
+   [Part D](server-from-nothing.md#part-d-get-the-release-files) of Server
+   from nothing. Don't reuse an older release's folder.
+
+2. On the server, check the files, unpack the operator into Luma's own
+   folder, and enter it:
 
    ```sh
    cd ~/luma-NEW
    sha256sum --check SHA256SUMS
-   tar -xzf luma-operator-*-linux.tar.gz
-   cd luma-operator-*/
+   tar -xzf luma-operator-*-linux.tar.gz -C ~/.local/share/luma/operators
+   cd ~/.local/share/luma/operators/luma-operator-NEW/
    ```
 
    You see: `OK` after every file, and a prompt ending in
    `luma-operator-NEW#`. Every `./luma` command from now on runs from this
-   newest folder. The old folder stays on disk and is never used again.
+   newest folder. The old folder stays on disk in case you
+   [roll back](#roll-back-restore-the-backup).
 
    <details>
    <summary>Optional: check the maintainer's signature with cosign</summary>
@@ -191,7 +197,7 @@ one your server runs.
    If `cosign` is installed, run this from `~/luma-NEW`:
 
    ```sh
-   cosign verify-blob --key luma-operator-*/platform/distribution/release-signing.pub --bundle SHA256SUMS.sigstore.json --insecure-ignore-tlog SHA256SUMS
+   cosign verify-blob --key ~/.local/share/luma/operators/luma-operator-NEW/platform/distribution/release-signing.pub --bundle SHA256SUMS.sigstore.json --insecure-ignore-tlog SHA256SUMS
    ```
 
    It prints `Verified OK`, which proves the maintainer signed the checksums.
@@ -228,7 +234,7 @@ one your server runs.
 1. Stage the new release's Pin archive and carry your settings over:
 
    ```sh
-   ./luma setup production --pin-release-archive ../luma-pin-*.tar.gz
+   ./luma setup production --pin-release-archive ~/luma-NEW/luma-pin-*.tar.gz
    ```
 
    You see: `Production configuration is ready for https://YOUR_DOMAIN
@@ -288,10 +294,12 @@ If the new release does not work for you, put the server back exactly as it
 was, from the backup of Part B.
 
 A backup restores only with the release that made it. Part B made it with the
-**new** release's command, so the restore runs from the new folder
-(`~/luma-NEW`). The backup holds the configuration from before the new setup
-ran. The old release's folder, still unpacked in `~/luma-OLD`, then deploys
-it.
+**new** release's command, so the restore runs from the new operator folder.
+The backup holds the configuration from before the new setup ran. The old
+release's operator folder, still unpacked, then deploys it. It is in
+`~/.local/share/luma/operators/`, named `luma-operator-OLD`, or just `OLD` if
+the one-line installer or an update put it there. A server set up from an
+older guide may have it in `~/luma-OLD/luma-operator-OLD`.
 
 1. Stop Luma:
 
@@ -302,7 +310,7 @@ it.
 2. From the new release's operator folder, preview the restore:
 
    ```sh
-   cd ~/luma-NEW/luma-operator-*/
+   cd ~/.local/share/luma/operators/luma-operator-NEW/
    ./luma restore production --from ~/.local/share/luma/backups/luma-backup-NEW-...
    ```
 
@@ -321,10 +329,10 @@ it.
    comes `To start the server as it was, run from the folder of ...:` and a
    `./luma deploy production --confirm` line.
 
-4. Start the old release from its own folder:
+4. Start the old release from its own folder, the one step 3 named:
 
    ```sh
-   cd ~/luma-OLD/luma-operator-*/
+   cd ~/.local/share/luma/operators/luma-operator-OLD/
    ./luma deploy production --confirm
    ```
 

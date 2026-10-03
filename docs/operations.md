@@ -3,12 +3,17 @@
 > Part of the [Luma docs](./README.md). See the [main README](../README.md) for the overview and quick start.
 
 
-Run the `./luma` commands on this page on the server, from the newest
-release's `luma-operator-VERSION` folder. That is
-`~/luma-VERSION/luma-operator-VERSION` ([Install the release](install.md#2-install-the-release)).
-A release that the one-line installer or an update installed lives in
-`~/.local/share/luma/operators/VERSION` instead, and
+Run the `./luma` commands on this page on the server, from the operator folder
+of the newest release. Luma keeps its releases in `~/.local/share/luma/operators/`.
+One you unpacked yourself is `luma-operator-VERSION` there
+([Install the release](install.md#2-install-the-release)). One that the
+one-line installer or an update installed is named just `VERSION`.
 `~/.local/share/luma/operators/current` points at the one your server runs.
+This takes you to its folder:
+
+```sh
+cd ~/.local/share/luma/operators/current
+```
 
 If you set the server up with `LUMA_CONFIG_DIR` and `LUMA_DATA_DIR`, export
 them first ([Configuration](developers.md#configuration)). To see what this
@@ -97,10 +102,10 @@ When it cannot, it prints the commands to run as root. `./luma doctor production
 shows both timers and when they run next.
 
 The timers run only a release in `~/.local/share/luma/operators/`, where the
-one-line installer and every update put it. A server installed from the five
-release files in `~/luma-VERSION` gets the timers with its first update. Until
-then, run the update command above yourself when Center says a release is
-available.
+install steps, the one-line installer, and every update put it. A server whose
+release lives somewhere else, such as `~/luma-VERSION` from an older guide,
+gets the timers with its first update. Until then, run the update command
+above yourself when Center says a release is available.
 
 #### Install new Pin apps
 
@@ -122,19 +127,20 @@ its three steps:
 
 #### By hand
 
-Without the one-line installer or automatic updates, copy the new release to
-its own folder on the server, as in
-[Install the release](install.md#2-install-the-release). Then run these
-commands, with `VERSION` set to the new release's version. The
+Without the one-line installer or automatic updates, put the new release's
+five files in a new folder on the server, such as `~/luma-VERSION`, as in
+[Install the release](install.md#2-install-the-release). Don't reuse the
+folder of an older release, or the file patterns below match two files. Then
+run these commands, with `VERSION` set to the new release's version. The
 [Update](../guides/update.md) guide walks through the same steps.
 
 ```sh
 cd ~/luma-VERSION
 sha256sum --check SHA256SUMS
-tar -xzf luma-operator-*-linux.tar.gz
-cd luma-operator-*/
+tar -xzf luma-operator-*-linux.tar.gz -C ~/.local/share/luma/operators
+cd ~/.local/share/luma/operators/luma-operator-VERSION/
 ./luma backup production
-./luma setup production --pin-release-archive ../luma-pin-*.tar.gz
+./luma setup production --pin-release-archive ~/luma-VERSION/luma-pin-*.tar.gz
 ./luma deploy production --confirm
 ```
 

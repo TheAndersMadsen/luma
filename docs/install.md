@@ -135,8 +135,10 @@ default. In order, setup asks for:
 - The features: `pin, search, spotify`, or `none`.
 - The server's public IPv4 for the Pin. Setup asks only with `pin`, and
   fills in the detected address.
-- The path to the Pin archive. Setup asks only with `pin`, and only when
-  the release's Pin apps are not staged yet.
+- The path to the Pin archive. Setup asks only with `pin`, only when the
+  release's Pin apps are not staged yet, and only when you did not pass
+  `--pin-release-archive`. Press Enter to have setup download it from GitHub
+  instead.
 - The Luma Center this server asks for newer releases (its update source).
 - Whether to install updates automatically at night.
 
@@ -281,9 +283,10 @@ for you.
   the same command.
 
   Its steps are these commands, which you can also run one at a time:
-  `setup production`, `doctor production`, `deploy production --dry-run`, and
-  `deploy production --confirm`. Each one ends with a `NEXT` line that names
-  the command to run next.
+  `setup production`, `doctor production`, `deploy production --dry-run`,
+  `deploy production --confirm`, and `verify production`. Run on their own,
+  setup, doctor, and the dry run each end with a `NEXT` line that names the
+  command to run next.
 - `setup production` writes configuration, secrets, certificates, and runtime
   data outside the release folder. It never deploys or changes a Pin.
 
@@ -343,7 +346,10 @@ for you.
   2. Pulls the release's digest-pinned images and starts them.
   3. Recreates the edge containers. The edge restarts briefly on every
      confirmed deploy.
-  4. Runs the same public checks as `verify production`.
+  4. With the `pin` profile, switches Center to this release's staged Pin
+     apps.
+  5. Applies this release's sign-in policy to the running Keycloak realm.
+  6. Runs the same public checks as `verify production`.
 
   `--dry-run` in place of `--confirm` shows the plan and changes nothing.
   Your own `traefik-extra.json` and `traefik-extra-certs/`
@@ -404,7 +410,11 @@ address of any Luma Center you trust, such as a friend's.
 The script installs Bun and Docker. Then it installs the latest stable
 release whose `SHA256SUMS` carries the maintainer's cosign signature,
 `SHA256SUMS.sigstore.json`, and runs the same `onboard production` as above.
-You should see `✓ Setup complete` at the end.
+It has no Pin archive file to pass on, so setup asks for the archive's path.
+Press Enter, and setup downloads this release's Pin archive from GitHub and
+checks it. When onboarding finishes, the screen clears and shows
+`✓ Setup complete`. Then continue with
+[3. Sign in and connect the Pin](#3-sign-in-and-connect-the-pin).
 
 With no token, it installs anonymously and skips the registry login. Given a
 token (a private fork's), it also logs Docker into the registry and saves the
@@ -437,8 +447,9 @@ the repository and its packages: a classic token with the `repo` and
 Given a release without that signature, or an installer whose key is still
 the empty placeholder, it stops at **Authenticate the latest stable
 release**, says so, and installs nothing from that release. The Bun and
-Docker it set up by then are step 1 above, so continue with the steps above
-from the release files.
+Docker it set up by then are step 3 of
+[2. Install the release](#2-install-the-release), so continue with those
+steps from the release files.
 
 </details>
 
@@ -448,10 +459,12 @@ The same installer can run with no SSH session at all.
 
 1. Download `https://YOUR-CENTER/cloud-init.yaml` from any Luma Center you
    trust.
-2. Fill in every `REPLACE_ME` value: your domain or a free DuckDNS name, the
-   certificate and owner emails, and the DuckDNS token only if you chose a
-   DuckDNS name. You don't need a GitHub token. The installer refuses to start
-   while any `REPLACE_ME` value remains.
+2. Fill in the `REPLACE_ME` values in its `install.env` part: your domain in
+   `LUMA_DOMAIN`, and the certificate and owner emails. For a free DuckDNS
+   name instead, empty `LUMA_DOMAIN`, set `LUMA_DUCKDNS_SUBDOMAIN`, and put
+   the DuckDNS token in place of `REPLACE_ME_DUCKDNS_TOKEN`. You don't need a
+   GitHub token. The installer refuses to start while `install.env` still
+   holds a `REPLACE_ME` value.
 3. Create an Ubuntu 24.04 server in Hetzner Cloud and paste the whole file
    into the **Cloud config** box.
 

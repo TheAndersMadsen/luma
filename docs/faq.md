@@ -99,11 +99,13 @@ Inputs:
   deployment. Do not ask for or place provider secrets on the Pin.
 
 Rules:
-- Follow the Luma README: "Get Luma" for a new server, "Update Luma" for an
-  update. The README is the human guide; the bundled ./luma commands and their
-  --help output are the authority.
-- Check SHA256SUMS before unpacking. Deploy only the extracted operator
-  release; do not clone, build, or deploy source.
+- Follow the Luma README: "Quick start" (in full: docs/install.md) for a new
+  server, "Update Luma" (docs/operations.md) for an update. The README is
+  the human guide; the bundled ./luma commands and their --help output are
+  the authority.
+- Check SHA256SUMS before unpacking. Unpack the operator archive into
+  ~/.local/share/luma/operators, where automatic updates look for it. Deploy
+  only the extracted operator release; do not clone, build, or deploy source.
 - Pass the release's Pin archive to setup with --pin-release-archive. On an
   update, run ./luma backup production from the new release before setup.
 - Never print, log, commit, or place a secret in argv or shell history.

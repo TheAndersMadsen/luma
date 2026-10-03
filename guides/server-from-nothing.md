@@ -191,8 +191,8 @@ curl -fsSL https://api.github.com/repos/TheAndersMadsen/luma/releases/latest \
 ```
 
 You see: the prompt again, with no errors. `ls` now lists the five files.
-With this download, the release folder is `~/luma`. Use it wherever Part E
-says `~/luma-0.3.16`, and skip Part E's `scp` step.
+With this download, the release folder is `~/luma`. Use it wherever Parts E
+and F say `~/luma-0.3.16`, and skip Part E's `scp` step.
 
 To download the files to your computer instead:
 
@@ -365,7 +365,12 @@ Center serves the installer at `/install.sh`.
    4. **Container registry access** needs no GHCR login, because the images
       are public.
    5. **Configure, deploy, and open Guided Setup** runs the same
-      `onboard production` walkthrough as Part F.
+      `onboard production` walkthrough as Part F. With the `pin` feature it
+      also asks for `Path to this release's Pin archive`. Press Enter, and setup downloads
+      the Pin archive from GitHub.
+
+   When it is done, the screen clears and shows `✓ Setup complete`. Continue
+   with [Part G](#part-g-sign-in-for-the-first-time).
 
    The Center you fetched the installer from becomes your server's update
    source.
@@ -471,10 +476,9 @@ It asks you before each step that changes the server.
      releases.` and `Automatic updates are on: ...`
    - `After deployment: https://YOUR_DOMAIN/login?next=%2Fsettings%2Fpin%2Fsetup`
 
-   If you installed from the five release files, the second update line says
-   the timers start once the server runs a release in
-   `~/.local/share/luma/operators`. That is expected. The timers arrive with
-   the server's first update.
+   If you are not root, setup asks for your `sudo` password to install the
+   update timers. If it cannot, the second update line says the timers need
+   root and lists commands. Run them once as root (`sudo -i`).
 
    <details>
    <summary>If a prompt rejects your answer</summary>
