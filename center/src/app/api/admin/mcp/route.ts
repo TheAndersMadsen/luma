@@ -1,10 +1,11 @@
+import { isSameOriginRequest } from "@/server/auth";
 import { SpotifyBridgeError } from "@/server/spotifyBridge";
 import { boundedJsonBody } from "@/app/api/settings/services/spotify/routeSupport";
 import { mcpGate, mcpProxy } from "./proxy";
 
 /** GET /api/admin/mcp, the owner's tool servers and what each last listed. */
 export async function GET() {
-  const refused = await mcpGate(null);
+  const refused = await mcpGate();
   if (refused) return refused;
   return mcpProxy("GET", "");
 }
@@ -15,7 +16,7 @@ export async function GET() {
  * answers, so the response already says what the server offers.
  */
 export async function POST(request: Request) {
-  const refused = await mcpGate(request);
+  const refused = await mcpGate({ sameOrigin: isSameOriginRequest(request) });
   if (refused) return refused;
   let body: unknown;
   try {
