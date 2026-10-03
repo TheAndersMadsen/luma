@@ -83,6 +83,130 @@ apps than this release. Use the newest operator release.
 
 </details>
 
+<details>
+<summary><code>Production setup supports only amd64/x86_64 and arm64/aarch64</code></summary>
+
+The server is not 64-bit. Use a 64-bit Ubuntu 24.04 server. Intel/AMD and Arm
+plans both work. `uname -m` shows what you have.
+
+</details>
+
+<details>
+<summary><code>At least 8 GiB of free disk space is required</code>, or Docker says <code>no space left on device</code></summary>
+
+The disk is too small or full. Check with `df -h /` and `docker system df`,
+choose a bigger plan or free space, then rerun `bash ./bootstrap --tools-only`.
+
+</details>
+
+<details>
+<summary><code>Could not get lock /var/lib/dpkg/lock-frontend</code> (<code>A required command stopped with exit status 100.</code>)</summary>
+
+Ubuntu is installing its own updates in the background, which a new server
+does for its first minutes. Wait five to ten minutes and run the same command
+again. Finished steps are kept.
+
+</details>
+
+<details>
+<summary><code>This account needs sudo access to install host tools.</code> or <code>Sudo access was not granted.</code></summary>
+
+Sign in as `root` or as a user with `sudo` rights, and run the command again.
+Check the password you type at the `sudo` prompt.
+
+</details>
+
+<details>
+<summary><code>bootstrap requires an interactive terminal</code></summary>
+
+The installer was piped into `bash` or run through `ssh HOST 'command'`. Sign
+in over SSH and run it at the prompt. Run the one-line installer as
+`bash <(curl -fsSL https://YOUR-CENTER/install.sh)`.
+
+</details>
+
+<details>
+<summary><code>GitHub could not be reached securely.</code> or <code>GitHub could not confirm repository read access (HTTP 403)</code></summary>
+
+The server cannot reach `api.github.com`, or GitHub refused the request.
+Without a token, `HTTP 403` usually means GitHub's limit of 60 anonymous
+requests per hour for each address. Wait an hour and retry, or install from
+the release files as in [Install the release](install.md#2-install-the-release).
+
+</details>
+
+<details>
+<summary><code>Docker is installed, but this user cannot reach it.</code></summary>
+
+Docker is not running, or your user is not in the `docker` group yet. Run
+`sudo systemctl start docker` and `getent group docker`. If your name is
+missing, rerun `bash ./bootstrap --tools-only`, then reconnect over SSH.
+
+</details>
+
+<details>
+<summary>A cloud-init server never shows Center</summary>
+
+Sign in as `root` and read the install log:
+
+```sh
+cloud-init status --long
+tail -n 40 /var/log/luma-install.log
+```
+
+If it ends with **Setup stopped**, its `What failed:` line names the problem
+and `Safe retry:` the way back. `Set either LUMA_DOMAIN or
+LUMA_DUCKDNS_SUBDOMAIN, not both.` means `install.env` must name exactly one
+of the two. Fix the file and create the server again.
+
+</details>
+
+<details>
+<summary><code>Pin release archive does not exist: ...</code></summary>
+
+No file is at the `--pin-release-archive` path. A path that still contains `*`
+matched nothing. Find the archive with `ls ~/luma/luma-pin-*.tar.gz`, or
+download the release again, and rerun with the path `ls` prints.
+
+</details>
+
+<details>
+<summary><code>setup production with the pin profile must run from an extracted operator release</code></summary>
+
+You ran `./luma` from a source checkout. Run it from the unpacked
+`luma-operator-VERSION` folder of a release.
+
+</details>
+
+<details>
+<summary><code>--acme-email needs a real address: Let's Encrypt refuses example.com, example.net, and example.org</code></summary>
+
+Guided setup accepts the address at the prompt, and setup refuses it after the
+review. Nothing was written. Run setup again with an email address you really
+use.
+
+</details>
+
+<details>
+<summary><code>this is the Luma ... operator, but this server is configured for ...</code></summary>
+
+You ran `./luma` from another release's folder. Run it from
+`~/.local/share/luma/operators/current`, or from the newest
+`luma-operator-VERSION` folder if you installed from the release files.
+
+</details>
+
+<details>
+<summary><code>no production configuration at ...</code></summary>
+
+Setup has not run yet, it stopped before writing, or you run `./luma` as a
+different user (for example with `sudo`). Run it as the user who ran setup,
+or run `./luma onboard production --pin-release-archive FILE`, which sets up
+first. If you set the server up with `LUMA_CONFIG_DIR` and `LUMA_DATA_DIR`,
+export the same values.
+
+</details>
+
 ## Domain, DNS, and certificates
 
 <details>
@@ -130,13 +254,14 @@ first deploy.
 </details>
 
 <details>
-<summary><code>verify production</code> (or the end of <code>deploy production --confirm</code>) reports fetch failed</summary>
+<summary><code>verify production</code> (or the end of <code>deploy production --confirm</code>) reports <code>fetch failed</code></summary>
 
 The check could not reach `https://YOUR_DOMAIN`. It prints which of three
 causes it saw:
 
 - the domain's DNS does not point at this server yet
 - ports 80 and 443 are closed in the server's or provider's firewall
+  (`fetch failed (TimeoutError: The operation timed out.)` usually means this)
 - Let's Encrypt is still issuing the certificate
 
 A confirmed deploy waits up to 120 seconds for the first answer. Fix the named
@@ -145,6 +270,24 @@ cause, then run this again:
 ```sh
 ./luma verify production
 ```
+
+</details>
+
+<details>
+<summary>The certificate stays invalid, or Traefik logs <code>invalidContact</code></summary>
+
+Preflight checks only that the domain resolves, not that it resolves to this
+server. These two must print the same address:
+
+```sh
+dig +short YOUR_DOMAIN
+curl -4 -s https://api.ipify.org; echo
+```
+
+If they differ, fix the A record and turn off Cloudflare's proxy.
+`invalidContact` means Let's Encrypt refused the certificate email. Rerun
+`./luma setup production --acme-email ADDRESS` with a real address, then
+`./luma deploy production --confirm`.
 
 </details>
 
@@ -215,6 +358,27 @@ started successfully are kept.
 ```sh
 ./luma deploy production --confirm
 ```
+
+</details>
+
+<details>
+<summary><code>production container ... is state=... health=unhealthy</code></summary>
+
+A service did not become healthy. On a server with under 4 GB of memory,
+Linux often stops one. Check with `free -h` and
+`sudo dmesg | grep -i -E 'out of memory|killed process'`. Resize to at least
+4 GB if so, then rerun `./luma deploy production --confirm`. Otherwise read
+`docker compose -p luma logs --tail 100 SERVICE`.
+
+</details>
+
+<details>
+<summary><code>Onboarding stopped during ...</code> with <code>Reason: deploy.sh exited with status 1</code></summary>
+
+The reason names only the step. The real error is printed in the lines above
+the block, and the one-line installer's `Operator onboarding did not finish.`
+points at the same block. Fix that error, run the `Recovery check`, then the
+`Safe retry` command.
 
 </details>
 
@@ -372,6 +536,75 @@ The installer makes no package changes while this service is unavailable.
 Stop. Disconnect other Android hardware and restart the plan against the
 original serial. Installation and activation never switch serials on their
 own.
+
+</details>
+
+<details>
+<summary><b>Couldn’t connect to your Pin</b>, or <b>A device is attached, but it does not identify as an Ai Pin.</b></summary>
+
+The Pin locked or moved on the interposer, or you chose another device in the
+chooser. Unlock the Pin, line it up on the interposer, replug the cable, and
+choose the Pin in the chooser.
+
+</details>
+
+<details>
+<summary><b>Your server has no Pin release to install yet.</b> or <b>No Pin release to install</b></summary>
+
+The server runs without the `pin` feature. Rerun setup with `pin` in the
+features and the Pin archive, then deploy:
+
+```sh
+./luma setup production --guided --pin-release-archive FILE
+./luma deploy production --confirm
+```
+
+</details>
+
+<details>
+<summary><b>Your Pin stopped answering partway through.</b></summary>
+
+The USB connection dropped during the install. Keep the Pin on the
+interposer and the computer awake, reconnect, and choose **Check again**.
+
+</details>
+
+<details>
+<summary>Wi-Fi: <b>Your Pin couldn’t join “NAME”. Check the password and try again.</b> or <b>… that network doesn’t reach the internet.</b></summary>
+
+Retype the password (8 to 63 characters, case-sensitive) and check the
+security type. A network that needs a browser sign-in page, such as hotel or
+guest Wi-Fi, does not work. Networks marked **Needs a username · not
+supported** (WPA2-Enterprise) do not work either. Use a home network or a
+phone hotspot.
+
+</details>
+
+<details>
+<summary><b>This Pin is online, but its clock is ...</b> or <b>The Pin’s clock is still wrong after Center set it.</b></summary>
+
+A wrong date makes every certificate look invalid. Choose **Set the Pin’s
+clock**. If it stays wrong, restart the Pin, keep it online, and choose
+**Check again**.
+
+</details>
+
+<details>
+<summary><b>The Pin points at ADDRESS, not at your server (ADDRESS).</b></summary>
+
+The Pin was connected to another server, or the server's public IPv4
+changed. Open **Provisioning** and choose **Connect this Pin to Cosmos**. If
+the server's own address is wrong, run
+`./luma setup production --public-ip auto` and redeploy first.
+
+</details>
+
+<details>
+<summary><b>The Pin didn’t finish its own setup within 30 seconds.</b></summary>
+
+Read the setup message on the Pin's display. Check that the four digits
+match **Settings → Passcode & password**, keep the Pin connected and online,
+and try the step again.
 
 </details>
 

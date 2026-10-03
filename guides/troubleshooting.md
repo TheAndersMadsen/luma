@@ -38,15 +38,105 @@ Fix: rebuild the server with the provider's plain Ubuntu 24.04 image (not a
 </details>
 
 <details>
-<summary><code>At least 8 GiB of free disk space is required ...</code></summary>
+<summary><code>Production setup supports only amd64/x86_64 and arm64/aarch64; this server reports ...</code></summary>
 
-Cause: the disk is too small or full.
+Cause: the server has a 32-bit or other processor that Luma's images do not
+support, such as an older Raspberry Pi image.
 
-Fix: choose a bigger plan or free some space, then run this again:
+Fix: use a 64-bit server. Both Intel/AMD (`x86_64`) and Arm (`aarch64`)
+plans work, for example Hetzner's CX and CAX plans. This shows what you have:
+
+```sh
+uname -m
+```
+
+</details>
+
+<details>
+<summary><code>At least 8 GiB of free disk space is required ...</code>, or Docker later says <code>no space left on device</code></summary>
+
+Cause: the disk is too small or full. The first check runs before anything
+downloads. Docker's message appears when the images fill the disk later.
+
+Fix: choose a bigger plan or free some space. This shows the free space and
+what Docker uses:
+
+```sh
+df -h /
+docker system df
+```
+
+Then run this again:
 
 ```sh
 bash ./bootstrap --tools-only
 ```
+
+</details>
+
+<details>
+<summary><code>Could not get lock /var/lib/dpkg/lock-frontend</code>, then <code>What failed: A required command stopped with exit status 100.</code></summary>
+
+Cause: Ubuntu installs its own security updates in the background for the
+first minutes after a new server starts. While it does, no other program can
+install packages.
+
+Fix: wait five to ten minutes, then run the same command again. Finished
+steps are kept. To see whether Ubuntu is still busy:
+
+```sh
+ps aux | grep -E 'apt|unattended' | grep -v grep
+```
+
+</details>
+
+<details>
+<summary><code>This account needs sudo access to install host tools.</code> or <code>Sudo access was not granted.</code></summary>
+
+Cause: the user you signed in as cannot use `sudo`, or you typed the wrong
+password at the `sudo` prompt.
+
+Fix: sign in as `root`, or as the user your provider created with `sudo`
+rights, and run the command again. If you type your own password at the
+`[sudo] password` prompt, check it carefully. Nothing shows while you type.
+
+</details>
+
+<details>
+<summary><code>bootstrap requires an interactive terminal (LUMA_UNATTENDED=1 runs it without one).</code></summary>
+
+Cause: the installer asks questions, but it was started without a terminal.
+This happens when you pipe it into `bash` or run it through `ssh HOST
+'command'`.
+
+Fix: sign in over SSH first, then run it at the prompt:
+
+```sh
+bash ./bootstrap --tools-only
+```
+
+The one-line installer must use the `bash <(curl ...)` form exactly as shown,
+not `curl ... | bash`.
+
+</details>
+
+<details>
+<summary><code>GitHub could not be reached securely.</code> or <code>GitHub could not confirm repository read access (HTTP 403)</code></summary>
+
+Cause: the server cannot reach `api.github.com`, or GitHub refused the
+request. `HTTP 403` without a token usually means GitHub's limit for anonymous
+requests: 60 per hour for each address. Many installs from the same network
+or repeated retries use it up.
+
+Fix: check that the server reaches GitHub:
+
+```sh
+curl -sI https://api.github.com | head -n 1
+```
+
+For `HTTP 403`, wait an hour and run the same command again. Or install from
+the five release files instead
+([Set up a server from nothing](server-from-nothing.md#install-from-the-five-release-files)).
 
 </details>
 
@@ -74,6 +164,40 @@ token files were already removed.
 </details>
 
 <details>
+<summary>You created the server with cloud-init, but Center never loads</summary>
+
+Cause: the install is still running, or it stopped. It takes about 15
+minutes, and the server writes every step to `/var/log/luma-install.log`.
+
+Fix: sign in as `root` over SSH and read the end of the log:
+
+```sh
+cloud-init status --long
+tail -n 40 /var/log/luma-install.log
+```
+
+If the log ends with **Setup stopped**, the `What failed:` line names the
+problem and the `Safe retry:` line names the way back. Find the `What failed:`
+text on this page. If the log ends at the deploy or verify step, the domain,
+DNS, or firewall is usually the cause (see
+[Domain, DNS, and certificates](#domain-dns-and-certificates)).
+
+</details>
+
+<details>
+<summary>The cloud-init log says <code>Set either LUMA_DOMAIN or LUMA_DUCKDNS_SUBDOMAIN, not both.</code> or <code>LUMA_DOMAIN (a DNS name that points at this server) or LUMA_DUCKDNS_SUBDOMAIN (a free DuckDNS name) is required.</code></summary>
+
+Cause: `install.env` in the cloud-init file needs exactly one of the two
+names.
+
+Fix: for your own domain, fill `LUMA_DOMAIN` and leave
+`LUMA_DUCKDNS_SUBDOMAIN=` empty. For DuckDNS, empty `LUMA_DOMAIN=` and fill
+`LUMA_DUCKDNS_SUBDOMAIN` and the DuckDNS token. Then delete the server and
+create it again with the corrected file.
+
+</details>
+
+<details>
 <summary><code>docker: permission denied while trying to connect to the Docker daemon socket</code></summary>
 
 Cause: the installer added you to Docker's group, but this SSH session
@@ -85,6 +209,23 @@ applies, `bash ./bootstrap --tools-only` prints:
 ```text
 Reconnect over SSH so this session picks up Docker group membership.
 ```
+
+</details>
+
+<details>
+<summary><code>Docker is installed, but this user cannot reach it. Start a new login session and rerun.</code></summary>
+
+Cause: Docker is not running, or your user is not in Docker's group yet.
+
+Fix: start Docker and check that your user name appears after `docker:`:
+
+```sh
+sudo systemctl start docker
+getent group docker
+```
+
+If your name is missing, run `bash ./bootstrap --tools-only` again, which adds
+it. Then sign out, sign back in over SSH, and rerun the command.
 
 </details>
 
@@ -175,6 +316,77 @@ release into (`~/luma` if you followed the README):
 </details>
 
 <details>
+<summary><code>Pin release archive does not exist: ...</code></summary>
+
+Cause: no file is at the path you gave to `--pin-release-archive`. If the
+path still contains a `*`, nothing matched it. The archive is usually in a
+different folder, or it was never downloaded.
+
+Fix: find the archive. It is one of the five release files:
+
+```sh
+ls ~/luma/luma-pin-*.tar.gz
+```
+
+If `ls` finds nothing, download the release again (README, step 2 of
+"Install"). Then rerun with the path `ls` printed:
+
+```sh
+./luma onboard production --pin-release-archive ~/luma/luma-pin-VERSION.tar.gz
+```
+
+</details>
+
+<details>
+<summary><code>setup production with the pin profile must run from an extracted operator release</code></summary>
+
+Cause: you ran `./luma` from a copy of the source code (a `git clone`), not
+from an unpacked release. Only a release knows which Pin apps belong to it.
+
+Fix: unpack the operator archive and run `./luma` from its
+`luma-operator-VERSION` folder, as in the README's "Install" steps:
+
+```sh
+cd ~/.local/share/luma/operators/luma-operator-*/
+```
+
+</details>
+
+<details>
+<summary><code>--acme-email needs a real address: Let's Encrypt refuses example.com, example.net, and example.org</code></summary>
+
+Cause: the certificate email uses a placeholder domain. Guided setup accepts
+it at the prompt, and the check runs after **Write this production
+configuration?**.
+
+Fix: run setup again and type an email address you really use. The same
+applies to the owner email. Nothing was written.
+
+```sh
+./luma onboard production --pin-release-archive ~/luma/luma-pin-*.tar.gz
+```
+
+</details>
+
+<details>
+<summary><code>this is the Luma ... operator, but this server is configured for ...</code></summary>
+
+Cause: you ran `./luma` from a different release's folder than the one the
+server runs. This often happens after an update, from an old terminal tab.
+
+Fix: run it from the folder the server uses:
+
+```sh
+cd ~/.local/share/luma/operators/current
+```
+
+If you installed from the five release files, `cd` into the newest
+`luma-operator-VERSION` folder instead. The message names the next step if you
+meant to move the server to this release.
+
+</details>
+
+<details>
 <summary>Setup says <code>does not match operator release Pin</code></summary>
 
 Cause: the server already has newer Pin apps than this release.
@@ -197,13 +409,27 @@ first `deploy production --confirm`, rerun setup with the right `--domain` or
 </details>
 
 <details>
-<summary><code>./luma</code> says it found no configuration and names a path</summary>
+<summary><code>./luma</code> says <code>no production configuration at ...</code></summary>
 
-Cause: you set the server up with `LUMA_CONFIG_DIR` and `LUMA_DATA_DIR`,
-and this shell does not have them.
+Cause: one of these:
 
-Fix: export the same values. Setup printed the `export` line, so put it in
-`~/.profile`. To see what this shell finds, run:
+- Setup has not run yet. `doctor`, `deploy`, and `verify` need it first.
+- Setup stopped before it wrote anything.
+- You run `./luma` as a different user than the one who ran setup, for
+  example with `sudo`. Each user has their own configuration folder.
+- You set the server up with `LUMA_CONFIG_DIR` and `LUMA_DATA_DIR`, and this
+  shell does not have them.
+
+Fix: run `./luma` as the same user, without `sudo`. If setup never finished,
+run onboarding, which does setup first:
+
+```sh
+./luma onboard production --pin-release-archive ~/luma/luma-pin-*.tar.gz
+```
+
+If you used `LUMA_CONFIG_DIR` and `LUMA_DATA_DIR`, export the same values.
+Setup printed the `export` line, so put it in `~/.profile`. To see what this
+shell finds, run:
 
 ```sh
 ./luma setup status
@@ -246,8 +472,9 @@ IPv4 that reaches this server. With flags, replace `--public-ip auto` with
 <details>
 <summary>Preflight (<code>doctor</code>) says <code>public DNS name ... does not resolve from this server</code></summary>
 
-Cause: the A record does not exist yet, points elsewhere, or has not
-propagated.
+Cause: the A record does not exist yet, has a typo, or has not propagated.
+DuckDNS names usually work within a minute. A new domain at a registrar can
+take up to an hour.
 
 Fix: create or correct the A record at your registrar or DuckDNS. Wait a few
 minutes, then rerun:
@@ -266,15 +493,23 @@ Same cause and fix as the entry above.
 </details>
 
 <details>
-<summary><code>verify production</code> prints <code>fetch failed</code> and <code>nothing answered at https://...; open ports 80 and 443 in the server provider's firewall</code></summary>
+<summary><code>verify production</code> prints <code>fetch failed (TimeoutError: The operation timed out.)</code> or <code>nothing answered at https://...; open ports 80 and 443 in the server provider's firewall</code></summary>
 
-Cause: the provider's firewall blocks the ports, or Traefik is not running.
+Cause: the provider's firewall blocks the ports, Ubuntu's own firewall
+(`ufw`) blocks them, or Traefik is not running.
 
 Fix: open inbound TCP 80 and 443 in the provider's firewall:
 
 - Hetzner: **Firewalls** in the Cloud Console
 - DigitalOcean: **Networking → Firewalls**
 - Linode/Akamai: **Cloud Firewall**
+
+If `sudo ufw status` says `Status: active`, open them there too:
+
+```sh
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+```
 
 Then rerun:
 
@@ -288,11 +523,42 @@ Then rerun:
 <summary><code>verify production</code> prints <code>fetch failed</code> and <code>... presented a certificate that is not valid for it yet</code></summary>
 
 Cause: right after the first deploy, Let's Encrypt is still issuing the
-certificate. If it stays this way, the domain does not point at this server or
-port 80 is closed.
+certificate. If it stays this way, the domain points at a different address
+(an old server, or Cloudflare's proxy), or port 80 is closed. Preflight checks
+only that the name resolves, not that it resolves to this server.
 
 Fix: wait a few minutes and rerun `./luma verify production`. A confirmed
-deploy already waits up to 120 seconds for the first answer.
+deploy already waits up to 120 seconds for the first answer. If it still
+fails, compare the two addresses these print. They must be the same:
+
+```sh
+dig +short YOUR_DOMAIN
+curl -4 -s https://api.ipify.org; echo
+```
+
+If they differ, fix the A record (and turn off Cloudflare's orange cloud), wait
+a few minutes, and run `./luma verify production` again.
+
+</details>
+
+<details>
+<summary>The certificate never appears and Traefik's log mentions <code>invalidContact</code></summary>
+
+Cause: Let's Encrypt refused the certificate email. It accepts only an
+address on a real domain that can receive mail.
+
+Fix: rerun setup with a real address, then deploy again:
+
+```sh
+./luma setup production --acme-email you@your-real-domain.com
+./luma deploy production --confirm
+```
+
+Check the Traefik log with:
+
+```sh
+docker compose -p luma logs --tail 100 traefik
+```
 
 </details>
 
@@ -364,7 +630,7 @@ release:
 </details>
 
 <details>
-<summary>Deployment or verification stops</summary>
+<summary>Deployment or verification stops, or says <code>these configured production services are not running:</code></summary>
 
 Cause: a service did not start.
 
@@ -377,6 +643,36 @@ docker compose -p luma logs --tail 100 SERVICE
 
 Fix the cause and rerun `./luma deploy production --confirm`. Existing
 configuration and started containers are kept.
+
+</details>
+
+<details>
+<summary><code>production container ... is state=... health=unhealthy</code>, or Docker says a container <code>is unhealthy</code></summary>
+
+Cause: a service started but did not become healthy in time. On a server
+with less than 4 GB of memory, Keycloak, PostgreSQL, and Cosmos often run out
+of memory, and Linux stops one of them.
+
+Fix: check the memory and whether Linux stopped a process:
+
+```sh
+free -h
+sudo dmesg | grep -i -E 'out of memory|killed process'
+```
+
+If `total` memory is under 4 GB, or `dmesg` shows a killed process, resize
+the server to a plan with at least 4 GB (8 GB is comfortable). In Hetzner,
+power the server off and use **Rescale**. Your data stays. Then rerun:
+
+```sh
+./luma deploy production --confirm
+```
+
+Otherwise, read the log of the service the message names:
+
+```sh
+docker compose -p luma logs --tail 100 SERVICE
+```
 
 </details>
 
@@ -394,10 +690,17 @@ Fix: run `./luma verify production`, then open
 </details>
 
 <details>
-<summary><code>onboard production</code> stopped with <code>Onboarding stopped during stage ...</code></summary>
+<summary><code>onboard production</code> stopped with <code>Onboarding stopped during ...</code>, or the installer says <code>Operator onboarding did not finish.</code></summary>
 
 Cause: one of its five stages failed. The message names the reason and a
-`Recovery check` command.
+`Recovery check` command. The one-line installer runs onboarding too, so its
+`Operator onboarding did not finish.` points at the onboarding message just
+above it.
+
+A `Reason:` such as `deploy.sh exited with status 1` or
+`preflight.sh exited with status 1` only says which step failed. The real
+error is printed in the lines above the `Onboarding stopped` block. Find that
+text on this page.
 
 Fix: run the named recovery command and fix what it reports. Then rerun the
 `Safe retry` command it printed. No Pin was contacted.
@@ -531,7 +834,7 @@ it prints as root.
 ## Connecting the Pin from the browser
 
 <details>
-<summary>Center shows <b>This browser can't reach your Pin</b> or "WebUSB is not supported in this browser"</summary>
+<summary>Center shows <b>This browser can’t reach your Pin</b> or "WebUSB is not supported in this browser"</summary>
 
 Cause: you are using Safari, Firefox, a mobile browser, or a non-HTTPS
 address.
@@ -603,6 +906,31 @@ Fix: look at the Pin's Laser Ink display and accept the prompt.
 </details>
 
 <details>
+<summary>Center shows <b>Couldn’t connect to your Pin</b> after you choose it in the USB chooser</summary>
+
+Cause: the Pin locked, went to sleep, or lost contact on the interposer while
+the browser connected.
+
+Fix:
+
+1. Unlock the Pin and keep it awake.
+2. Check that the Pin sits flat on the interposer, lined up with its outline.
+3. Unplug the cable, plug it back in, and choose **Connect over USB** again.
+
+</details>
+
+<details>
+<summary>Guided setup says <b>A device is attached, but it does not identify as an Ai Pin.</b></summary>
+
+Cause: you chose another USB device in the chooser, such as a phone or a
+tablet.
+
+Fix: disconnect the other device, choose **Connect over USB** again, and pick
+the Pin in the chooser.
+
+</details>
+
+<details>
 <summary>Center says the Pin reconnected as a different device</summary>
 
 Cause: another Android device is plugged in, or a different Pin.
@@ -637,6 +965,37 @@ on the cable and let Center continue.
 </details>
 
 <details>
+<summary>Guided setup says <b>Your server has no Pin release to install yet.</b>, or the installer says <b>No Pin release to install</b></summary>
+
+Cause: the server runs without the `pin` feature, or setup never staged the
+Pin apps. This happens when you answered `none` (or left out `pin`) at the
+features question.
+
+Fix: on the server, run setup again. Keep the answers it offers, include
+`pin` in the features, and give the Pin archive. Then deploy:
+
+```sh
+./luma setup production --guided --pin-release-archive ~/luma/luma-pin-*.tar.gz
+./luma deploy production --confirm
+```
+
+Back in Center, choose **Check again**.
+
+</details>
+
+<details>
+<summary>The install stops with <b>The install didn’t finish</b> and <b>Your Pin stopped answering partway through.</b></summary>
+
+Cause: the Pin lost its USB connection during the install. It moved on the
+interposer, the computer went to sleep, or the cable is loose.
+
+Fix: keep the Pin on the interposer and the computer awake. Reconnect over
+USB and choose **Check again**. Center reads what is installed and offers
+**Install** or **Repair** again.
+
+</details>
+
+<details>
 <summary>Center says <b>Your Pin is newer than your server</b></summary>
 
 Cause: you updated the Pin from a newer release than the server runs.
@@ -654,6 +1013,84 @@ set in Center yet.
 
 Fix: open **Settings → Passcode & password** and choose four digits. Then
 return to Guided setup and enter the same digits under **Pin passcode**.
+
+</details>
+
+<details>
+<summary>Center says <b>Your Pin couldn’t join “NAME”. Check the password and try again.</b></summary>
+
+Cause: the Wi-Fi password is wrong, or the security type does not match the
+network.
+
+Fix: type the password again. It is case-sensitive, and WPA2 and WPA3
+passwords have 8 to 63 characters. For a hidden network under **Other
+network**, check the exact name and security type in your router's settings.
+
+</details>
+
+<details>
+<summary>Center says <b>Your Pin joined “NAME”, but that network doesn’t reach the internet.</b></summary>
+
+Cause: the network needs a sign-in page in a browser (hotel, office, or
+guest Wi-Fi), or the router has no internet right now.
+
+Fix: choose a home network or a phone hotspot without a sign-in page.
+Guided setup has no way to fill in a Wi-Fi sign-in page for the Pin.
+
+</details>
+
+<details>
+<summary>The Wi-Fi list shows <b>Needs a username · not supported</b>, or says <b>Your Pin can’t see any Wi-Fi networks.</b></summary>
+
+Cause: networks that need a username and password (WPA2-Enterprise, common at
+work and universities) are not supported. An empty list means the Pin sees no
+network from where it is.
+
+Fix: use a network with a single password, or a phone hotspot. For an empty
+list, move the Pin and the computer closer to the router and choose the scan
+again.
+
+</details>
+
+<details>
+<summary>Guided setup says <b>This Pin is online, but its clock is ...</b>, or <b>The Pin’s clock is still wrong after Center set it.</b></summary>
+
+Cause: a Pin that sat unused often has a clock months in the past. With the
+wrong date, every certificate looks invalid to it, and it cannot reach your
+server.
+
+Fix: choose **Set the Pin’s clock**. If Center says the clock is still wrong,
+restart the Pin, keep it online, and choose **Check again**. Android usually
+corrects the clock by itself within a minute of going online.
+
+</details>
+
+<details>
+<summary>Guided setup says <b>The Pin points at ADDRESS, not at your server (ADDRESS).</b></summary>
+
+Cause: the Pin was connected to another server before, or the server's
+public IPv4 changed after you connected the Pin.
+
+Fix: open **Provisioning** and choose **Connect this Pin to Cosmos**. If the
+second address is not your server's public IPv4, correct it on the server
+first, then deploy:
+
+```sh
+./luma setup production --public-ip auto
+./luma deploy production --confirm
+```
+
+</details>
+
+<details>
+<summary>Guided setup says <b>The Pin didn’t finish its own setup within 30 seconds.</b></summary>
+
+Cause: the Pin's own setup did not finish. The passcode you entered differs
+from the one in Center, or the Pin lost its network.
+
+Fix: look at the Pin's Laser Ink display for its setup message. Check that
+the four digits match **Settings → Passcode & password**, keep the Pin
+connected and online, and choose the step again.
 
 </details>
 
