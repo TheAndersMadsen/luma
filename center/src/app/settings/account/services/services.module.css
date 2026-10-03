@@ -555,6 +555,7 @@
 .mcpTools strong { color: var(--luma-colors-white); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .mcpTools small { color: var(--luma-colors-crater-base); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 .mcpTools > li[data-offered="false"] strong { opacity: 0.6; }
+.mcpToolControls { display: flex; align-items: center; gap: 12px; flex: none; }
 
 .mcpHeaderLabel { display: grid; gap: 3px; min-width: 0; }
 .mcpHeaders { display: grid; gap: 8px; width: min(100%, 560px); justify-items: start; }

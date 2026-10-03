@@ -21,7 +21,9 @@
 //! * **Offered tools** are named `mcp_<server>_<tool>`. A server's tool is
 //!   offered only when it declares `readOnlyHint`, unless the owner allowed
 //!   actions for that server. Luma's spoken confirmation covers a fixed list of
-//!   its own actions and does not reach these tools.
+//!   its own actions and does not reach these tools. The owner can also switch
+//!   single tools off (`disabled_tools`): such a tool is not offered whatever
+//!   its server allows.
 //! * **A locked Pin is offered none of them** (`catalog::withheld_on_keyguard`),
 //!   unless the owner allowed a server while locked. A Pin is locked whenever
 //!   it is off the body, on its charger for one, so a server the owner wants
@@ -66,6 +68,23 @@
 //!     value for that name is kept, so Center never has to show it.
 //! 17. Settings saved before headers existed carry `bearer_token`: folded into
 //!     an `Authorization` header on load and not written again.
+//! 18. Settings saved before single tools could be switched off have no
+//!     `disabled_tools`: every tool stays as it was. The field is written only
+//!     once the owner switches a tool off, so a build without it still reads
+//!     the settings of an owner who never did.
+//! 19. The list of switched-off tools is oversized, or holds an empty, overlong
+//!     or repeated name: refused when saved.
+//! 20. The model names a tool the owner has since switched off: not offered
+//!     now, so the call is refused before the server is contacted (as in 11).
+//! 21. A switched-off name the server does not list (renamed, removed, or a
+//!     listing that came back short): kept. It costs nothing while the tool is
+//!     away, and the tool is still off if the server lists it again.
+//! 22. An edit that does not mention the switched-off tools (a rename, a
+//!     header, a server switch) must not switch them back on: a missing list
+//!     preserves the stored one, a present list replaces it.
+//! 23. Switched-off tools use up the overall cap or hold a mangled name: they
+//!     are skipped before both, so switching tools off makes room for others
+//!     and frees the name for a tool it collided with.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -84,6 +103,8 @@ const TOOLS_FILE: &str = "mcp-tools.json";
 pub const MAX_SERVERS: usize = 16;
 pub const MAX_OFFERED_TOOLS: usize = 40;
 const MAX_TOOLS_PER_SERVER: usize = 48;
+/// Twice what a server can list: names it no longer lists are kept.
+const MAX_DISABLED_TOOLS: usize = 2 * MAX_TOOLS_PER_SERVER;
 const MAX_SERVER_NAME_CHARS: usize = 48;
 const MAX_SERVER_ID_CHARS: usize = 24;
 const MAX_URL_BYTES: usize = 2048;
@@ -145,6 +166,19 @@ pub struct McpServer {
     pub allow_actions: bool,
     /// Offer this server's tools while the Pin is locked. Off by default.
     pub allow_when_locked: bool,
+    /// Tools the owner switched off, by the name the server lists them under.
+    /// Never offered, whatever the switches above say. Written only when not
+    /// empty, so a build without this field still reads these settings until
+    /// the owner switches a tool off.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disabled_tools: Vec<String>,
+}
+
+impl McpServer {
+    /// Whether the owner has left the tool `name` switched on.
+    pub fn tool_enabled(&self, name: &str) -> bool {
+        !self.disabled_tools.iter().any(|off| off == name)
+    }
 }
 
 /// One request header for a server. The value is a credential.
@@ -208,6 +242,8 @@ pub struct McpServerInput {
     pub enabled: Option<bool>,
     pub allow_actions: Option<bool>,
     pub allow_when_locked: Option<bool>,
+    /// Missing preserves the switched-off tools. Present replaces them all.
+    pub disabled_tools: Option<Vec<String>>,
 }
 
 /// One header as the owner sends it.
@@ -496,6 +532,9 @@ impl McpStore {
                 if let Some(allow) = input.allow_when_locked {
                     server.allow_when_locked = allow;
                 }
+                if let Some(tools) = input.disabled_tools {
+                    server.disabled_tools = tools;
+                }
                 server.clone()
             }
             None => {
@@ -514,6 +553,7 @@ impl McpStore {
                     enabled: input.enabled.unwrap_or(true),
                     allow_actions: input.allow_actions.unwrap_or(false),
                     allow_when_locked: input.allow_when_locked.unwrap_or(false),
+                    disabled_tools: input.disabled_tools.unwrap_or_default(),
                 };
                 next.servers.push(server.clone());
                 server
@@ -647,6 +687,11 @@ impl McpStore {
                     return offered;
                 }
                 if !(tool.read_only || server.allow_actions) {
+                    continue;
+                }
+                // Before the name is taken and the cap is counted: a tool the
+                // owner switched off leaves both to the others.
+                if !server.tool_enabled(&tool.name) {
                     continue;
                 }
                 let model_name = model_tool_name(&server.id, &tool.name);
@@ -826,9 +871,9 @@ impl McpStore {
         arguments: &Value,
         deadline: Option<Instant>,
     ) -> McpRun {
-        // Resolved against what is offered NOW: the server may have been
-        // switched off, or lost its permission for actions, since the model
-        // was shown this tool.
+        // Resolved against what is offered NOW: the server or this tool may
+        // have been switched off, or the server lost its permission for
+        // actions, since the model was shown this tool.
         let Some(offered) = self
             .offered()
             .into_iter()
@@ -1220,6 +1265,24 @@ fn validate(settings: &McpSettings) -> Result<(), McpError> {
         }
         validate_url(&server.url)?;
         validate_headers(&server.headers)?;
+        validate_disabled_tools(&server.disabled_tools)?;
+    }
+    Ok(())
+}
+
+fn validate_disabled_tools(tools: &[String]) -> Result<(), McpError> {
+    if tools.len() > MAX_DISABLED_TOOLS {
+        return Err(McpError::Invalid("too many switched-off tools"));
+    }
+    let mut names = BTreeSet::new();
+    for name in tools {
+        // The bounds a listed tool's name has, so any listed tool fits.
+        if name.is_empty() || name.chars().count() > MAX_TOOL_NAME_CHARS {
+            return Err(McpError::Invalid("switched-off tool name is invalid"));
+        }
+        if !names.insert(name.as_str()) {
+            return Err(McpError::Invalid("switched-off tool name is repeated"));
+        }
     }
     Ok(())
 }
@@ -1544,6 +1607,7 @@ mod tests {
             enabled,
             allow_actions,
             allow_when_locked: false,
+            disabled_tools: Vec::new(),
         }
     }
 
@@ -1601,8 +1665,17 @@ mod tests {
             .collect();
         assert_eq!(offered, ["read_state"]);
 
-        let trusting = store_with(vec![server("Home", true, true)], tools);
+        let trusting = store_with(vec![server("Home", true, true)], tools.clone());
         assert_eq!(trusting.offered().len(), 2);
+
+        // A tool the owner switched off is not offered, read-only or not,
+        // whatever the server allows. A name the server does not list is
+        // harmless.
+        let mut picky = server("Home", true, true);
+        picky.disabled_tools = vec!["read_state".to_owned(), "gone".to_owned()];
+        let picky = store_with(vec![picky], tools);
+        let offered: Vec<String> = picky.offered().into_iter().map(|t| t.tool_name).collect();
+        assert_eq!(offered, ["turn_on"]);
     }
 
     #[test]
@@ -1641,16 +1714,46 @@ mod tests {
             vec![server("Home", true, true)],
             vec![tool("a.b", true), tool("a_b", true)],
         );
-        assert_eq!(store.offered().len(), 1);
+        let offered = store.offered();
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].tool_name, "a.b");
+
+        // Switched off, the first no longer holds the name.
+        let mut home = server("Home", true, true);
+        home.disabled_tools = vec!["a.b".to_owned()];
+        let store = store_with(vec![home], vec![tool("a.b", true), tool("a_b", true)]);
+        let offered = store.offered();
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].tool_name, "a_b");
     }
 
     #[test]
     fn the_offer_is_capped_overall() {
-        let many = (0..MAX_TOOLS_PER_SERVER)
+        let many: Vec<McpTool> = (0..MAX_TOOLS_PER_SERVER)
             .map(|n| tool(&format!("t{n}"), true))
             .collect();
-        let store = store_with(vec![server("Home", true, true)], many);
-        assert_eq!(store.offered().len(), MAX_OFFERED_TOOLS);
+        let last = format!("t{}", MAX_TOOLS_PER_SERVER - 1);
+        let store = store_with(vec![server("Home", true, true)], many.clone());
+        let offered = store.offered();
+        assert_eq!(offered.len(), MAX_OFFERED_TOOLS);
+        assert!(offered.iter().all(|tool| tool.tool_name != last));
+
+        // Only offered tools count: switching the first ones off makes room
+        // for the ones the cap left out.
+        let spare = MAX_TOOLS_PER_SERVER - MAX_OFFERED_TOOLS;
+        let mut home = server("Home", true, true);
+        home.disabled_tools = (0..spare).map(|n| format!("t{n}")).collect();
+        let store = store_with(vec![home], many.clone());
+        let offered = store.offered();
+        assert_eq!(offered.len(), MAX_OFFERED_TOOLS);
+        assert_eq!(offered[0].tool_name, format!("t{spare}"));
+        assert_eq!(offered[MAX_OFFERED_TOOLS - 1].tool_name, last);
+
+        // One more off, and fewer than the cap are left to offer.
+        let mut home = server("Home", true, true);
+        home.disabled_tools = (0..=spare).map(|n| format!("t{n}")).collect();
+        let store = store_with(vec![home], many);
+        assert_eq!(store.offered().len(), MAX_OFFERED_TOOLS - 1);
     }
 
     #[test]
@@ -1717,6 +1820,20 @@ mod tests {
         assert!(with(vec![header("Host", "elsewhere")]).is_err());
         assert!(with(vec![header("Mcp-Session-Id", "s1")]).is_err());
         assert!(with(vec![header("X-Key", "a"), header("x-key", "b")]).is_err());
+
+        let off = |tools: Vec<String>| {
+            let mut changed = settings.clone();
+            changed.servers[0].disabled_tools = tools;
+            validate(&changed)
+        };
+        assert!(off(vec!["turn_on".to_owned(), "lights.list".to_owned()]).is_ok());
+        assert!(off(vec!["x".repeat(MAX_TOOL_NAME_CHARS)]).is_ok());
+        assert!(off(vec!["turn_on".to_owned(), "turn_on".to_owned()]).is_err());
+        assert!(off(vec![String::new()]).is_err());
+        assert!(off(vec!["x".repeat(MAX_TOOL_NAME_CHARS + 1)]).is_err());
+        let numbered = |count: usize| (0..count).map(|n| format!("t{n}")).collect();
+        assert!(off(numbered(MAX_DISABLED_TOOLS)).is_ok());
+        assert!(off(numbered(MAX_DISABLED_TOOLS + 1)).is_err());
     }
 
     #[test]
@@ -1764,10 +1881,14 @@ mod tests {
         assert_eq!(server.headers.len(), 1);
         assert_eq!(server.headers[0].name, "Authorization");
         assert_eq!(server.headers[0].value, "Bearer abc");
-        // The next save writes headers only.
+        // Saved before single tools could be switched off: none is.
+        assert!(server.disabled_tools.is_empty());
+        // The next save writes headers only, and no list of switched-off
+        // tools while there is none, so an earlier build still reads the file.
         store.set_enabled("old", false).expect("saved");
         let written = fs::read_to_string(Path::new(&directory).join(SETTINGS_FILE)).expect("read");
         assert!(!written.contains("bearer_token"));
+        assert!(!written.contains("disabled_tools"));
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -1850,6 +1971,18 @@ mod tests {
         );
         let run = store.call("mcp_home_turn_on", &json!({}), None).await;
         assert_eq!(run.outcome, "refused");
+
+        // Allowed by the server's switches, but switched off by the owner.
+        let mut home = server("Home", true, true);
+        home.disabled_tools = vec!["turn_on".to_owned(), "read_state".to_owned()];
+        let store = store_with(
+            vec![home],
+            vec![tool("turn_on", false), tool("read_state", true)],
+        );
+        for name in ["mcp_home_turn_on", "mcp_home_read_state"] {
+            let run = store.call(name, &json!({}), None).await;
+            assert_eq!(run.outcome, "refused");
+        }
     }
 
     #[tokio::test]
@@ -2060,12 +2193,50 @@ mod tests {
             ("completed", "still here")
         );
 
-        // A restart keeps the server and what it listed.
+        // The owner switches one tool off. It is no longer offered, with no
+        // new contact with the server, and a call the model still makes is
+        // refused here: the stand-in would have answered "the switch is
+        // jammed". The other tool keeps working.
+        let switched = store
+            .upsert(McpServerInput {
+                id: Some(saved.id.clone()),
+                disabled_tools: Some(vec!["fail".to_owned()]),
+                ..McpServerInput::default()
+            })
+            .expect("saved");
+        assert_eq!(switched.disabled_tools, ["fail"]);
+        assert!(!switched.tool_enabled("fail") && switched.tool_enabled("echo"));
+        let offered = store.offered();
+        assert_eq!(offered.len(), 1, "the switched-off tool is not offered");
+        assert_eq!(offered[0].model_name, "mcp_stand_in_echo");
+        let refused = store.call("mcp_stand_in_fail", &json!({}), None).await;
+        assert_eq!(
+            (refused.outcome, refused.observation.as_str()),
+            ("refused", "That tool is not available right now.")
+        );
+        let kept = store
+            .call("mcp_stand_in_echo", &json!({ "text": "still on" }), None)
+            .await;
+        assert_eq!(
+            (kept.outcome, kept.observation.as_str()),
+            ("completed", "still on")
+        );
+        // A new listing does not switch it back on.
+        let status = store
+            .refresh(&saved.id, DISCOVERY_TIMEOUT)
+            .await
+            .expect("known");
+        assert_eq!(status.tools.len(), 2);
+        assert_eq!(store.offered().len(), 1);
+
+        // A restart keeps the server, what it listed, and the tool the owner
+        // switched off.
         let restarted = McpStore::load(Some(&directory));
         assert_eq!(restarted.snapshot().servers.len(), 1);
-        assert_eq!(restarted.offered().len(), 2);
+        assert_eq!(restarted.snapshot().servers[0].disabled_tools, ["fail"]);
+        assert_eq!(restarted.offered().len(), 1);
 
-        // By voice: off, then on again.
+        // By voice: off, then on again. The count is what is offered.
         let off = restarted
             .manage(&json!({ "action": "disable", "server": "stand in" }), None)
             .await;
@@ -2076,8 +2247,45 @@ mod tests {
             .await;
         assert_eq!(
             on.observation,
-            "Stand In is now on with 2 tools. They are available from the next request."
+            "Stand In is now on with 1 tool. They are available from the next request."
         );
+
+        // Switched back on, the tool is offered again and the settings file
+        // no longer carries the list. An invalid list is refused and changes
+        // nothing.
+        restarted
+            .upsert(McpServerInput {
+                id: Some(saved.id.clone()),
+                disabled_tools: Some(Vec::new()),
+                ..McpServerInput::default()
+            })
+            .expect("saved");
+        assert_eq!(restarted.offered().len(), 2);
+        let settings_file = Path::new(&directory).join(SETTINGS_FILE);
+        assert!(
+            !fs::read_to_string(&settings_file)
+                .expect("read")
+                .contains("disabled_tools")
+        );
+        assert!(matches!(
+            restarted.upsert(McpServerInput {
+                id: Some(saved.id.clone()),
+                disabled_tools: Some(vec!["echo".to_owned(), "echo".to_owned()]),
+                ..McpServerInput::default()
+            }),
+            Err(McpError::Invalid(_))
+        ));
+        assert_eq!(restarted.offered().len(), 2);
+
+        // Off again, with a name the server does not list: both are kept.
+        restarted
+            .upsert(McpServerInput {
+                id: Some(saved.id.clone()),
+                disabled_tools: Some(vec!["fail".to_owned(), "gone".to_owned()]),
+                ..McpServerInput::default()
+            })
+            .expect("saved");
+        assert_eq!(restarted.offered().len(), 1);
 
         // A changed header is a different endpoint: what the old one listed
         // is forgotten, and the refusal is recorded for Center.
@@ -2092,6 +2300,11 @@ mod tests {
             })
             .expect("saved");
         assert!(restarted.offered().is_empty());
+        // The edit did not mention the switched-off tools, so they stay off.
+        assert_eq!(
+            restarted.snapshot().servers[0].disabled_tools,
+            ["fail", "gone"]
+        );
         let status = restarted
             .refresh(&saved.id, DISCOVERY_TIMEOUT)
             .await

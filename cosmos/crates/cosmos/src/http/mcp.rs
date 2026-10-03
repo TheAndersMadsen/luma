@@ -24,6 +24,10 @@ struct McpServerView {
     enabled: bool,
     allow_actions: bool,
     allow_when_locked: bool,
+    /// Every tool name the owner switched off, including names the server no
+    /// longer lists. Center sends this list back with one name added or
+    /// removed, so those are not lost.
+    disabled_tools: Vec<String>,
     /// What the last contact showed: `untested`, `connected`, `unauthorized`,
     /// `unreachable`, `timed_out` or `invalid_response`.
     status: McpState,
@@ -39,6 +43,10 @@ struct McpToolView {
     read_only: bool,
     /// Whether the assistant is offered this tool right now.
     offered: bool,
+    /// Whether the owner has this tool switched on. An enabled tool is still
+    /// not offered while its server is off, or when it is an action tool and
+    /// actions are not allowed.
+    enabled: bool,
 }
 
 fn mcp_view(store: &crate::mcp::McpStore) -> McpView {
@@ -59,6 +67,7 @@ fn mcp_view(store: &crate::mcp::McpStore) -> McpView {
                             offered: offered.iter().any(|offer| {
                                 offer.server_id == server.id && offer.tool_name == tool.name
                             }),
+                            enabled: server.tool_enabled(&tool.name),
                             name: tool.name,
                             description: tool.description,
                             read_only: tool.read_only,
@@ -77,6 +86,7 @@ fn mcp_view(store: &crate::mcp::McpStore) -> McpView {
                     enabled: server.enabled,
                     allow_actions: server.allow_actions,
                     allow_when_locked: server.allow_when_locked,
+                    disabled_tools: server.disabled_tools,
                 }
             })
             .collect(),
