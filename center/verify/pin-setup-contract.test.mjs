@@ -358,7 +358,7 @@ test("a missing required service sends an operator to Services", () => {
   assert.equal(services.status, "todo");
   assert.equal(services.summary, "Speech needs setting up.");
   assert.doesNotMatch(services.summary, /Music/u);
-  assert.match(services.next, /Settings → Services/u);
+  assert.match(services.next, /Settings → Assistant & voice/u);
 });
 
 test("an unread required service stays checking instead of becoming a false success", () => {

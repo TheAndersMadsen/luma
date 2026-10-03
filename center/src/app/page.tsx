@@ -167,7 +167,8 @@ export default function MemoriesPage() {
             <EmptyState
               icon={<MemoriesEmptyIcon size={56} />}
               title="No memories yet"
-              detail="Photos, notes, music, and calls from your Pin will appear here."
+              detail="Photos, notes, music, and calls from your Pin will appear here. New to Luma? Start by setting up your Pin."
+              action={{ label: "Set up a Pin", href: "/settings/pin/setup" }}
             />
           ) : data.state === "degraded" ? (
             <StatusMessage tone="warning" onRetry={() => refetch()}>

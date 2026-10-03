@@ -119,7 +119,7 @@ describe("CosmosServicesCard", () => {
     expect(writes[0]).toMatchObject({ os3: { enabled: true, session_cookie: "session=example" } });
     expect(screen.getByRole("switch", { name: "Use OS3" })).toHaveAttribute("aria-checked", "true");
     expect(cookie).toHaveValue("");
-    expect(cookie).toHaveAttribute("placeholder", "Configured — leave blank to keep");
+    expect(cookie).toHaveAttribute("placeholder", "Saved. Leave blank to keep it");
   });
 
   it("locks OS3 cookie and enable controls while a save is pending", async () => {
@@ -169,12 +169,12 @@ describe("CosmosServicesCard", () => {
     await user.click(await screen.findByText("Search & maps", { selector: "summary strong" }));
     await screen.findByText("SerpAPI key");
     const input = screen.getByText("SerpAPI key").closest("div")!.querySelector("input")!;
-    expect(input).toHaveAttribute("placeholder", "Configured — leave blank to keep");
+    expect(input).toHaveAttribute("placeholder", "Saved. Leave blank to keep it");
 
     await user.type(input, "abc");
     expect(input).toHaveAttribute("placeholder", "Paste secret");
     await user.clear(input);
-    expect(input).toHaveAttribute("placeholder", "Configured — leave blank to keep");
+    expect(input).toHaveAttribute("placeholder", "Saved. Leave blank to keep it");
 
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await screen.findByText("Settings saved. Your next request will use them.");
@@ -199,13 +199,36 @@ describe("CosmosServicesCard", () => {
     await user.click(within(field()).getByRole("button", { name: "Remove" }));
     expect(input).toHaveAttribute("placeholder", "Will be removed when saved");
     await user.click(within(field()).getByRole("button", { name: "Keep" }));
-    expect(input).toHaveAttribute("placeholder", "Configured — leave blank to keep");
+    expect(input).toHaveAttribute("placeholder", "Saved. Leave blank to keep it");
 
     await user.click(within(field()).getByRole("button", { name: "Remove" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await screen.findByText("Settings saved. Your next request will use them.");
     expect(writes).toHaveLength(1);
     expect((writes[0] as { search: Record<string, unknown> }).search).toMatchObject({ serpapi_key: "" });
+  });
+
+  it("names each secret field so a screen reader announces it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => respond(integrationsView(OS3_OFF))));
+    render(<CosmosServicesCard operator />);
+
+    expect(await screen.findByLabelText(/^API key/)).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText(/^Azure Speech key/)).toHaveAttribute("type", "password");
+  });
+
+  it("offers Try again when the first read fails, and loads the settings on retry", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? respond({ error: "Cosmos is unreachable." }, 502) : respond(integrationsView(OS3_OFF));
+    }));
+    const user = userEvent.setup();
+    render(<CosmosServicesCard operator />);
+
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("Cosmos is unreachable.");
+    await user.click(within(notice).getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Save changes" })).toBeEnabled();
   });
 
   it("asks the operator to sign in again when the session expired", async () => {

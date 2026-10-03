@@ -268,7 +268,7 @@ export default function SetupView({
       case "services":
         return operator ? (
           <Link className={settings.additionLink} href="/settings/account/services">
-            Set up services
+            Open Assistant &amp; voice
           </Link>
         ) : null;
 

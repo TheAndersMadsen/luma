@@ -128,19 +128,19 @@ export const PIN_SETUP_CAPABILITIES = [
   {
     id: "assistant",
     label: "Assistant",
-    detail: "Language understanding and tool orchestration",
+    detail: "Understands your questions and finds the answers",
     required: true,
   },
   {
     id: "speech",
     label: "Speech",
-    detail: "Transcription and spoken responses",
+    detail: "Hears what you say and speaks the answer",
     required: true,
   },
   {
     id: "weather",
     label: "Weather",
-    detail: "Current conditions in the stock experience",
+    detail: "Current weather where you are",
     required: false,
   },
   {
@@ -152,13 +152,13 @@ export const PIN_SETUP_CAPABILITIES = [
   {
     id: "musicPlayback",
     label: "Music playback",
-    detail: "The selected provider can play on this Pin",
+    detail: "Your chosen music service can play on this Pin",
     required: false,
   },
   {
     id: "foodLogging",
     label: "Food logging",
-    detail: "Food lookup and durable log entries",
+    detail: "Looks up foods and keeps your food log",
     required: false,
   },
 ] as const;
@@ -466,7 +466,7 @@ function deriveNetwork(facts: PinSetupFacts): DraftStep {
 
   if (!network.online) {
     const clockNote = clock
-      ? ` Its clock is ${clock}; that corrects itself once the Pin is online.`
+      ? ` Its clock is ${clock}. That corrects itself once the Pin is online.`
       : "";
     return network.wifiEnabled === false
       ? {
@@ -634,7 +634,7 @@ function deriveServices(facts: PinSetupFacts): DraftStep {
       ? {
           status: "todo",
           summary: `${formatList(missing)} ${missing.length === 1 ? "needs" : "need"} setting up.`,
-          next: "Set them up in Settings → Services. Everything else there is optional.",
+          next: "Set them up in Settings → Assistant & voice. Everything else there is optional.",
         }
       : {
           status: "manual",
@@ -831,7 +831,7 @@ function deriveConfirm(facts: PinSetupFacts): DraftStep {
   const { cloud } = facts;
   const evidence = cloud.connectedPinReporting
     ? "This Pin is reporting to your Luma."
-    : "This Pin hasn’t reported to your Luma yet; its first report can take a minute.";
+    : "This Pin hasn’t reported to your Luma yet. Its first report can take a minute.";
   return {
     status: "manual",
     summary: `${evidence} Test the microphone, speaker, and gesture.`,

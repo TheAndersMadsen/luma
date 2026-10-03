@@ -189,7 +189,7 @@ function PasscodeEditor({ onDone }: { onDone: (saved: boolean) => void }) {
         </StatusMessage>
       ) : problem === "failed" ? (
         <StatusMessage tone="warning">
-          Your passcode couldn&rsquo;t be saved. Nothing was changed.
+          Your passcode couldn&rsquo;t be saved. Nothing was changed. Try again in a moment.
         </StatusMessage>
       ) : null}
       <div className={editor.actions}>

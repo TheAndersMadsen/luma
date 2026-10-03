@@ -208,7 +208,7 @@ export const ADB_APPROVAL_ATTEMPTS = 3;
 export class AdbApprovalPendingError extends Error {
   constructor() {
     super(
-      "The Pin hasn't approved USB debugging from this computer. Watch the Pin's display for an “Allow USB debugging?” prompt and accept it — Center re-asks every few seconds. If no prompt appears, the Pin's software needs its ADB approval repaired over maintenance; see Connection help.",
+      "The Pin hasn't approved USB debugging from this computer. Watch the Pin's display for an “Allow USB debugging?” prompt and accept it. Center asks again every few seconds. If no prompt appears, unplug the Pin, plug it back in, and choose Connect over USB again. If it keeps failing, open Connection help.",
     );
     this.name = "AdbApprovalPendingError";
   }

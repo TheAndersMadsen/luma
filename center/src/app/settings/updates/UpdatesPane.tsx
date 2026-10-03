@@ -94,7 +94,7 @@ export function UpdatesPane({ overview }: { overview: UpdateOverview }) {
             <span className={settings.titleInfo}>Install it</span>
             <div className={settings.descWrapper}>
               <CopyCommand command={UPDATE_COMMAND} label="update command" />
-              <span className={settings.muted}>Run this on your server. Your Center may pause for a minute while it updates.</span>
+              <span className={settings.muted}>Run this on your server, in the Luma folder (usually ~/.local/share/luma/operators/current). Your Center may pause for a minute while it updates.</span>
             </div>
           </div>
         ) : null}

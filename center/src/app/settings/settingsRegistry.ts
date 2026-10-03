@@ -28,7 +28,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     description: "Make it work the way you like.",
     routes: [
       { title: "My Ai Pin", label: "My Ai Pin", href: "/settings/account/devices", description: "Battery, connection and your paired Pins.", testid: "menu-my-devices-link", keywords: ["device", "pair", "battery", "lost", "remove"] },
-      { title: "Setup guide", label: "Set up a Pin", href: "/settings/pin/setup", description: "Connect your Pin and follow the steps to get it ready.", testid: "menu-pin-setup-link", keywords: ["setup", "start", "reconnect", "help", "usb", "activate"] },
+      { title: "Guided setup", label: "Set up a Pin", href: "/settings/pin/setup", description: "Connect your Pin and follow the steps to get it ready.", testid: "menu-pin-setup-link", keywords: ["setup", "start", "reconnect", "help", "usb", "activate"] },
       { title: "Assistant & voice", label: "Assistant & voice", href: "/settings/account/services", description: "How your Pin answers, speaks and finds things.", testid: "menu-services-link", keywords: ["services", "cosmos", "providers", "model", "api", "keys", "search", "maps", "speech", "weather", "azure", "google", "codex", "os3"] },
       { title: "Pin features", label: "Pin features", href: "/settings/account/features", description: "Choose the experiences you want on your Pin.", testid: "menu-features-link", keywords: ["controls", "behavior", "touchcode", "vision", "catch me up"] },
     ],

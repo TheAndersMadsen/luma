@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { UnsavedChangesGuard } from "@/components/UnsavedChangesGuard";
 import { StatusChip, Switch, type StatusTone } from "@/components/Status";
 import { useAssistantStatus, type AssistantStatus } from "@/components/AiMicChat";
@@ -154,24 +154,24 @@ const CODEX_REASONING_EFFORTS = [
 const SERVICES: readonly ServiceState[] = [
   {
     name: "Assistant",
-    detail: "Language-model requests and tool orchestration",
+    detail: "Understands your questions and finds the answers",
     ready: (status) => status.assistant,
   },
   {
     name: "Web search",
     optional: true,
-    detail: "Current results through the server search profile",
+    detail: "Current answers from the web",
     ready: (status) => status.tools.some((tool) => tool.name === "web_search" && tool.live),
   },
   {
     name: "Maps & places",
     optional: true,
-    detail: "Nearby search, reverse geocoding and directions",
+    detail: "Nearby places, addresses and directions",
     ready: (status) => status.tools.some((tool) => tool.name === "nearby" && tool.live),
   },
   {
     name: "Speech",
-    detail: "Cloud transcription and spoken responses",
+    detail: "Hears what you say and speaks the answer",
     ready: (status) => status.speech,
   },
   {
@@ -347,14 +347,16 @@ function SecretField({
   action?: ReactNode;
 }) {
   const removing = value === "";
+  const inputId = useId();
   return (
     <div className={styles.integrationField}>
-      <label>
+      <label htmlFor={inputId}>
         <strong>{label}</strong>
         <small>{detail}</small>
       </label>
       <div className={styles.secretControl}>
         <input
+          id={inputId}
           className={styles.integrationInput}
           type="password"
           value={value ?? ""}
@@ -362,7 +364,7 @@ function SecretField({
             removing
               ? "Will be removed when saved"
               : configured && value === null
-                ? "Configured — leave blank to keep"
+                ? "Saved. Leave blank to keep it"
                 : "Paste secret"
           }
           autoComplete="new-password"
@@ -434,6 +436,20 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
       });
     return () => { active = false; };
   }, [load, operator]);
+
+  /** The read-failure state's Try again: the same first read, once more. */
+  function retryFirstRead() {
+    setMessage(undefined);
+    setLoading(true);
+    void load(true)
+      .catch((error: unknown) => {
+        setMessage({
+          tone: "error",
+          ...failureMessage(error, "Your session expired, so your Cosmos settings couldn’t be read.", "Cosmos is unreachable."),
+        });
+      })
+      .finally(() => setLoading(false));
+  }
 
   useEffect(() => {
     if (!deviceCode) return;
@@ -721,10 +737,19 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
              trapped behind the loaded branch or the card spins forever. */
           <div className={styles.integrationMessage} data-tone={message.tone} role="status">
             {message.text}
-            {message.signIn ? <> <Link href="/login">Sign in again</Link>.</> : null}
+            {message.signIn ? (
+              <> <Link href="/login">Sign in again</Link>.</>
+            ) : (
+              <>
+                {" "}
+                <button className={styles.inlineButton} type="button" onClick={retryFirstRead}>
+                  Try again
+                </button>
+              </>
+            )}
           </div>
         ) : (
-          <div className={styles.integrationMessage} role="status">Loading Cosmos settings…</div>
+          <div className={styles.integrationMessage} role="status">Loading your service settings…</div>
         )
       ) : (
         <fieldset className={styles.integrationSettings} disabled={saving || testing !== undefined}>
@@ -767,7 +792,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                   <label htmlFor="assistant-base-url"><strong>API base URL</strong><small>For example, https://openrouter.ai/api/v1</small></label>
                   <input id="assistant-base-url" className={styles.integrationInput} type="url" value={draft.baseUrl} placeholder="https://openrouter.ai/api/v1" onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} />
                 </div>
-                <SecretField label="API key" detail="Stored only in Cosmos." configured={view.assistant.api_key_configured} value={secrets.assistantApiKey} onChange={(value) => secret("assistantApiKey", value)} onRemove={() => removeSecret("assistantApiKey")} />
+                <SecretField label="API key" detail="Kept on your server. Never sent to the Pin." configured={view.assistant.api_key_configured} value={secrets.assistantApiKey} onChange={(value) => secret("assistantApiKey", value)} onRemove={() => removeSecret("assistantApiKey")} />
               </>
             ) : (
               <div className={styles.codexConnect}>
@@ -850,9 +875,9 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                 <StatusChip tone={view.speech.configured ? "live" : "off"} label={view.speech.configured ? "Configured" : "Needs setup"} />
               </span>
             </summary>
-            <SecretField label="Azure Speech key" detail="Stored only in Cosmos." configured={view.speech.azure_key_configured} value={secrets.azureKey} onChange={(value) => secret("azureKey", value)} onRemove={() => removeSecret("azureKey")} />
+            <SecretField label="Azure Speech key" detail="From your Speech resource in the Azure portal. Kept on your server." configured={view.speech.azure_key_configured} value={secrets.azureKey} onChange={(value) => secret("azureKey", value)} onRemove={() => removeSecret("azureKey")} />
             <div className={styles.integrationField}>
-              <label htmlFor="azure-region"><strong>Azure region</strong><small>For example, westeurope.</small></label>
+              <label htmlFor="azure-region"><strong>Azure region</strong><small>The region shown next to your key in the Azure portal, for example westeurope.</small></label>
               <input id="azure-region" className={styles.integrationInput} value={draft.azureRegion} placeholder="westeurope" onChange={(event) => setDraft({ ...draft, azureRegion: event.target.value })} />
             </div>
             <div className={styles.integrationField}>
@@ -868,7 +893,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
               <StatusChip tone={view.search.configured || view.maps.configured ? "live" : "off"} label={view.search.configured || view.maps.configured ? "Configured" : "Optional"} />
             </summary>
             <div className={styles.integrationField}>
-              <label htmlFor="searxng-url"><strong>SearxNG URL</strong><small>Recommended self-hosted web search.</small></label>
+              <label htmlFor="searxng-url"><strong>SearXNG URL</strong><small>Recommended self-hosted web search.</small></label>
               <div className={styles.secretControl}>
                 <input id="searxng-url" className={styles.integrationInput} type="url" value={draft.searxngBaseUrl} placeholder="https://search.example.com" onChange={(event) => setDraft({ ...draft, searxngBaseUrl: event.target.value })} />
                 {testControl("searxng", "SearXNG", !draft.searxngBaseUrl.trim())}
@@ -892,9 +917,9 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                 <StatusChip tone={view.food.configured ? "live" : "off"} label={view.food.configured ? "Connected" : "Optional"} />
               </span>
             </summary>
-            <SecretField label="Open Food Facts username" detail="Stored only in Cosmos and sent only in a POST body." configured={view.food.username_configured} value={secrets.openFoodFactsUsername} onChange={(value) => secret("openFoodFactsUsername", value)} onRemove={() => removeSecret("openFoodFactsUsername")} />
-            <SecretField label="Open Food Facts password" detail="Stored only in Cosmos and never returned to Center." configured={view.food.password_configured} value={secrets.openFoodFactsPassword} onChange={(value) => secret("openFoodFactsPassword", value)} onRemove={() => removeSecret("openFoodFactsPassword")} />
-            <p className={styles.providerNote}>Nutrition lookups remain keyless as required by Open Food Facts; this account is verified for authenticated contribution APIs.</p>
+            <SecretField label="Open Food Facts username" detail="Kept on your server." configured={view.food.username_configured} value={secrets.openFoodFactsUsername} onChange={(value) => secret("openFoodFactsUsername", value)} onRemove={() => removeSecret("openFoodFactsUsername")} />
+            <SecretField label="Open Food Facts password" detail="Kept on your server. Center never shows it again." configured={view.food.password_configured} value={secrets.openFoodFactsPassword} onChange={(value) => secret("openFoodFactsPassword", value)} onRemove={() => removeSecret("openFoodFactsPassword")} />
+            <p className={styles.providerNote}>Food lookups work without an account. Add one only if your Pin should add food information to Open Food Facts.</p>
             <div className={styles.integrationTestActions}>{testControl(
                   "open_food_facts",
                   "Open Food Facts",

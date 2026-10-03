@@ -20,7 +20,7 @@ test("Services configures and tests Cosmos providers without placing credentials
   for (const label of [
     "OpenAI-compatible API",
     "Codex subscription",
-    "SearxNG URL",
+    "SearXNG URL",
     "Google Maps key",
     "Azure Speech key",
     "OS3 session cookie",

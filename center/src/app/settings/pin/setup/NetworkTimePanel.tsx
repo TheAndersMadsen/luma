@@ -217,7 +217,7 @@ export function NetworkTimePanel({
       <>
         <p className={pin.fieldHint}>
           Center turns Wi-Fi on over the USB cable. If the Pin already knows a
-          network nearby, it joins by itself; otherwise you choose one next.
+          network nearby, it joins by itself. Otherwise you choose one next.
         </p>
         <div className={styles.actions}>
           <button

@@ -355,10 +355,10 @@ function ProvisioningContent() {
               </>
             ) : null}
             {!enrollment.provisioning_configured ? (
-              <StatusMessage tone="warning">Cosmos provisioning is not ready.</StatusMessage>
+              <StatusMessage tone="warning">Cosmos provisioning is not ready. On the server, run ./luma doctor production to see what is missing.</StatusMessage>
             ) : null}
             {!overview.device_edge_ipv4 || !overview.device_status_endpoint ? (
-              <StatusMessage tone="warning">Finish the Cosmos device connection settings before activating a Pin.</StatusMessage>
+              <StatusMessage tone="warning">Finish the Cosmos device connection settings before activating a Pin. On the server, run ./luma doctor production to see which setting is missing.</StatusMessage>
             ) : null}
             {activationMessage ? (
               <StatusMessage tone={activationMessage.tone}>{activationMessage.text}</StatusMessage>

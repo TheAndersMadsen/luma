@@ -30,6 +30,11 @@ const HELP_LINKS: readonly HelpLink[] = [
     href: "https://github.com/PenumbraOS/interposer/blob/master/preparation.md",
     description: "Illustrated instructions for exposing the service contacts safely.",
   },
+  {
+    label: "Fix a Pin the browser can't find",
+    href: "https://github.com/TheAndersMadsen/luma/blob/main/guides/troubleshooting.md#connecting-the-pin-from-the-browser",
+    description: "Empty device lists, USB permissions on Linux, and drivers on Windows.",
+  },
 ];
 
 export function ConnectionHelpModal({
@@ -89,6 +94,12 @@ export function ConnectionHelpModal({
         <p className={styles.dialogCopy}>
           Power on and unlock the Pin, then use desktop Chrome or Edge. Close ADB,
           Android Studio, scrcpy, and other tools that may already own the USB interface.
+        </p>
+        <p className={styles.dialogCopy}>
+          If the browser&rsquo;s device list stays empty, plug the cable straight into
+          the computer, not a hub, and try another cable: charge-only cables don&rsquo;t
+          work. On Windows the browser may need the Android USB driver. On Linux your
+          user needs permission to use Android devices.
         </p>
       </div>
 
