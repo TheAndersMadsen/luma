@@ -1,4 +1,4 @@
-import { originFromHeaders } from "@/server/auth";
+import { isSameOriginRequest, originFromHeaders } from "@/server/auth";
 import { MCP_OAUTH_CALLBACK_PATH, isMcpServerId, mcpGate, mcpProxy } from "../../proxy";
 
 /**
@@ -12,7 +12,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const refused = await mcpGate(request);
+  const refused = await mcpGate({ sameOrigin: isSameOriginRequest(request) });
   if (refused) return refused;
   const { id } = await context.params;
   if (!isMcpServerId(id)) {
@@ -29,7 +29,7 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const refused = await mcpGate(request);
+  const refused = await mcpGate({ sameOrigin: isSameOriginRequest(request) });
   if (refused) return refused;
   const { id } = await context.params;
   if (!isMcpServerId(id)) {

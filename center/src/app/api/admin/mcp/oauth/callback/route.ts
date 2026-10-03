@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   const origin = originFromHeaders(request.headers) ?? incoming.origin;
   // No same-origin check: the provider's redirect is cross-site by nature. The
   // single-use `state` Cosmos issued to this owner is what ties it to them.
-  const refused = await mcpGate(null);
+  const refused = await mcpGate();
   if (refused) {
     if (refused.status !== 401) return refused;
     // Center's sign-in lapsed while the owner was at the provider. Cosmos

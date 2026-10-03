@@ -28,12 +28,18 @@ import { McpServersCard } from "./McpServersCard";
  * 10. The session expired and the owner is left with an error and no way on.
  * 11. Cosmos refuses a change and the card hides its sentence, shows success,
  *     or loses the list it had.
+ * 12. Switching one tool off forgets the other tools already switched off,
+ *     including ones the server no longer lists, or a tool's chip gives the
+ *     wrong reason it is not offered.
+ * 13. Sign in is offered for a server that uses a typed Authorization header,
+ *     is missing for one that asks for a sign-in, or sends the browser to an
+ *     address that is not a web page.
  *
  * Controls are found by role and name, never by position, so a new control on
  * a server does not move them.
  */
 
-type Tool = { name: string; description: string; read_only: boolean; offered: boolean };
+type Tool = { name: string; description: string; read_only: boolean; offered: boolean; enabled: boolean };
 
 type Server = {
   id: string;
@@ -43,6 +49,9 @@ type Server = {
   enabled: boolean;
   allow_actions: boolean;
   allow_when_locked: boolean;
+  disabled_tools: string[];
+  actions_without_asking: boolean;
+  signed_in: boolean;
   status: string;
   checked_at_ms: number | null;
   tools: Tool[];
@@ -58,11 +67,14 @@ function server(patch: Partial<Server> = {}): Server {
     enabled: true,
     allow_actions: false,
     allow_when_locked: false,
+    disabled_tools: [],
+    actions_without_asking: false,
+    signed_in: false,
     status: "connected",
     checked_at_ms: 1_790_000_000_000,
     tools: [
-      { name: "list_lights", description: "Lists the lights.", read_only: true, offered: true },
-      { name: "switch_light", description: "", read_only: false, offered: false },
+      { name: "list_lights", description: "Lists the lights.", read_only: true, offered: true, enabled: true },
+      { name: "switch_light", description: "", read_only: false, offered: false, enabled: true },
     ],
     ...patch,
   };
@@ -183,7 +195,7 @@ describe("McpServersCard", () => {
 
   it("says why a connected server offers nothing when all its tools are actions", async () => {
     center([
-      server({ tools: [{ name: "switch_light", description: "Switches a light.", read_only: false, offered: false }] }),
+      server({ tools: [{ name: "switch_light", description: "Switches a light.", read_only: false, offered: false, enabled: true }] }),
     ]);
     const user = userEvent.setup();
     render(<McpServersCard operator />);
@@ -347,6 +359,7 @@ describe("McpServersCard", () => {
     ["Use Work", { id: "work", enabled: false }],
     ["Allow actions for Work", { id: "work", allow_actions: true }],
     ["Use Work while locked", { id: "work", allow_when_locked: true }],
+    ["Ask before Work runs an action", { id: "work", actions_without_asking: true }],
   ])("the %s switch sends that one setting for that server and shows Cosmos's answer", async (label, change) => {
     const sent = center([server(), WORK], () => Response.json({ servers: [server(), { ...WORK, ...change }] }));
     const user = userEvent.setup();
@@ -364,6 +377,116 @@ describe("McpServersCard", () => {
         was === "true" ? "false" : "true",
       ),
     );
+  });
+
+  it("switches one tool off and keeps every other switched-off name, listed or not", async () => {
+    const before = server({
+      disabled_tools: ["gone"],
+      tools: [
+        { name: "list_lights", description: "Lists the lights.", read_only: true, offered: true, enabled: true },
+        { name: "switch_light", description: "", read_only: false, offered: false, enabled: true },
+      ],
+    });
+    const after = server({
+      disabled_tools: ["gone", "list_lights"],
+      tools: [
+        { name: "list_lights", description: "Lists the lights.", read_only: true, offered: false, enabled: false },
+        { name: "switch_light", description: "", read_only: false, offered: false, enabled: true },
+      ],
+    });
+    const sent = center([before], () => Response.json({ servers: [after] }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const home = await open(user, "Home");
+    await user.click(within(home).getByRole("switch", { name: "Use list_lights from Home" }));
+
+    await waitFor(() => expect(sent).toStrictEqual([saveOf({ id: "home", disabled_tools: ["gone", "list_lights"] })]));
+    const tools = await screen.findByRole("list", { name: "Home tools" });
+    const off = within(tools).getByText("list_lights").closest("li")!;
+    await waitFor(() => expect(within(off).getByText("Switched off")).toBeInTheDocument());
+    expect(within(off).getByRole("switch", { name: "Use list_lights from Home" })).toHaveAttribute("aria-checked", "false");
+    // The action tool is still held back for its own reason.
+    expect(within(within(tools).getByText("switch_light").closest("li")!).getByText("Action")).toBeInTheDocument();
+  });
+
+  it("switches a tool back on by sending the list without it", async () => {
+    const before = server({
+      disabled_tools: ["gone", "list_lights"],
+      tools: [{ name: "list_lights", description: "", read_only: true, offered: false, enabled: false }],
+    });
+    const sent = center([before], () => Response.json({ servers: [server()] }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const home = await open(user, "Home");
+    await user.click(within(home).getByRole("switch", { name: "Use list_lights from Home" }));
+
+    await waitFor(() => expect(sent).toStrictEqual([saveOf({ id: "home", disabled_tools: ["gone"] })]));
+  });
+
+  it("offers Sign in only to a server that asks for one and has no Authorization header of its own", async () => {
+    center([
+      WORK,
+      server({ id: "hosted", name: "Hosted", headers: [], status: "sign_in_required", tools: [] }),
+      server({ id: "done", name: "Done", headers: [], signed_in: true }),
+    ]);
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const work = await open(user, "Work");
+    expect(within(work).queryByRole("button", { name: "Sign in to Work" })).not.toBeInTheDocument();
+
+    const hosted = await open(user, "Hosted");
+    expect(within(hosted).getByText(/Choose Sign in\./)).toBeInTheDocument();
+    expect(within(hosted).getByRole("button", { name: "Sign in to Hosted" })).toBeInTheDocument();
+
+    const done = await open(user, "Done");
+    expect(within(done).getByText(/Signed in\./)).toBeInTheDocument();
+    expect(within(done).getByRole("button", { name: "Sign out of Done" })).toBeInTheDocument();
+    expect(within(done).queryByRole("button", { name: "Sign in to Done" })).not.toBeInTheDocument();
+  });
+
+  it("asks Cosmos where to sign in and refuses an address that is not a web page", async () => {
+    const hosted = server({ id: "hosted", name: "Hosted", headers: [], status: "sign_in_required", tools: [] });
+    const sent = center([hosted], () => Response.json({ authorization_url: "javascript:alert(1)" }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const group = await open(user, "Hosted");
+    await user.click(within(group).getByRole("button", { name: "Sign in to Hosted" }));
+
+    expect(await screen.findByText("Cosmos answered with a sign-in address this page cannot open.")).toBeInTheDocument();
+    // The browser sends no return address: Center computes it.
+    expect(sent).toStrictEqual([{ url: "/api/admin/mcp/hosted/oauth", method: "POST", body: undefined }]);
+  });
+
+  it("shows Cosmos's sentence when a sign-in cannot start", async () => {
+    const hosted = server({ id: "hosted", name: "Hosted", headers: [], status: "sign_in_required", tools: [] });
+    center([hosted], () => Response.json({ error: "That server does not offer a sign-in." }, { status: 400 }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const group = await open(user, "Hosted");
+    await user.click(within(group).getByRole("button", { name: "Sign in to Hosted" }));
+
+    expect(await screen.findByText("That server does not offer a sign-in.")).toBeInTheDocument();
+  });
+
+  it("signs out of the server the owner chose and shows Cosmos's answer", async () => {
+    const signedIn = server({ id: "hosted", name: "Hosted", headers: [], signed_in: true });
+    const signedOut = server({ id: "hosted", name: "Hosted", headers: [], status: "sign_in_required", tools: [] });
+    const sent = center([signedIn], () => Response.json({ servers: [signedOut] }));
+    const user = userEvent.setup();
+    render(<McpServersCard operator />);
+
+    const group = await open(user, "Hosted");
+    await user.click(within(group).getByRole("button", { name: "Sign out of Hosted" }));
+
+    await waitFor(() =>
+      expect(sent).toStrictEqual([{ url: "/api/admin/mcp/hosted/oauth", method: "DELETE", body: undefined }]),
+    );
+    expect(await screen.findByRole("button", { name: "Sign in to Hosted" })).toBeInTheDocument();
   });
 
   it("keeps a switch where Cosmos has it when the change is refused, and shows Cosmos's sentence", async () => {
@@ -427,7 +550,7 @@ describe("McpServersCard", () => {
       Response.json({
         servers: [
           server(),
-          { ...WORK, status: "connected", tools: [{ name: "search_tickets", description: "Searches tickets.", read_only: true, offered: true }] },
+          { ...WORK, status: "connected", tools: [{ name: "search_tickets", description: "Searches tickets.", read_only: true, offered: true, enabled: true }] },
         ],
       }),
     );

@@ -94,7 +94,10 @@ const VIEW = {
       allow_when_locked: false,
       status: "connected",
       checked_at_ms: 1_790_000_000_000,
-      tools: [{ name: "list_lights", description: "Lists the lights.", read_only: true, offered: true }],
+      disabled_tools: [],
+      actions_without_asking: false,
+      signed_in: false,
+      tools: [{ name: "list_lights", description: "Lists the lights.", read_only: true, offered: true, enabled: true }],
     },
   ],
 };
