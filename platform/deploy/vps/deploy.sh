@@ -76,7 +76,7 @@ if ((dry_run)); then
   printf ' %q' "${compose[@]}" "${up[@]}"
   printf '\ndocker compose'
   printf ' %q' "${compose[@]}" "${edge_up[@]}"
-  printf '\nnode %q reconcile --project-name %q\n' "$ROOT/platform/cli/realm.js" "$project_name"
+  printf '\nbun --no-env-file %q reconcile --project-name %q\n' "$ROOT/platform/cli/realm.js" "$project_name"
   exit 0
 fi
 

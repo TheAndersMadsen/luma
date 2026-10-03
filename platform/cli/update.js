@@ -289,7 +289,8 @@ function configureAutomaticUpdates({ enabled }, runtime = {}) {
     return Object.freeze({
       state: 'not-installed',
       message: `Automatic updates are ${enabled ? 'on' : 'off'}; the timers start once this server runs a release ` +
-        `in ${OPERATORS_DIR}, where the one-line installer and ./luma update production put them.`,
+        `in ${OPERATORS_DIR}, where the one-line installer and ./luma update production put them. ` +
+        'Unpack the operator archive there and run setup from that folder to start them now.',
     });
   }
   if (!(runtime.hasSystemd ?? hasSystemd)()) {
@@ -364,7 +365,7 @@ function automaticUpdatesReport(values, runtime = {}) {
   const updateEnabled = status(['is-enabled', UPDATE_TIMER]) === 'enabled';
   if (wanted !== updateEnabled || status(['is-enabled', CHECK_TIMER]) !== 'enabled') {
     lines.push(`WARN the timers do not match LUMA_AUTO_UPDATES=${values.LUMA_AUTO_UPDATES || '(unset)'}; ` +
-      `run ./luma setup production --auto-updates ${wanted ? 'on' : 'off'} to install them`);
+      `run ./luma setup production --auto-updates ${wanted ? 'on' : 'off'} to install them, from a release in ${OPERATORS_DIR}`);
   }
   const last = readStatus()?.lastUpdate;
   if (last) lines.push(`Last update: ${last.from} to ${last.to}, ${last.outcome} at ${last.finishedAt}`);

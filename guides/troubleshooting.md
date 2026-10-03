@@ -165,10 +165,11 @@ Fix: Bun and Docker are installed. Continue with the five-file path in
 Cause: setup found no staged Pin archive and could not download one. Either
 the GitHub release has no signed `SHA256SUMS`, or GitHub could not be reached.
 
-Fix: pass the release's Pin archive:
+Fix: pass the release's Pin archive from the folder you downloaded the
+release into (`~/luma` if you followed the README):
 
 ```sh
-./luma setup production --guided --pin-release-archive ../luma-pin-*.tar.gz
+./luma setup production --guided --pin-release-archive ~/luma/luma-pin-*.tar.gz
 ```
 
 </details>

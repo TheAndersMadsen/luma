@@ -1,9 +1,10 @@
 #cloud-config
 # Luma: install the latest signed release on a fresh Ubuntu 24.04 server with
-# no SSH session. Fill every REPLACE_ME value, then paste this whole file into
-# the server provider's cloud-init user data box (Hetzner Cloud: Add server,
-# "Cloud config"). The installer refuses to start while a REPLACE_ME value
-# remains, and logs to /var/log/luma-install.log. The release and its images
+# no SSH session. Fill the REPLACE_ME values in install.env, and the DuckDNS
+# token only if you use a DuckDNS name. Then paste this whole file into the
+# server provider's cloud-init user data box (Hetzner Cloud: Add server,
+# "Cloud config"). The installer refuses to start while install.env or the
+# installer URL still holds a REPLACE_ME value, and logs to /var/log/luma-install.log. The release and its images
 # are public, so no GitHub token is needed. The DuckDNS token file below is
 # shredded as soon as the installer has read it.
 #
@@ -45,10 +46,10 @@ runcmd:
     INSTALLER_URL="https://REPLACE_ME_CENTER_HOST/install.sh"
     (
       case "$INSTALLER_URL" in
-        *REPLACE_ME*) echo "Setup stopped: the installer URL still holds a REPLACE_ME value. Fill every REPLACE_ME value in the cloud-init file, then create the server again."; exit 1 ;;
+        *REPLACE_ME*) echo "Setup stopped: the installer URL still holds a REPLACE_ME value. Fill the installer URL in the cloud-init file, then create the server again."; exit 1 ;;
       esac
       if grep -q REPLACE_ME /etc/luma/install.env; then
-        echo "Setup stopped: /etc/luma/install.env still holds a REPLACE_ME value. Fill every REPLACE_ME value in the cloud-init file, then create the server again."
+        echo "Setup stopped: /etc/luma/install.env still holds a REPLACE_ME value. Fill every REPLACE_ME value in install.env in the cloud-init file, then create the server again."
         exit 1
       fi
       set -a

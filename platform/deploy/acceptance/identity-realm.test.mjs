@@ -480,5 +480,5 @@ test("a confirmed deploy reconciles the running realm before verification", (t) 
     encoding: "utf8",
   });
   assert.equal(preview.status, 0, preview.stderr);
-  assert.match(preview.stdout, /^node \S+\/platform\/cli\/realm\.js reconcile --project-name owner-stack$/mu);
+  assert.match(preview.stdout, /^bun --no-env-file \S+\/platform\/cli\/realm\.js reconcile --project-name owner-stack$/mu);
 });

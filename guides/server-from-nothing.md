@@ -269,14 +269,17 @@ one.
    Run the `scp` command (or the download) again. Never continue from files
    that fail the check.
 
-3. Unpack the operator archive and enter it:
+3. Unpack the operator archive into Luma's own folder and enter it.
+   Automatic updates only start for a release that lives there:
 
    ```sh
-   tar -xzf luma-operator-*-linux.tar.gz
-   cd luma-operator-*/
+   install -d -m 0700 ~/.local/share/luma ~/.local/share/luma/operators ~/.local/share/luma/build
+   tar -xzf luma-operator-*-linux.tar.gz -C ~/.local/share/luma/operators
+   cd ~/.local/share/luma/operators/luma-operator-*/
    ```
 
-   You see: the prompt now ends in `luma-operator-0.3.16#`.
+   You see: the prompt now ends in `luma-operator-0.3.16#`. Keep the release
+   folder from step 2: setup reads the Pin archive from it.
 
 4. Optional: check that the maintainer signed the checksums. This needs
    `cosign` installed. The public key is inside the operator folder you just
@@ -284,7 +287,7 @@ one.
 
    ```sh
    cosign verify-blob --key platform/distribution/release-signing.pub \
-     --bundle ../SHA256SUMS.sigstore.json --insecure-ignore-tlog ../SHA256SUMS
+     --bundle ~/luma-0.3.16/SHA256SUMS.sigstore.json --insecure-ignore-tlog ~/luma-0.3.16/SHA256SUMS
    ```
 
    You see: `Verified OK`.
@@ -293,7 +296,7 @@ one.
    maintainer sent you:
 
    ```sh
-   sha256sum ../SHA256SUMS
+   sha256sum ~/luma-0.3.16/SHA256SUMS
    ```
 
    You see: a 64-character value. It must match the maintainer's message
@@ -315,7 +318,8 @@ one.
 
    **If it also printed `Reconnect over SSH so this session picks up Docker
    group membership.`**, type `exit` and run the `ssh` command from Part B
-   again. Then run `cd ~/luma-0.3.16/luma-operator-*/` before you continue.
+   again. Then run `cd ~/.local/share/luma/operators/luma-operator-*/`
+   before you continue.
 
 6. Skip the registry login. Luma's images are public, so Docker pulls them
    with no sign-in.
@@ -425,7 +429,7 @@ It asks you before each step that changes the server.
    with the release:
 
    ```sh
-   ./luma onboard production --pin-release-archive ../luma-pin-*.tar.gz
+   ./luma onboard production --pin-release-archive ~/luma-0.3.16/luma-pin-*.tar.gz
    ```
 
    You see: `[1/5] Configure this production server`, then

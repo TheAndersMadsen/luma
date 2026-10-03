@@ -104,12 +104,14 @@ Pin later.
    You now have five files: the operator archive, the Pin archive,
    `luma-VERSION.release.json`, `SHA256SUMS`, and `SHA256SUMS.sigstore.json`.
 
-3. **Check and unpack it.**
+3. **Check and unpack it.** Unpack it into Luma's own folder, where updates
+   look for it:
 
    ```sh
    sha256sum --check SHA256SUMS
-   tar -xzf luma-operator-*-linux.tar.gz
-   cd luma-operator-*/
+   install -d -m 0700 ~/.local/share/luma ~/.local/share/luma/operators ~/.local/share/luma/build
+   tar -xzf luma-operator-*-linux.tar.gz -C ~/.local/share/luma/operators
+   cd ~/.local/share/luma/operators/luma-operator-*/
    ```
 
    Every file should end in `: OK`. Stop if one says `FAILED`, and download
@@ -121,19 +123,30 @@ Pin later.
    bash ./bootstrap --tools-only
    ```
 
-   It ends with `Bun and Docker are ready.` If it also says to reconnect over
-   SSH, log out, log back in, and run `cd ~/luma/luma-operator-*/` again.
+   Press Enter at `Ready to start?`, then answer `y` to install Bun and `y`
+   to install Docker. It ends with `Bun and Docker are ready.` If it also
+   prints `Reconnect over SSH so this session picks up Docker group
+   membership.`, type `exit`, sign in again, and run
+   `cd ~/.local/share/luma/operators/luma-operator-*/`. Ubuntu may also show a
+   `Pending kernel upgrade!` notice. It is harmless, and you can reboot later.
 
 5. **Set up and deploy.**
 
    ```sh
-   ./luma onboard production --pin-release-archive ../luma-pin-*.tar.gz
+   ./luma onboard production --pin-release-archive ~/luma/luma-pin-*.tar.gz
    ```
 
-   Answer the six questions, from `[1/6] Public Center domain` to
-   `[6/6] Review`. Answer `y` to `Write this production configuration?` and
-   to `Deploy this verified release now?`. It ends with
+   It asks for your domain, two email addresses, the features (press Enter
+   for the defaults), the server's public IPv4, where to look for updates,
+   and whether to install them at night (press Enter for both). Use real
+   email addresses: Let's Encrypt refuses `example.com`. Check the
+   `[6/6] Review` summary, then answer `y` to `Write this production
+   configuration?` and to `Deploy this verified release now?`. It ends with
    `Setup complete: https://center.example.com/login?...`.
+
+   If deploying stops with `The operation timed out.` or says nothing answered
+   at your domain, the internet can't reach ports 80 and 443 on your server.
+   Open them in your provider's firewall and run the same command again.
 
 6. **Sign in to Center.** Show your first sign-in details:
 

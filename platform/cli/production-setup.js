@@ -243,6 +243,9 @@ function parseOptions(args, current = {}) {
     throw new Error('a public DNS name is required with --domain');
   }
   if (!validProductionEmail(options.acmeEmail)) throw new Error('a valid address is required with --acme-email');
+  if (/@(?:[^@]+\.)?example\.(?:com|net|org)$/iu.test(options.acmeEmail)) {
+    throw new Error("--acme-email needs a real address: Let's Encrypt refuses example.com, example.net, and example.org");
+  }
   if (!validProductionEmail(options.operatorEmail)) throw new Error('a valid address is required with --operator-email');
   // `auto` asks setupProduction to detect the address. The flag path
   // otherwise takes the literal address, as before.

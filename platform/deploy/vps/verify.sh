@@ -100,7 +100,11 @@ const RETRY_EVERY_MS = 2_000;
 // Name the network or TLS failure and what the owner can do about it.
 function networkProblem(error) {
   const cause = error?.cause ?? error;
-  const rawCode = String(cause?.code || (error?.name === 'TimeoutError' ? 'TimeoutError' : ''));
+  // Bun's fetch timeout is a DOMException named TimeoutError whose numeric
+  // `code` (23) names nothing useful, so the name wins.
+  const rawCode = error?.name === 'TimeoutError' || cause?.name === 'TimeoutError'
+    ? 'TimeoutError'
+    : String(cause?.code || '');
   const code = rawCode === 'ConnectionRefused' ? 'ECONNREFUSED' : rawCode;
   if (!code) return null;
   const host = new URL(origin).hostname;

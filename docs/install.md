@@ -165,51 +165,73 @@ Production pulls prepared images.
 
 ### 2. Install the release
 
-1. **Put the release in a folder.** Make one folder per release, named
-   after it, and put the five release files in it. Below, `VERSION` is the
-   version in the `luma-VERSION.release.json` file name. For example,
-   release 1.2.3 goes in `luma-1.2.3`.
-
-2. **Copy the folder to the server.** From your computer:
+1. **Download the release onto the server.**
 
    ```sh
-   scp -r luma-VERSION you@203.0.113.10:
+   mkdir -p ~/luma && cd ~/luma
+   curl -fsSL https://api.github.com/repos/TheAndersMadsen/luma/releases/latest \
+     | grep browser_download_url | cut -d '"' -f 4 | xargs -n 1 curl -fsSLO
    ```
 
-3. **Check the files and unpack the operator.** On the server:
+   You should see five files in `~/luma`: the operator archive, the Pin
+   archive, `luma-VERSION.release.json`, `SHA256SUMS`, and
+   `SHA256SUMS.sigstore.json`.
+
+   <details>
+   <summary>Downloaded the files on your computer instead?</summary>
+
+   Put the five files in a folder named `luma` and copy it over:
 
    ```sh
-   cd ~/luma-VERSION
+   scp -r luma you@203.0.113.10:
+   ```
+
+   </details>
+
+2. **Check the files and unpack the operator.** Unpack it into Luma's own
+   folder. Automatic updates only start for a release that lives there.
+
+   ```sh
+   cd ~/luma
    sha256sum --check SHA256SUMS
-   tar -xzf luma-operator-*-linux.tar.gz
-   cd luma-operator-*/
+   install -d -m 0700 ~/.local/share/luma ~/.local/share/luma/operators ~/.local/share/luma/build
+   tar -xzf luma-operator-*-linux.tar.gz -C ~/.local/share/luma/operators
+   cd ~/.local/share/luma/operators/luma-operator-*/
    ```
 
-   You should see `OK` after every file name. If a line says `FAILED`, copy
-   that file again.
+   You should see `OK` after every file name. If a line says `FAILED`,
+   download that file again.
 
-4. **Install Bun and Docker.**
+3. **Install Bun and Docker.**
 
    ```sh
    bash ./bootstrap --tools-only
    ```
 
-   You should see `Bun and Docker are ready.` If the installer added you to
-   Docker's group, it also says `Reconnect over SSH so this session picks up
-   Docker group membership.` In that case, log out, log back in, and run
-   `cd ~/luma-VERSION/luma-operator-*/` again.
+   Press Enter at `Ready to start?`, then answer `y` to install Bun and `y`
+   to install Docker. You should see `Bun and Docker are ready.` If the
+   installer added you to Docker's group, it also says `Reconnect over SSH so
+   this session picks up Docker group membership.` In that case, type
+   `exit`, sign in again, and run
+   `cd ~/.local/share/luma/operators/luma-operator-*/`.
 
-5. **Set up and deploy.**
+4. **Set up and deploy.**
 
    ```sh
-   ./luma onboard production --pin-release-archive ../luma-pin-*.tar.gz
+   ./luma onboard production --pin-release-archive ~/luma/luma-pin-*.tar.gz
    ```
 
    Answer the questions in
-   [What guided setup asks](#what-guided-setup-asks). Answer `y` to
+   [What guided setup asks](#what-guided-setup-asks). Use real email
+   addresses: Let's Encrypt refuses `example.com`. Answer `y` to
    `Write this production configuration? [y/N]` and to
    `Deploy this verified release now? [y/N]`. You should see
    `Setup complete: https://YOUR_DOMAIN/login?...` at the end.
+
+   If deploying stops with `The operation timed out.` or says nothing
+   answered at your domain, the internet can't reach ports 80 and 443 on
+   the server. Open them in your provider's firewall and run the same
+   command again.
 
 > [!NOTE]
 > On a private fork only, run
@@ -227,10 +249,10 @@ deployment, or Pin state.
 
 `SHA256SUMS.sigstore.json` is the maintainer's cosign signature over
 `SHA256SUMS`. With [cosign](https://github.com/sigstore/cosign) installed,
-run this in `~/luma-VERSION` after you unpack the operator:
+run this in `~/luma` after you unpack the operator:
 
 ```sh
-cosign verify-blob --key luma-operator-*/platform/distribution/release-signing.pub --bundle SHA256SUMS.sigstore.json --insecure-ignore-tlog SHA256SUMS
+cosign verify-blob --key ~/.local/share/luma/operators/luma-operator-*/platform/distribution/release-signing.pub --bundle SHA256SUMS.sigstore.json --insecure-ignore-tlog SHA256SUMS
 ```
 
 It proves the maintainer signed the checksums. `release-signing.pub` is the
@@ -310,9 +332,10 @@ for you.
   (mode 0600, `~/.config/luma/secrets/github-token`) to download later
   releases for [updates](operations.md#update-luma). Public images pull and
   public releases update with no token, so you can skip this step.
-- `doctor production` checks the configuration, ports 80 and 443, DNS, and
-  that Docker can read the release's application from GHCR. It changes
-  nothing.
+- `doctor production` checks the configuration, that nothing else on this
+  server uses ports 80 and 443, that the domain resolves, and that Docker can
+  read the release's application from GHCR. It changes nothing. It cannot see
+  your provider's firewall, or whether the domain points at this server.
 - `deploy production --confirm` does the following, and never compiles
   source:
   1. Renders the edge configuration (Traefik, and Envoy with the `pin`

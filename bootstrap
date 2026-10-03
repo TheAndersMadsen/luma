@@ -39,10 +39,13 @@ _clear() {
 banner() {
   _clear
   printf '\n%s%s  %s%s\n' "$BOLD" "$BLUE" "$1" "$RESET"
-  printf '%s  %s stages%s\n\n' "$DIM" "$TOTAL_STAGES" "$RESET"
-  printf '%s  You drive the browser; this wizard tells you exactly what to do and\n' "$DIM"
-  printf '  captures the values you copy back. Stop any time with Ctrl-C and re-run\n'
-  printf '  later, since it remembers values already saved.%s\n' "$RESET"
+  if (( TOTAL_STAGES == 1 )); then
+    printf '%s  1 stage%s\n\n' "$DIM" "$RESET"
+  else
+    printf '%s  %s stages%s\n\n' "$DIM" "$TOTAL_STAGES" "$RESET"
+  fi
+  printf '%s  It asks before it installs anything. Stop any time with Ctrl-C and run\n' "$DIM"
+  printf '  it again later: tools it already installed are checked and kept.%s\n' "$RESET"
   pause "Ready to start?"
 }
 
