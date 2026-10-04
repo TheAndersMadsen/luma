@@ -308,11 +308,12 @@ function reconcileRealm(admin, { clientId = 'center' } = {}) {
   const role = realm.defaultRole?.name;
   const defaultRoleHolders = role ? admin.run(['get', `roles/${role}/users`, '-r', REALM, ...everyone]) || [] : [];
   // Center's sign-in is the direct grant flow, so its executions carry the
-  // second-factor policy.
+  // second-factor policy. The executions endpoint is keyed by the flow's
+  // alias, not its id.
   const flows = admin.run(['get', 'authentication/flows', '-r', REALM]) || [];
   const directGrant = flows.find((flow) => flow.alias === 'direct grant' && flow.topLevel === true);
   const directGrantExecutions = directGrant
-    ? admin.run(['get', `authentication/flows/${directGrant.id}/executions`, '-r', REALM]) || []
+    ? admin.run(['get', `authentication/flows/${encodeURIComponent(directGrant.alias)}/executions`, '-r', REALM]) || []
     : [];
   const changes = planRealmReconcile({
     realm, clientId, client, defaultScopes, optionalScopes, scopes, profile, users, defaultRoleHolders,

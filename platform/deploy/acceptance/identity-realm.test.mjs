@@ -92,9 +92,9 @@ function earlierRealmState() {
     // that carries an authenticator, which Center's form has no field for.
     flows: [{ id: "flow-direct", alias: "direct grant", topLevel: true }],
     executions: [
-      { id: "exec-username", parentId: "flow-direct", providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
-      { id: "exec-password", parentId: "flow-direct", providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
-      { id: "exec-otp", parentId: "flow-direct", providerId: "direct-grant-validate-otp", requirement: "REQUIRED" },
+      { id: "exec-username", providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
+      { id: "exec-password", providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
+      { id: "exec-otp", providerId: "direct-grant-validate-otp", requirement: "CONDITIONAL" },
     ],
   };
 }
@@ -133,7 +133,7 @@ function fakeKeycloak(state = earlierRealmState()) {
       if (verb === "get" && resource === "authentication/flows") return structuredClone(state.flows);
       const executions = /^authentication\/flows\/(.+)\/executions$/u.exec(resource);
       if (verb === "get" && executions) {
-        return structuredClone(state.executions.filter((execution) => execution.parentId === executions[1]));
+        return structuredClone(state.executions);
       }
       const execution = /^authentication\/executions\/(.+)$/u.exec(resource);
       if (verb === "update" && execution) {
