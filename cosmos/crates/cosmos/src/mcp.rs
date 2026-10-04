@@ -60,8 +60,8 @@
 //!     an endpoint digest and is dropped when it no longer matches.
 //! 11. The model names a tool that is disabled, not read-only, or gone: the
 //!     call is refused here, whatever the model was offered earlier.
-//! 12. A tool returns a very long or non-text result: text is joined and cut to
-//!     a spoken-answer-sized observation, other content is named and omitted.
+//! 12. A tool returns a very long or non-text result: text is joined and
+//!     bounded (see 26), other content is named and omitted.
 //! 13. The turn is nearly out of time: the call is refused instead of started.
 //! 14. A redirect points somewhere else: not followed. The owner configured one
 //!     URL, and a credential must not travel to another host.
@@ -99,6 +99,12 @@
 //!     The model is told which servers need an unlocked Pin
 //!     (`turn::context::situation_line`), by name only, so it can say that.
 //!     Nothing is offered or run because of it.
+//! 26. A result is long. The model reads up to [`MAX_OBSERVATION_CHARS`] of it
+//!     in the run that called the tool, because it digests the result and
+//!     nothing reads it aloud. A longer one is cut and the model is told how
+//!     much it got, so it can ask for less and never presents a cut list as
+//!     complete. The Pin records only [`MAX_RECORDED_CHARS`], because it sends
+//!     the conversation's turns back with every later request.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -141,7 +147,10 @@ const MAX_TOOL_NAME_CHARS: usize = 128;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024;
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
-const MAX_OBSERVATION_CHARS: usize = 4_000;
+/// How much of a tool's result the model reads in the run that called it.
+pub const MAX_OBSERVATION_CHARS: usize = 24_000;
+/// How much of a tool's result goes into the turn the Pin records and replays.
+pub const MAX_RECORDED_CHARS: usize = 4_000;
 const MAX_TOOL_PAGES: usize = 5;
 /// OpenAI-compatible providers accept at most 64 characters of `[A-Za-z0-9_-]`.
 const MAX_MODEL_TOOL_NAME: usize = 64;
@@ -993,7 +1002,7 @@ impl McpStore {
                 observation: format!("The {} tool returned nothing.", server.name),
                 outcome: "no_result",
             },
-            Ok(text) => McpRun::completed(clip(&text, MAX_OBSERVATION_CHARS)),
+            Ok(text) => McpRun::completed(clip_result(&text)),
             Err(error) => {
                 if !matches!(error, McpCallError::Rpc(_)) {
                     self.record(&server, Err(&error));
@@ -1533,6 +1542,30 @@ fn clip(value: &str, max_chars: usize) -> String {
     let mut clipped: String = value.chars().take(max_chars.saturating_sub(1)).collect();
     clipped.push('…');
     clipped
+}
+
+/// A tool's result as the model reads it: whole, or cut with a note that says
+/// how much is there, so a cut list is never taken for a complete one.
+fn clip_result(text: &str) -> String {
+    let total = text.chars().count();
+    if total <= MAX_OBSERVATION_CHARS {
+        return text.to_owned();
+    }
+    let shown: String = text.chars().take(MAX_OBSERVATION_CHARS).collect();
+    format!(
+        "{shown}…\n[Cut off: this is the first {MAX_OBSERVATION_CHARS} of {total} characters. \
+         Call the tool again for fewer or narrower results if what you need is missing.]"
+    )
+}
+
+/// A tool's result as the Pin records it. The Pin sends every recorded turn
+/// back with each later request, so this stays small whatever the model read.
+pub fn recorded(observation: &str) -> std::borrow::Cow<'_, str> {
+    if observation.chars().count() <= MAX_RECORDED_CHARS {
+        return std::borrow::Cow::Borrowed(observation);
+    }
+    let kept: String = observation.chars().take(MAX_RECORDED_CHARS).collect();
+    std::borrow::Cow::Owned(format!("{kept}… [truncated]"))
 }
 
 fn now_ms() -> u64 {

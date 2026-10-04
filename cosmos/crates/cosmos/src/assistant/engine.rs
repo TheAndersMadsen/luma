@@ -58,7 +58,9 @@ use super::runtime::{ForegroundRun, RouteClass, Transport};
 use super::toolsets;
 use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
-use super::turn::text::{model_facing_observation, spoken_text};
+use super::turn::text::{
+    model_facing_observation, model_facing_tool_observation, recorded_observation, spoken_text,
+};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
 
 /// cosmos's runaway guard (`Switchboard.mActionLimit`, stock `intent.actionLimit`).
@@ -1337,7 +1339,7 @@ impl Engine {
                             &tx,
                             node(observation_turn(
                                 &call.name,
-                                observation,
+                                &recorded_observation(&call.name, observation),
                                 action_id,
                                 obs_id.clone(),
                                 pb::SynapseSource::Server,
@@ -1352,7 +1354,7 @@ impl Engine {
                         messages.push(ChatMessage::tool_result(
                             &call.name,
                             &call.arguments,
-                            &model_facing_observation(observation),
+                            &model_facing_tool_observation(&call.name, observation),
                         ));
                         completed_server_calls.insert(
                             server_tool_call_key(call, &tool_context),
@@ -1416,7 +1418,7 @@ impl Engine {
                     &tx,
                     node(observation_turn(
                         &tc.name,
-                        &observation,
+                        &recorded_observation(&tc.name, &observation),
                         action_id,
                         obs_id.clone(),
                         pb::SynapseSource::Server,
@@ -1431,7 +1433,7 @@ impl Engine {
                 messages.push(ChatMessage::tool_result(
                     &tc.name,
                     &tc.arguments,
-                    &model_facing_observation(&observation),
+                    &model_facing_tool_observation(&tc.name, &observation),
                 ));
                 completed_server_calls.insert(server_call_key, observation.clone());
                 parent = obs_id;

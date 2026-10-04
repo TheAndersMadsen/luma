@@ -83,7 +83,9 @@ use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
 use super::runtime::{ForegroundRun, RouteClass, TERMINAL_RESERVE, Transport};
 use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
-use super::turn::text::{model_facing_observation, spoken_text};
+use super::turn::text::{
+    model_facing_observation, model_facing_tool_observation, recorded_observation, spoken_text,
+};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
 
 /// cosmos's `ai_bus.max_action_turns` feature flag defaults to 8 (same budget the
@@ -1311,7 +1313,7 @@ impl BidiSession {
                     .emit(
                         observation_turn(
                             &call.name,
-                            &observation,
+                            &recorded_observation(&call.name, &observation),
                             action_id,
                             obs_id.clone(),
                             pb::SynapseSource::Server,
@@ -1780,7 +1782,7 @@ fn tool_result(tc: &ToolCall, observation: &str) -> ChatMessage {
     ChatMessage::tool_result(
         &tc.name,
         &tc.arguments,
-        &model_facing_observation(observation),
+        &model_facing_tool_observation(&tc.name, observation),
     )
 }
 

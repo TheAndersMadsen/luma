@@ -25,6 +25,37 @@ pub(crate) fn spoken_text(input: &str) -> Option<String> {
 /// in the latency of processing them.
 pub(crate) const MAX_MODEL_FACING_OBSERVATION: usize = 1_200;
 
+/// What the model reads of the result of the tool it just called.
+///
+/// INFERRED: an MCP tool's result is the owner's own data, a list or a
+/// document, and the model has to read it to answer from it. `McpStore::call`
+/// bounds it, far above the general bound. Every other tool keeps that bound,
+/// and so does every result replayed from an earlier run.
+pub(crate) fn model_facing_tool_observation<'a>(
+    tool: &str,
+    observation: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    if crate::mcp::is_tool_name(tool) {
+        return std::borrow::Cow::Borrowed(observation);
+    }
+    model_facing_observation(observation)
+}
+
+/// What goes into the turn the Pin records for a tool's result.
+///
+/// The Pin sends its recorded turns back with every later request, so an MCP
+/// tool's long result is recorded in a short form. Every other tool's
+/// observation is recorded whole, as before.
+pub(crate) fn recorded_observation<'a>(
+    tool: &str,
+    observation: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    if crate::mcp::is_tool_name(tool) {
+        return crate::mcp::recorded(observation);
+    }
+    std::borrow::Cow::Borrowed(observation)
+}
+
 // The answer engine sizes its observation, sources included, to be shown whole.
 const _: () = assert!(crate::backends::perplexity::MAX_CHARS <= MAX_MODEL_FACING_OBSERVATION);
 

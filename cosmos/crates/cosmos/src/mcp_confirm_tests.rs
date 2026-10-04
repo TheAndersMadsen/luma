@@ -37,6 +37,10 @@
 //!
 //! 13. A locked Pin is not offered a server's tools, and the model, knowing
 //!     nothing of the server, tells the wearer it has no such tool.
+//! 14. A tool's long result is cut to the general observation bound before
+//!     the model reads it, so it answers from the first part of a list as if
+//!     that were all of it. Or the whole long result is recorded on the Pin,
+//!     which sends it back with every later request.
 
 use std::collections::VecDeque;
 
@@ -866,5 +870,66 @@ async fn a_locked_pin_is_told_which_servers_need_it_unlocked() {
         let shown = shown_to_the_model(transport, &locked).await;
         assert!(!shown.contains("unlocked pin"), "{transport:?}: {shown}");
         assert!(fixture.ran().is_empty(), "{transport:?}");
+    }
+}
+
+#[tokio::test]
+async fn the_model_reads_a_long_result_and_the_pin_records_a_short_one() {
+    for transport in TRANSPORTS {
+        let fixture = Fixture::start().await;
+        // About 10,000 characters, ending in an entry any short cut loses.
+        let long = format!("{}LAST-ENTRY", "A saved bookmark. ".repeat(555));
+        *fixture.stand_in.lookup_says.lock().expect("lock") = long;
+
+        let asking = request(&[], "Look through my bookmarks.");
+        let model = script(vec![call(LOOKUP, json!({})), say("Found it.")]);
+        let emitted = run(transport, &model, &asking).await;
+        assert_eq!(actions(&emitted), [LOOKUP, RESPOND_ACTION], "{transport:?}");
+
+        // The model's next step reads all of it.
+        {
+            let shown = model.shown.lock().expect("lock");
+            assert!(shown[1].contains("LAST-ENTRY"), "{transport:?}");
+            assert!(!shown[1].contains("[Cut off"), "{transport:?}");
+        }
+        // The Pin records a short form.
+        let recorded = observed(&emitted)[0];
+        assert!(!recorded.contains("LAST-ENTRY"), "{transport:?}");
+        assert!(recorded.ends_with("… [truncated]"), "{transport:?}");
+        assert!(
+            recorded.chars().count() <= MAX_RECORDED_CHARS + 16,
+            "{transport:?}"
+        );
+
+        // A later run reads the replayed result in the general bounded form.
+        let later = script(vec![say("You're welcome.")]);
+        run(
+            transport,
+            &later,
+            &request(&completed(&asking, &emitted), "Thanks."),
+        )
+        .await;
+        assert!(
+            !later.shown.lock().expect("lock")[0].contains("LAST-ENTRY"),
+            "{transport:?}"
+        );
+
+        // Longer than the model should be handed: cut, and the model is told
+        // how much it got.
+        *fixture.stand_in.lookup_says.lock().expect("lock") =
+            format!("{}LAST-ENTRY", "x".repeat(MAX_OBSERVATION_CHARS + 490));
+        let model = script(vec![call(LOOKUP, json!({})), say("There is more.")]);
+        run(
+            transport,
+            &model,
+            &request(&[], "Look through my bookmarks."),
+        )
+        .await;
+        let shown = model.shown.lock().expect("lock");
+        assert!(!shown[1].contains("LAST-ENTRY"), "{transport:?}");
+        assert!(
+            shown[1].contains("[Cut off: this is the first 24000 of 24500 characters."),
+            "{transport:?}"
+        );
     }
 }

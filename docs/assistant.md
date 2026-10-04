@@ -141,7 +141,11 @@ retyping one keeps it.
   survives a new listing, and a tool the server stops listing is still off if
   it comes back. A new tool starts switched on.
 - **Bounded like every server tool.** A call runs inside the turn's deadline
-  and at most 15 seconds. Its result is cut to a spoken-answer size and reaches
+  and at most 15 seconds. The model reads up to 24,000 characters of its
+  result in the run that called it, because it digests the result and nothing
+  reads it aloud; a longer result is cut, and the model is told how much it
+  got so it can ask for less. The Pin records 4,000 characters of it, since it
+  sends its recorded turns back with every later request. The result reaches
   the model as untrusted data.
 - **A locked Pin is offered none of them**, unless the owner turns on Use while
   locked for a server. A Pin is locked whenever it is off the body. The
