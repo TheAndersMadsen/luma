@@ -47,7 +47,7 @@ export interface AdbAuthStrategy {
 
 /**
  * The only credential store Center uses. ADB authorization is delegated
- * entirely to PenumbraOS's remote signer: Luma bundles no ADB key or
+ * entirely to the remote signer (`server/adb-signer.ts`): Center bundles no ADB key or
  * certificate, generates none locally, and never falls back to one. Key
  * generation throws and the key iterator is empty, so the remote signer is the
  * sole path by which a Pin is authorized over USB.

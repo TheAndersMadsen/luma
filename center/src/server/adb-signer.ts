@@ -3,9 +3,11 @@
  *
  * Connecting to a Pin over WebUSB means answering the device's ADB AUTH
  * challenge: the Pin sends a 20-byte token and expects it signed by a key whose
- * public half the device trusts. PenumbraOS holds that key and exposes a signing
- * endpoint (a Cloudflare Worker). The Setup SPA called it straight from the
- * browser at `install/device/adbAuth.ts`.
+ * public half the device trusts. Luma's signer, a Cloudflare Worker that keeps
+ * that key in its secrets, answers it with the wire contract PenumbraOS's
+ * `adb.penumbraos.workers.dev` defined and byte for byte the same signature.
+ * The Setup SPA called PenumbraOS's straight from the browser at
+ * `install/device/adbAuth.ts`.
  *
  * Center cannot: `connect-src 'self'` in `next.config.mjs` is what keeps browser
  * JavaScript on the origin that holds the `cosmos_tokens` session cookie from
@@ -35,7 +37,7 @@ export const MAX_SIGNER_RESPONSE_BYTES = 32 * 1024;
 /** Neither returned field is prose, and neither is anywhere near this long. */
 export const MAX_SIGNED_FIELD_CHARS = 4096;
 
-export const DEFAULT_ADB_SIGNER_URL = "https://adb.penumbraos.workers.dev";
+export const DEFAULT_ADB_SIGNER_URL = "https://adb.andersmadsen.dk";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MIN_TIMEOUT_MS = 500;
 const MAX_TIMEOUT_MS = 15_000;

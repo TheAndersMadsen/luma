@@ -14,7 +14,7 @@ import { requireWearerRequest } from "@/server/operator";
  * The Pin console runs entirely in the browser over WebUSB: one ADB session
  * carries the Device Installer AND every settings call. Exactly one step
  * of that needs the network, answering the device's ADB AUTH challenge, which
- * only PenumbraOS's signer can do. The Setup SPA called that third-party
+ * only the remote signer can do. The Setup SPA called that third-party
  * Cloudflare Worker straight from page JavaScript. Center will not: it would
  * mean widening `connect-src 'self'` on the origin that holds the `cosmos_tokens`
  * session cookie so that any script on it could reach a third party. The call

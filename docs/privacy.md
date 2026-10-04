@@ -36,8 +36,8 @@ provider results are never metric labels.
   `./luma setup production --update-source https://CENTER`
   ([Run your own update source](operations.md#run-your-own-update-source)).
 - When Center connects to a Pin over USB, it sends the Pin's 20-byte ADB
-  challenge, and nothing else, to PenumbraOS's remote signer
-  (`adb.penumbraos.workers.dev`). The signer returns the signature the Pin
+  challenge, and nothing else, to Luma's remote signer
+  (`adb.andersmadsen.dk`). The signer returns the signature the Pin
   expects.
 - A tool server you add in Center
   ([MCP servers](assistant.md#mcp-servers)) is contacted by Cosmos at the

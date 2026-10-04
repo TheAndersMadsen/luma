@@ -83,10 +83,11 @@ diagnostic file if logs help.
 
 - Provider keys never reach the Pin. Activation copies only the Cosmos
   endpoint, the operator trust root, and the device identity.
-- Center delegates ADB authorization to PenumbraOS's remote signing service
-  (`adb.penumbraos.workers.dev` by default, proxied server-side through
-  `/api/pin/adb/sign`). Luma generates, stores, and ships no ADB private key
-  or certificate. Center's local ADB key generation is disabled, so the
+- Center delegates ADB authorization to Luma's remote signing service, a
+  Cloudflare Worker (`adb.andersmadsen.dk` by default, proxied server-side
+  through `/api/pin/adb/sign`). It holds the signing key only as a Worker
+  secret, so Luma's repository, releases, and servers generate, store, and
+  ship no ADB private key or certificate. Center's local ADB key generation is disabled, so the
   remote signer is the only way Center is authorized over WebUSB. The CLI's
   device commands (`./luma pin install`, `pin activate`, `stock decompile
   --from-device`) use the computer's own `adb` and whatever authorization it
