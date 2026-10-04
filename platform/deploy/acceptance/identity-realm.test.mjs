@@ -135,9 +135,10 @@ function fakeKeycloak(state = earlierRealmState()) {
       if (verb === "get" && executions) {
         return structuredClone(state.executions);
       }
-      const execution = /^authentication\/executions\/(.+)$/u.exec(resource);
+      const execution = /^authentication\/flows\/(.+)\/executions\/(.+)$/u.exec(resource);
       if (verb === "update" && execution) {
-        const found = state.executions.find((candidate) => candidate.id === execution[1]);
+        assert.equal(decodeURIComponent(execution[1]), "direct grant", "the execution is edited inside its flow");
+        const found = state.executions.find((candidate) => candidate.id === execution[2]);
         assert.equal(found.providerId, "direct-grant-validate-otp", "only the direct grant's code step is edited");
         found.requirement = body.requirement;
         return null;
