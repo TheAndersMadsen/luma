@@ -24,6 +24,7 @@
 //! | `COSMOS_PPLX_API_KEY` | Perplexity | `ask_online` (`MODE_PPLX_API`) |
 //! | _(none)_ | Wikipedia | `wikipedia` (`MODE_WIKIPEDIA`) |
 //! | _(Center only)_ OS3 enabled + session cookie | Rabbit OS3 agent service | `ask_os3` |
+//! | _(operator API only)_ MCP servers added by the owner | Any Streamable HTTP MCP server | `mcp_<server>_<tool>`, `manage_tool_servers` (`crate::mcp`) |
 //!
 //! **Implemented, not observed:** private SearXNG is an Luma
 //! deployment choice. Its adapter preserves the observed `web_search` tool

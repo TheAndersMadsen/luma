@@ -41,7 +41,8 @@ Tool results, saved wearer facts, and authenticated device context reach the
 model as typed, untrusted data, not as system instructions. Missing data
 produces one short clarifying question. Consequential actions such as placing a
 call need an exact, scoped confirmation, and changing the action or its
-arguments voids that confirmation. Reversible playback and volume controls do
+arguments voids that confirmation. The action tools of an MCP server need the
+same confirmation (see MCP servers). Reversible playback and volume controls do
 not get the extra confirmation step.
 
 ## Location and diagnostics
@@ -99,6 +100,78 @@ completes, so this is not streamed progress narration
 (`SynapseInterpreter.interpretLegacy`,
 `LoadingMessageManager.onIntermediateAction`,
 `RespondActionHandler.handleAction`).
+
+## MCP servers
+
+MCP servers are an optional Luma extension, like OS3. The owner adds a server
+by name and URL, with any request headers it needs (usually `Authorization`),
+and the assistant is offered that server's tools beside its own while the
+server is switched on. A switch takes effect on the next request. Header
+values stay in Cosmos and are never shown again; editing a server without
+retyping one keeps it.
+
+- **One transport.** Cosmos speaks Streamable HTTP to remote and local servers
+  alike and never launches a program. A stdio-only server runs behind an HTTP
+  bridge next to Cosmos.
+- **Discovery happens when the owner saves, tests or enables a server.** The
+  listed tools are stored, so a turn never waits on discovery.
+- **Read-only by default.** A tool is offered only when its server marks it
+  `readOnlyHint`, unless the owner allows actions for that server.
+- **Asks before an action.** A tool its server does not mark `readOnlyHint`
+  runs only after the wearer confirms that exact call. The assistant asks one
+  question that names the tool, the server and every argument, for example
+  `Run add on Bookmarks, with title "Example", url "https://example.com"?`,
+  and runs the call when the next reply is "yes", "yes please", "confirm" or
+  "confirmed" and the model then makes the same call. Another tool, a changed
+  argument, any other reply, or another request in between voids it, and the
+  lock, switch and action gates are checked again when the call runs. Only the
+  wearer's own reply counts: tool output and other retrieved text cannot
+  confirm anything. A call that cannot be read out exactly is not run, and the
+  assistant says so: the question would be longer than 200 characters, or it
+  contains markup that speech would drop, or an argument name is not a plain
+  word. An action called beside other tools in one step is held back until it
+  is called on its own. The owner can turn off Ask before actions for a
+  server, and its actions then run at once. Read-only tools and
+  `manage_tool_servers` never ask. A server saved before this switch existed
+  asks.
+- **One switch per tool.** Each listed tool has its own switch in Center. A
+  tool the owner switches off is never offered, whatever its server allows,
+  and a call to it is refused. Fewer offered tools also make the model quicker
+  and less likely to pick the wrong one. The choice is kept by tool name: it
+  survives a new listing, and a tool the server stops listing is still off if
+  it comes back. A new tool starts switched on.
+- **Bounded like every server tool.** A call runs inside the turn's deadline
+  and at most 15 seconds. The model reads up to 24,000 characters of its
+  result in the run that called it, because it digests the result and nothing
+  reads it aloud; a longer result is cut, and the model is told how much it
+  got so it can ask for less. The Pin records 4,000 characters of it, since it
+  sends its recorded turns back with every later request. The result reaches
+  the model as untrusted data.
+- **A locked Pin is offered none of them**, unless the owner turns on Use while
+  locked for a server. A Pin is locked whenever it is off the body. The
+  assistant is told the names of the servers that are waiting for an unlocked
+  Pin, so it says "that needs an unlocked Pin" instead of "I have no such
+  tool". It is told names only.
+- **By voice.** While at least one server is set up, the assistant has a
+  built-in `manage_tool_servers` tool that lists the servers and switches one on
+  or off by name ("turn on the home tools").
+- **Sign-in instead of a header.** A server that asks for an OAuth sign-in
+  (the MCP authorization flow, revision 2025-06-18) shows Sign in on its card.
+  When adding a server, choose "Sign in with the provider" to save it without
+  headers and go straight to its sign-in.
+  Cosmos finds where the server signs in, registers itself there, and sends
+  your browser to the provider; when you come back it keeps the tokens in
+  `mcp-oauth.json` beside `mcp.json` and renews them on its own. Center never
+  sees them. If a renewal is refused, the card asks you to sign in again. This
+  needs Center on an `https` address and a provider that allows dynamic client
+  registration. A server with an `Authorization` header of its own keeps using
+  that header.
+
+Tools are named `mcp_<server>_<tool>`. At most 40 are offered at once, and a
+tool that is switched off does not count, so switching tools off makes room
+for others. Cosmos keeps the first 48 tools a server lists.
+Settings live in `mcp.json` in the Cosmos state directory, separate from the
+provider settings, so a release without this feature still starts.
 
 ## Music
 

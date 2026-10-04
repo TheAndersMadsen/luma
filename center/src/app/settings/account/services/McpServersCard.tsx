@@ -1,0 +1,791 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useId, useState } from "react";
+import { StatusChip, Switch, type StatusTone } from "@/components/Status";
+import settings from "../../settings.module.css";
+import styles from "./services.module.css";
+
+/** What Cosmos last saw of a tool server. */
+type McpStatus =
+  | "untested"
+  | "connected"
+  | "unauthorized"
+  | "sign_in_required"
+  | "unreachable"
+  | "timed_out"
+  | "invalid_response";
+
+type McpTool = {
+  name: string;
+  description: string;
+  read_only: boolean;
+  /** Whether the assistant is offered this tool right now. */
+  offered: boolean;
+  /** Whether you have this tool switched on. It can be on and still not offered. */
+  enabled: boolean;
+};
+
+type McpServer = {
+  id: string;
+  name: string;
+  url: string;
+  /** Names of the saved request headers. Cosmos never sends their values back. */
+  headers: string[];
+  enabled: boolean;
+  allow_actions: boolean;
+  allow_when_locked: boolean;
+  /** Every tool name you switched off, including ones the server no longer lists. */
+  disabled_tools: string[];
+  /** Action tools run without a spoken confirmation. False asks first. */
+  actions_without_asking: boolean;
+  status: McpStatus;
+  /** Whether you are signed in to it through its own sign-in. Cosmos keeps the tokens. */
+  signed_in: boolean;
+  checked_at_ms: number | null;
+  tools: McpTool[];
+};
+
+type McpView = { servers: McpServer[] };
+
+type Message = { tone: "ok" | "error"; text: string; signIn?: boolean };
+
+/** One header row in a form. `saved` rows keep their stored value when left blank. */
+type HeaderRow = { key: number; name: string; value: string; saved: boolean };
+
+const STATUSES: ReadonlySet<string> = new Set([
+  "untested",
+  "connected",
+  "unauthorized",
+  "sign_in_required",
+  "unreachable",
+  "timed_out",
+  "invalid_response",
+]);
+
+const MAX_HEADERS = 8;
+
+/** Accept only the shape this card renders. Cosmos is another process. */
+function parseView(value: unknown): McpView | null {
+  if (!value || typeof value !== "object") return null;
+  const servers = (value as { servers?: unknown }).servers;
+  if (!Array.isArray(servers)) return null;
+  const parsed: McpServer[] = [];
+  for (const entry of servers) {
+    if (!entry || typeof entry !== "object") return null;
+    const server = entry as Record<string, unknown>;
+    if (
+      typeof server.id !== "string" ||
+      typeof server.name !== "string" ||
+      typeof server.url !== "string" ||
+      !Array.isArray(server.headers) ||
+      !server.headers.every((header) => typeof header === "string") ||
+      typeof server.enabled !== "boolean" ||
+      typeof server.allow_actions !== "boolean" ||
+      typeof server.allow_when_locked !== "boolean" ||
+      !Array.isArray(server.disabled_tools) ||
+      !server.disabled_tools.every((name) => typeof name === "string") ||
+      typeof server.status !== "string" ||
+      !STATUSES.has(server.status) ||
+      !Array.isArray(server.tools)
+    ) {
+      return null;
+    }
+    const tools: McpTool[] = [];
+    for (const item of server.tools) {
+      if (!item || typeof item !== "object") return null;
+      const tool = item as Record<string, unknown>;
+      if (
+        typeof tool.name !== "string" ||
+        typeof tool.description !== "string" ||
+        typeof tool.read_only !== "boolean" ||
+        typeof tool.offered !== "boolean" ||
+        typeof tool.enabled !== "boolean"
+      ) {
+        return null;
+      }
+      tools.push({
+        name: tool.name,
+        description: tool.description,
+        read_only: tool.read_only,
+        offered: tool.offered,
+        enabled: tool.enabled,
+      });
+    }
+    parsed.push({
+      id: server.id,
+      name: server.name,
+      url: server.url,
+      headers: server.headers as string[],
+      enabled: server.enabled,
+      allow_actions: server.allow_actions,
+      allow_when_locked: server.allow_when_locked,
+      disabled_tools: server.disabled_tools as string[],
+      // Anything but an explicit true asks, as Cosmos does.
+      actions_without_asking: server.actions_without_asking === true,
+      status: server.status as McpStatus,
+      signed_in: server.signed_in === true,
+      checked_at_ms: typeof server.checked_at_ms === "number" ? server.checked_at_ms : null,
+      tools,
+    });
+  }
+  return { servers: parsed };
+}
+
+function summary(server: McpServer): { tone: StatusTone; label: string; text: string } {
+  if (!server.enabled) {
+    return { tone: "off", label: "Off", text: "Switched off. The assistant is not offered its tools." };
+  }
+  const offered = server.tools.filter((tool) => tool.offered).length;
+  switch (server.status) {
+    case "connected":
+      return {
+        tone: "live",
+        label: "Connected",
+        text:
+          offered === 0 && server.tools.length > 0 && server.tools.every((tool) => tool.enabled)
+            ? `It lists ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}, but none is marked read-only. Turn on Allow actions to offer them.`
+            : `${offered} of ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"} offered to the assistant.`,
+      };
+    case "unauthorized":
+      return { tone: "absent", label: "Refused", text: "The server refused the request. Check its headers below, then Save." };
+    case "sign_in_required":
+      return { tone: "absent", label: "Sign-in needed", text: "The server asks you to sign in, or your sign-in has run out. Choose Sign in." };
+    case "unreachable":
+      return { tone: "absent", label: "Unreachable", text: "The server could not be reached the last time Cosmos tried. Check the URL, then Test." };
+    case "timed_out":
+      return { tone: "degraded", label: "Timed out", text: "The server did not answer in time. Check the URL, or Test again in a moment." };
+    case "invalid_response":
+      return { tone: "absent", label: "Not understood", text: "The server answered, but not as an MCP server over HTTP. Check the URL." };
+    default:
+      return { tone: "off", label: "Not tested", text: "Not contacted yet. Choose Test to list its tools." };
+  }
+}
+
+/** A tool row's chip: offered, or the first reason it is not. */
+function toolState(server: McpServer, tool: McpTool): string {
+  if (tool.offered) return "Offered";
+  if (!tool.enabled) return "Switched off";
+  if (!server.enabled) return "Server off";
+  if (!tool.read_only && !server.allow_actions) return "Action";
+  return "Not offered";
+}
+
+async function readError(response: Response): Promise<Message> {
+  const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  const text = typeof body?.error === "string" ? body.error : "That did not work. Try again.";
+  return { tone: "error", text, signIn: response.status === 401 };
+}
+
+/**
+ * Whether to offer Sign in: the server refused the last request, you are not
+ * signed in, and no Authorization header of your own is saved for it.
+ */
+function offersSignIn(server: McpServer): boolean {
+  return (
+    !server.signed_in &&
+    (server.status === "sign_in_required" || server.status === "unauthorized") &&
+    !server.headers.some((header) => header.toLowerCase() === "authorization")
+  );
+}
+
+/** The provider's sign-in page, when it is a web address this browser may open. */
+function signInAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A tool server's sign-in ends on Center's callback, which sends the owner
+ * back here with `?mcp=signed-in` or `?mcp=sign-in-failed`. Read it once and
+ * drop it from the address bar so a reload does not repeat the notice.
+ */
+function takeSignInReturn(): Message | null {
+  const url = new URL(window.location.href);
+  const outcome = url.searchParams.get("mcp");
+  if (outcome !== "signed-in" && outcome !== "sign-in-failed") return null;
+  url.searchParams.delete("mcp");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  return outcome === "signed-in"
+    ? { tone: "ok", text: "You are signed in to that tool server." }
+    : { tone: "error", text: "The sign-in did not finish. Choose Sign in to try again." };
+}
+
+/**
+ * Ask Cosmos where this server signs in and send this browser there. Answers
+ * with what to say when that did not happen, or null once the browser is on
+ * its way to the provider.
+ */
+async function startSignIn(server: McpServer): Promise<Message | null> {
+  const response = await fetch(`/api/admin/mcp/${server.id}/oauth`, { method: "POST" });
+  if (!response.ok) return readError(response);
+  const body = (await response.json().catch(() => null)) as { authorization_url?: unknown } | null;
+  const address = signInAddress(body?.authorization_url);
+  if (!address) {
+    return { tone: "error", text: "Cosmos answered with a sign-in address this page cannot open." };
+  }
+  window.location.assign(address);
+  return null;
+}
+
+let nextRowKey = 1;
+
+function blankRow(name = ""): HeaderRow {
+  return { key: nextRowKey++, name, value: "", saved: false };
+}
+
+/**
+ * Name, URL and request headers for one server. Used to add a server and to
+ * edit one. A saved header's value is never shown: leaving it blank keeps it.
+ */
+function ServerForm({
+  server,
+  busy,
+  submitLabel,
+  onSubmit,
+}: {
+  server?: McpServer;
+  busy: boolean;
+  submitLabel: string;
+  /** `signIn` is true when the owner chose to sign in with the provider right after adding. */
+  onSubmit: (body: Record<string, unknown>, signIn: boolean) => Promise<boolean>;
+}) {
+  const [name, setName] = useState(server?.name ?? "");
+  const [url, setUrl] = useState(server?.url ?? "");
+  const [rows, setRows] = useState<HeaderRow[]>(() =>
+    server
+      ? server.headers.map((header) => ({ key: nextRowKey++, name: header, value: "", saved: true }))
+      : [blankRow("Authorization")],
+  );
+  // Only a new server asks how it lets the owner in. A saved one shows Sign in
+  // beside Test when it needs it.
+  const [access, setAccess] = useState<"headers" | "sign-in">("headers");
+  const signsIn = !server && access === "sign-in";
+  const nameId = useId();
+  const urlId = useId();
+  const accessId = useId();
+
+  const setRow = (key: number, change: Partial<HeaderRow>) =>
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
+
+  const submit = async () => {
+    const headers = (signsIn ? [] : rows)
+      .map((row) => ({ name: row.name.trim(), value: row.value.trim(), saved: row.saved }))
+      // A row with no name is a blank row. A new row with no value has nothing to send.
+      .filter((row) => row.name && (row.value || row.saved))
+      .map((row) => (row.value ? { name: row.name, value: row.value } : { name: row.name }));
+    const saved = await onSubmit({
+      ...(server ? { id: server.id } : {}),
+      name: name.trim(),
+      url: url.trim(),
+      headers,
+    }, signsIn);
+    if (saved && !server) {
+      setName("");
+      setUrl("");
+      setRows([blankRow("Authorization")]);
+    }
+    if (saved && server) {
+      // This form is re-created only when the name, URL or header names
+      // change. A value sent for a header is stored now: take it off the page.
+      setRows((current) =>
+        current.map((row) => (row.name.trim() && row.value.trim() ? { ...row, value: "", saved: true } : row)),
+      );
+    }
+  };
+
+  return (
+    <>
+      <div className={styles.integrationField}>
+        <label htmlFor={nameId}>
+          <strong>Name</strong>
+          <small>What you will call it, for example Home or Notes.</small>
+        </label>
+        <input id={nameId} className={styles.integrationInput} type="text" value={name} maxLength={48} placeholder="Home" onChange={(event) => setName(event.target.value)} />
+      </div>
+      <div className={styles.integrationField}>
+        <label htmlFor={urlId}>
+          <strong>Server URL</strong>
+          <small>Its Streamable HTTP address, for example https://example.com/mcp</small>
+        </label>
+        <input id={urlId} className={styles.integrationInput} type="url" value={url} placeholder="https://example.com/mcp" autoCapitalize="none" autoCorrect="off" onChange={(event) => setUrl(event.target.value)} />
+      </div>
+      {!server ? (
+        <div className={`${styles.integrationField} ${styles.mcpStacked}`} role="radiogroup" aria-labelledby={accessId}>
+          <span className={styles.mcpHeaderLabel}>
+            <strong id={accessId}>How it lets you in</strong>
+            <small>
+              Hosted servers usually have you sign in with the provider. Your own servers usually take a token in a
+              request header, or nothing.
+            </small>
+          </span>
+          <div className={styles.mcpAccess}>
+            <label>
+              <input type="radio" name={accessId} checked={access === "headers"} onChange={() => setAccess("headers")} />
+              Request headers, or nothing
+            </label>
+            <label>
+              <input type="radio" name={accessId} checked={access === "sign-in"} onChange={() => setAccess("sign-in")} />
+              Sign in with the provider (OAuth)
+            </label>
+          </div>
+        </div>
+      ) : null}
+      {signsIn ? null : (
+      <div className={`${styles.integrationField} ${styles.mcpStacked}`}>
+        <span className={styles.mcpHeaderLabel}>
+          <strong>Request headers</strong>
+          <small>
+            Optional. Most servers want Authorization with the value Bearer followed by your token. Values stay on
+            your server and are never shown again.
+          </small>
+        </span>
+        <div className={styles.mcpHeaders}>
+          {rows.map((row) => (
+            <div className={styles.mcpHeaderRow} key={row.key}>
+              <input
+                className={styles.integrationInput}
+                type="text"
+                aria-label="Header name"
+                value={row.name}
+                maxLength={64}
+                placeholder="Header name"
+                autoCapitalize="none"
+                autoCorrect="off"
+                onChange={(event) => setRow(row.key, { name: event.target.value })}
+              />
+              <input
+                className={styles.integrationInput}
+                type="password"
+                aria-label={`Value for ${row.name || "header"}`}
+                value={row.value}
+                placeholder={row.saved ? "Saved. Leave blank to keep it" : row.name.toLowerCase() === "authorization" ? "Bearer your-token" : "Value"}
+                autoComplete="new-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                onChange={(event) => setRow(row.key, { value: event.target.value })}
+              />
+              <button
+                className={styles.inlineButton}
+                type="button"
+                aria-label={`Remove header ${row.name || ""}`.trim()}
+                onClick={() => setRows((current) => current.filter((other) => other.key !== row.key))}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {rows.length < MAX_HEADERS ? (
+            <button className={styles.inlineButton} type="button" onClick={() => setRows((current) => [...current, blankRow()])}>
+              Add a header
+            </button>
+          ) : null}
+        </div>
+      </div>
+      )}
+      <div className={styles.integrationTestActions}>
+        <button className={styles.primaryButton} type="button" disabled={busy || !name.trim() || !url.trim()} onClick={() => void submit()}>
+          {signsIn && !busy ? "Add and sign in" : submitLabel}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The owner's MCP tool servers: add one by name, URL and request headers,
+ * edit it, switch it on or off, allow its action tools, test it, switch single
+ * tools off, and see which tools the assistant is offered. Every change goes
+ * to Cosmos, which answers with the new list.
+ */
+export function McpServersCard({ operator }: { operator: boolean }) {
+  const [view, setView] = useState<McpView | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const response = await fetch("/api/admin/mcp", { cache: "no-store" });
+    if (!response.ok) {
+      setMessage(await readError(response));
+      return;
+    }
+    const parsed = parseView(await response.json().catch(() => null));
+    if (!parsed) {
+      setMessage({ tone: "error", text: "Cosmos answered with a tool server list this page cannot read." });
+      return;
+    }
+    setView(parsed);
+  }, []);
+
+  useEffect(() => {
+    if (!operator) return;
+    const returned = takeSignInReturn();
+    void load()
+      .then(() => {
+        // Back from a tool server's sign-in: say how it ended.
+        if (returned) setMessage((current) => current ?? returned);
+      })
+      .catch(() => setMessage({ tone: "error", text: "Your tool servers could not be loaded." }));
+  }, [load, operator]);
+
+  /** One change: send it, then show the list Cosmos answers with. */
+  const change = useCallback(
+    async (key: string, request: () => Promise<Response>, done: string) => {
+      setBusy(key);
+      setMessage(null);
+      try {
+        const response = await request();
+        if (!response.ok) {
+          setMessage(await readError(response));
+          return false;
+        }
+        const parsed = parseView(await response.json().catch(() => null));
+        if (!parsed) {
+          setMessage({ tone: "error", text: "Cosmos answered with a tool server list this page cannot read." });
+          return false;
+        }
+        setView(parsed);
+        setMessage({ tone: "ok", text: done });
+        return true;
+      } catch {
+        setMessage({ tone: "error", text: "Center could not reach your server. Try again." });
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [],
+  );
+
+  const save = useCallback(
+    (key: string, body: Record<string, unknown>, done: string) =>
+      change(
+        key,
+        () =>
+          fetch("/api/admin/mcp", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+        done,
+      ),
+    [change],
+  );
+
+  /** Ask Cosmos where this server signs in, then send this browser there. */
+  const signIn = useCallback(async (server: McpServer) => {
+    setBusy(`signin-${server.id}`);
+    setMessage(null);
+    try {
+      const failed = await startSignIn(server);
+      if (failed) setMessage(failed);
+    } catch {
+      setMessage({ tone: "error", text: "Center could not reach your server. Try again." });
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  /**
+   * Add a server the owner signs in to: save it with no headers, then start
+   * its sign-in at once. The server stays added whatever the sign-in does, so
+   * Sign in beside Test can be tried again.
+   */
+  const addAndSignIn = useCallback(
+    async (body: Record<string, unknown>) => {
+      setBusy("add");
+      setMessage(null);
+      try {
+        const known = new Set((view?.servers ?? []).map((server) => server.id));
+        const response = await fetch("/api/admin/mcp", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          setMessage(await readError(response));
+          return false;
+        }
+        const parsed = parseView(await response.json().catch(() => null));
+        if (!parsed) {
+          setMessage({ tone: "error", text: "Cosmos answered with a tool server list this page cannot read." });
+          return false;
+        }
+        setView(parsed);
+        const added = parsed.servers.find((server) => !known.has(server.id));
+        if (!added) {
+          setMessage({ tone: "ok", text: "Tool server added." });
+          return true;
+        }
+        if (added.status === "connected") {
+          setMessage({ tone: "ok", text: `${added.name} was added. It did not ask for a sign-in.` });
+          return true;
+        }
+        if (!offersSignIn(added)) {
+          setMessage({
+            tone: "error",
+            text: `${added.name} was added, but it did not ask for a sign-in. ${summary(added).text}`,
+          });
+          return true;
+        }
+        const failed = await startSignIn(added);
+        if (failed) {
+          setMessage({ ...failed, text: `${added.name} was added, but its sign-in did not start. ${failed.text}` });
+        }
+        return true;
+      } catch {
+        setMessage({ tone: "error", text: "Center could not reach your server. Try again." });
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [view],
+  );
+
+  if (!operator) return null;
+
+  return (
+    <section className={`${settings.section} ${styles.servicesCard}`} data-testid="mcp-servers-card">
+      <div className={styles.serviceHead}>
+        <span className={styles.cosmosMark} aria-hidden="true">✦</span>
+        <span className={styles.serviceCopy}>
+          <strong>Tool servers</strong>
+          <span>Give your Pin&rsquo;s assistant more tools from MCP servers. Optional.</span>
+        </span>
+        <StatusChip
+          tone={view?.servers.some((server) => server.enabled && server.status === "connected") ? "live" : "off"}
+          label={view ? `${view.servers.filter((server) => server.enabled).length} on` : "Loading"}
+        />
+      </div>
+
+      <div className={styles.providerNote}>
+        <strong>How it works</strong>
+        <span>
+          Tools from a server that is switched on are offered from your next request. They need an unlocked Pin unless
+          you turn on Use while locked for that server.
+          Say &ldquo;turn off the &hellip; tools&rdquo; to switch a server by voice.
+        </span>
+        <span>
+          Only tools a server marks read-only are offered, unless you allow actions for that server. Your Pin asks
+          you to confirm each action before it runs, unless you turn off Ask before actions for that server.
+        </span>
+        <span>
+          Each tool has its own switch. Switch off the ones you do not use: with fewer tools the assistant answers
+          sooner and picks the right one more often.
+        </span>
+      </div>
+
+      <fieldset className={styles.integrationSettings} disabled={busy !== null}>
+        {view?.servers.map((server) => {
+          const state = summary(server);
+          return (
+            <details className={styles.integrationGroup} key={server.id} aria-label={server.name}>
+              <summary className={styles.integrationIntro}>
+                <span>
+                  <strong>{server.name}</strong>
+                  <small>{server.url}</small>
+                </span>
+                <span className={styles.integrationIntroActions}>
+                  <StatusChip tone={state.tone} label={state.label} />
+                </span>
+              </summary>
+              <p className={styles.providerNote} data-testid={`mcp-status-${server.id}`} data-status={server.status}>
+                <span>{state.text}</span>
+                {server.signed_in ? <span>Signed in. Your server renews the sign-in on its own.</span> : null}
+              </p>
+              <div className={styles.settingRow}>
+                <span>
+                  <strong>Use {server.name}</strong>
+                  <small>Offers this server&rsquo;s tools to the assistant.</small>
+                </span>
+                <Switch
+                  checked={server.enabled}
+                  ariaLabel={`Use ${server.name}`}
+                  onChange={(enabled) =>
+                    void save(`toggle-${server.id}`, { id: server.id, enabled }, enabled ? `${server.name} is on.` : `${server.name} is off.`)
+                  }
+                />
+              </div>
+              <div className={styles.settingRow}>
+                <span>
+                  <strong>Allow actions</strong>
+                  <small>Also offers tools the server does not mark read-only.</small>
+                </span>
+                <Switch
+                  checked={server.allow_actions}
+                  ariaLabel={`Allow actions for ${server.name}`}
+                  onChange={(allow_actions) =>
+                    void save(
+                      `actions-${server.id}`,
+                      { id: server.id, allow_actions },
+                      allow_actions ? `Action tools are allowed for ${server.name}.` : `Only read-only tools are offered for ${server.name}.`,
+                    )
+                  }
+                />
+              </div>
+              <div className={styles.settingRow}>
+                <span>
+                  <strong>Ask before actions</strong>
+                  <small>Your Pin reads out each action and runs it only when you answer yes. Turn off to let this server&rsquo;s actions run without asking.</small>
+                </span>
+                <Switch
+                  checked={!server.actions_without_asking}
+                  ariaLabel={`Ask before ${server.name} runs an action`}
+                  onChange={(ask) =>
+                    void save(
+                      `asking-${server.id}`,
+                      { id: server.id, actions_without_asking: !ask },
+                      ask ? `Your Pin asks before ${server.name} runs an action.` : `${server.name} runs actions without asking.`,
+                    )
+                  }
+                />
+              </div>
+              <div className={styles.settingRow}>
+                <span>
+                  <strong>Use while locked</strong>
+                  <small>Your Pin is locked whenever it is off your body, on its charger for example. Anyone holding it could then use these tools.</small>
+                </span>
+                <Switch
+                  checked={server.allow_when_locked}
+                  ariaLabel={`Use ${server.name} while locked`}
+                  onChange={(allow_when_locked) =>
+                    void save(
+                      `locked-${server.id}`,
+                      { id: server.id, allow_when_locked },
+                      allow_when_locked ? `${server.name} can be used while your Pin is locked.` : `${server.name} needs an unlocked Pin.`,
+                    )
+                  }
+                />
+              </div>
+              {server.tools.length > 0 ? (
+                <ul className={styles.mcpTools} aria-label={`${server.name} tools`}>
+                  {server.tools.map((tool) => (
+                    <li key={tool.name} data-offered={tool.offered}>
+                      <span>
+                        <strong>{tool.name}</strong>
+                        <small>{tool.description || "No description."}</small>
+                      </span>
+                      <span className={styles.mcpToolControls}>
+                        <StatusChip tone={tool.offered ? "live" : "off"} label={toolState(server, tool)} />
+                        <Switch
+                          checked={tool.enabled}
+                          ariaLabel={`Use ${tool.name} from ${server.name}`}
+                          onChange={(enabled) =>
+                            void save(
+                              `tool-${server.id}-${tool.name}`,
+                              {
+                                id: server.id,
+                                disabled_tools: enabled
+                                  ? server.disabled_tools.filter((name) => name !== tool.name)
+                                  : [...server.disabled_tools, tool.name],
+                              },
+                              enabled ? `${tool.name} is on.` : `${tool.name} is off.`,
+                            )
+                          }
+                        />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <details className={styles.mcpEdit}>
+                <summary>Edit name, URL and headers</summary>
+                {/* Re-created when Cosmos answers, so the form shows what was saved. */}
+                <ServerForm
+                  key={`${server.id}:${server.name}:${server.url}:${server.headers.join(",")}`}
+                  server={server}
+                  busy={busy !== null}
+                  submitLabel={busy === `edit-${server.id}` ? "Saving…" : "Save changes"}
+                  onSubmit={(body) => save(`edit-${server.id}`, body, `${server.name} was saved.`)}
+                />
+              </details>
+              <div className={styles.integrationTestActions}>
+                <button
+                  className={styles.inlineButton}
+                  type="button"
+                  aria-label={`Remove ${server.name}`}
+                  onClick={() => {
+                    if (!window.confirm(`Remove ${server.name}?`)) return;
+                    void change(
+                      `remove-${server.id}`,
+                      () => fetch(`/api/admin/mcp/${server.id}`, { method: "DELETE" }),
+                      `${server.name} was removed.`,
+                    );
+                  }}
+                >
+                  Remove
+                </button>
+                <button
+                  className={styles.inlineButton}
+                  type="button"
+                  aria-label={`Test ${server.name}`}
+                  onClick={() =>
+                    void change(
+                      `test-${server.id}`,
+                      () => fetch(`/api/admin/mcp/${server.id}/test`, { method: "POST" }),
+                      `${server.name} was contacted.`,
+                    )
+                  }
+                >
+                  {busy === `test-${server.id}` ? "Testing…" : "Test"}
+                </button>
+                {server.signed_in ? (
+                  <button
+                    className={styles.inlineButton}
+                    type="button"
+                    aria-label={`Sign out of ${server.name}`}
+                    onClick={() =>
+                      void change(
+                        `signout-${server.id}`,
+                        () => fetch(`/api/admin/mcp/${server.id}/oauth`, { method: "DELETE" }),
+                        `You are signed out of ${server.name}.`,
+                      )
+                    }
+                  >
+                    {busy === `signout-${server.id}` ? "Signing out…" : "Sign out"}
+                  </button>
+                ) : offersSignIn(server) ? (
+                  <button
+                    className={styles.inlineButton}
+                    type="button"
+                    aria-label={`Sign in to ${server.name}`}
+                    onClick={() => void signIn(server)}
+                  >
+                    {busy === `signin-${server.id}` ? "Opening…" : "Sign in"}
+                  </button>
+                ) : null}
+              </div>
+            </details>
+          );
+        })}
+
+        <details className={styles.integrationGroup} open={view?.servers.length === 0} aria-label="Add a tool server">
+          <summary className={styles.integrationIntro}>
+            <span>
+              <strong>Add a tool server</strong>
+              <small>A remote MCP server, or one running next to your Luma server.</small>
+            </span>
+          </summary>
+          <ServerForm
+            busy={busy !== null}
+            submitLabel={busy === "add" ? "Adding…" : "Add server"}
+            onSubmit={(body, signIn) => (signIn ? addAndSignIn(body) : save("add", body, "Tool server added."))}
+          />
+        </details>
+
+        {message ? (
+          <div className={styles.integrationMessage} data-tone={message.tone} role="status">
+            {message.text}
+            {message.signIn ? <> <Link href="/login">Sign in again</Link>.</> : null}
+          </div>
+        ) : null}
+      </fieldset>
+    </section>
+  );
+}

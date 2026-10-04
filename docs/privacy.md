@@ -39,5 +39,11 @@ provider results are never metric labels.
   challenge, and nothing else, to PenumbraOS's remote signer
   (`adb.penumbraos.workers.dev`). The signer returns the signature the Pin
   expects.
+- A tool server you add in Center
+  ([MCP servers](assistant.md#mcp-servers)) is contacted by Cosmos at the
+  address you gave, with the request headers or sign-in you gave it. It
+  receives the arguments of each tool call the assistant makes to it, which
+  can include words from your request. Nothing is sent to a server that is
+  switched off, and none is contacted until you add one.
 - Secret fields never go back to the browser. Secrets go in through
   `./luma config set NAME --stdin`, never argv or shell history.

@@ -58,7 +58,9 @@ use super::runtime::{ForegroundRun, RouteClass, Transport};
 use super::toolsets;
 use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
-use super::turn::text::{model_facing_observation, spoken_text};
+use super::turn::text::{
+    model_facing_observation, model_facing_tool_observation, recorded_observation, spoken_text,
+};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
 
 /// cosmos's runaway guard (`Switchboard.mActionLimit`, stock `intent.actionLimit`).
@@ -1157,6 +1159,21 @@ impl Engine {
                     return;
                 }
 
+                // An MCP action tool runs only for the exact call the wearer
+                // just confirmed. Any other call to one is asked about and ends
+                // the run, like a device action that needs confirming, before
+                // any action node goes out. Every other server tool passes.
+                if let Some(question) =
+                    super::policy::confirmation_question(&req, &tc.name, &tc.arguments)
+                {
+                    run.note_tool_call(&tc.name);
+                    let id = new_id();
+                    finish(&tx, respond(&question, parent, id)).await;
+                    run.finish_recorded("confirmation_required", &self.tools)
+                        .await;
+                    return;
+                }
+
                 // SERVER TOOL, single or batched. Both paths run a backend and
                 // then loop, so both are bounded by the run budget from here on:
                 // if there is not enough left to run one AND still speak, close
@@ -1226,6 +1243,19 @@ impl Engine {
                             || super::policy::keyguard_refusal(request_locked, &extra.name)
                                 .is_some()
                         {
+                            continue;
+                        }
+                        // An action the wearer has not confirmed never rides
+                        // along beside another call. The model is told, so it
+                        // neither answers as if it ran nor loses the request.
+                        if super::policy::confirmation_question(&req, &extra.name, &extra.arguments)
+                            .is_some()
+                        {
+                            messages.push(ChatMessage::tool_result(
+                                &extra.name,
+                                &extra.arguments,
+                                super::policy::CONFIRM_ON_ITS_OWN,
+                            ));
                             continue;
                         }
                         let key = server_tool_call_key(extra, &tool_context);
@@ -1309,7 +1339,7 @@ impl Engine {
                             &tx,
                             node(observation_turn(
                                 &call.name,
-                                observation,
+                                &recorded_observation(&call.name, observation),
                                 action_id,
                                 obs_id.clone(),
                                 pb::SynapseSource::Server,
@@ -1324,7 +1354,7 @@ impl Engine {
                         messages.push(ChatMessage::tool_result(
                             &call.name,
                             &call.arguments,
-                            &model_facing_observation(observation),
+                            &model_facing_tool_observation(&call.name, observation),
                         ));
                         completed_server_calls.insert(
                             server_tool_call_key(call, &tool_context),
@@ -1388,7 +1418,7 @@ impl Engine {
                     &tx,
                     node(observation_turn(
                         &tc.name,
-                        &observation,
+                        &recorded_observation(&tc.name, &observation),
                         action_id,
                         obs_id.clone(),
                         pb::SynapseSource::Server,
@@ -1403,7 +1433,7 @@ impl Engine {
                 messages.push(ChatMessage::tool_result(
                     &tc.name,
                     &tc.arguments,
-                    &model_facing_observation(&observation),
+                    &model_facing_tool_observation(&tc.name, &observation),
                 ));
                 completed_server_calls.insert(server_call_key, observation.clone());
                 parent = obs_id;
@@ -1618,6 +1648,19 @@ fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> V
     if !explicit_playback_request(current_utterance(req)) {
         tools.retain(|tool| tool.name != "music_discover");
     }
+    // Content-free: which gates applied and how many tools survived them, so
+    // "the Pin was not offered that tool" can be answered from the log.
+    tracing::info!(
+        is_locked = context.is_locked,
+        subscribed,
+        excluded = req.excluded_tools.len(),
+        offered = tools.len(),
+        mcp_offered = tools
+            .iter()
+            .filter(|tool| crate::mcp::is_tool_name(&tool.name))
+            .count(),
+        "assistant catalog resolved"
+    );
     tools
 }
 

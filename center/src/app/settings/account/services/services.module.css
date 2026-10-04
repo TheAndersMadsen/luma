@@ -535,3 +535,50 @@
   .integrationGroup > summary::after { grid-column: 2; grid-row: 1 / 3; align-self: center; }
   .integrationGroup > summary .integrationIntroActions { justify-content: flex-start; }
 }
+
+/* Tool servers: what each MCP server listed, and its request headers. */
+.mcpTools {
+  list-style: none;
+  margin: 0;
+  padding: 6px 24px 14px;
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--luma-divider);
+}
+.mcpTools > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mcpTools > li > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.mcpTools strong { color: var(--luma-colors-white); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.mcpTools small { color: var(--luma-colors-crater-base); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.mcpTools > li[data-offered="false"] strong { opacity: 0.6; }
+.mcpToolControls { display: flex; align-items: center; gap: 12px; flex: none; }
+
+.mcpHeaderLabel { display: grid; gap: 3px; min-width: 0; }
+.mcpHeaders { display: grid; gap: 8px; width: min(100%, 560px); justify-items: start; }
+.mcpHeaderRow { display: flex; align-items: center; gap: 8px; width: 100%; }
+.mcpHeaderRow .integrationInput { flex: 1; min-width: 0; width: auto; }
+.mcpHeaderRow .integrationInput:first-child { flex: 0 1 180px; }
+
+/* A field whose control needs the full width: label first, control on its own line. */
+.mcpStacked { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 12px; }
+.mcpStacked .mcpHeaders { width: 100%; }
+
+.mcpAccess { display: flex; flex-wrap: wrap; gap: 10px 28px; color: var(--luma-colors-white); font-size: 14px; }
+.mcpAccess label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+.mcpEdit { border-top: 1px solid var(--luma-divider); }
+.mcpEdit > summary {
+  cursor: pointer;
+  padding: 14px 24px;
+  color: var(--luma-colors-beam-base);
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .mcpHeaderRow { flex-wrap: wrap; }
+  .mcpHeaderRow .integrationInput:first-child { flex: 1 1 100%; }
+}

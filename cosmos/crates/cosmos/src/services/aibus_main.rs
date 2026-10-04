@@ -728,6 +728,12 @@ async fn run_device_function(
         };
         return crate::assistant::catalog::save_note(note, tools).await;
     }
+    // INFERRED: a function call carries no conversation, so no reply of the
+    // wearer's can confirm an MCP action tool here. Stock's only caller sends
+    // `CreateMemory`.
+    if crate::mcp::asks_first(&call.name).is_some() {
+        return crate::assistant::policy::CONFIRMATION_NEEDS_A_CONVERSATION.to_owned();
+    }
     crate::assistant::catalog::execute_tool_with(&call.name, &call.arguments, tools).await
 }
 

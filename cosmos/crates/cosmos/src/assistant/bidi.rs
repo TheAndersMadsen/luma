@@ -83,7 +83,9 @@ use super::llm::{ChatMessage, ChatModel, ChatResponse, Role, ToolCall, ToolDef};
 use super::runtime::{ForegroundRun, RouteClass, TERMINAL_RESERVE, Transport};
 use super::turn::context::{MEMORY_CONTEXT_POLICY, situation_line, wearer_memory};
 use super::turn::frames::{action_turn, now_ts, observation_turn};
-use super::turn::text::{model_facing_observation, spoken_text};
+use super::turn::text::{
+    model_facing_observation, model_facing_tool_observation, recorded_observation, spoken_text,
+};
 use crate::services::gates::{self, BlockingObservation, Entitlement};
 
 /// cosmos's `ai_bus.max_action_turns` feature flag defaults to 8 (same budget the
@@ -1167,6 +1169,19 @@ impl BidiSession {
                 continue;
             }
 
+            // An MCP action tool runs only for the exact call the wearer just
+            // confirmed. Any other call to one is asked about and ends the run,
+            // like a device action that needs confirming, before any action
+            // event goes out. Every other server tool passes.
+            if let Some(question) =
+                super::policy::confirmation_question(&req, &tc.name, &tc.arguments)
+            {
+                let flow = self.finish(parent, &question).await;
+                run.finish_recorded("confirmation_required", &self.tools)
+                    .await;
+                return flow;
+            }
+
             // SERVER TOOLS. A same-step batch represents independent work, so
             // execute it concurrently and publish observations in stable request
             // order. The Pin counts emitted actions rather than model rounds;
@@ -1206,6 +1221,15 @@ impl BidiSession {
                         || !tools.iter().any(|tool| tool.name == extra.name)
                         || super::policy::keyguard_refusal(request_locked, &extra.name).is_some()
                     {
+                        continue;
+                    }
+                    // An action the wearer has not confirmed never rides along
+                    // beside another call. The model is told, so it neither
+                    // answers as if it ran nor loses the request.
+                    if super::policy::confirmation_question(&req, &extra.name, &extra.arguments)
+                        .is_some()
+                    {
+                        messages.push(tool_result(extra, super::policy::CONFIRM_ON_ITS_OWN));
                         continue;
                     }
                     let key = super::engine::server_tool_call_key(extra, &tool_context);
@@ -1289,7 +1313,7 @@ impl BidiSession {
                     .emit(
                         observation_turn(
                             &call.name,
-                            &observation,
+                            &recorded_observation(&call.name, &observation),
                             action_id,
                             obs_id.clone(),
                             pb::SynapseSource::Server,
@@ -1758,7 +1782,7 @@ fn tool_result(tc: &ToolCall, observation: &str) -> ChatMessage {
     ChatMessage::tool_result(
         &tc.name,
         &tc.arguments,
-        &model_facing_observation(observation),
+        &model_facing_tool_observation(&tc.name, observation),
     )
 }
 

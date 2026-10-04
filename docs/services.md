@@ -325,6 +325,27 @@ question starts a fresh OS3 conversation.
   2026-09-23. If Rabbit publishes an identity for clients like Luma, Luma will
   switch to it.
 
+### Tool servers (MCP)
+
+A tool server gives the assistant more tools over the Model Context Protocol.
+Add one under **Tool servers** on the Assistant & voice page: a name, its
+Streamable HTTP address, and how it lets you in.
+
+- **Request headers, or nothing** suits your own servers. Add each header the
+  server wants, for example `Authorization` with `Bearer` and your token.
+  Values stay on your server and are never shown again.
+- **Sign in with the provider (OAuth)** suits hosted servers. Center sends
+  your browser to the provider and brings you back. This needs Center on an
+  `https` address and a provider that lets clients register themselves.
+
+After a save or **Test**, the card lists the server's tools. A tool the server
+does not mark read-only is offered only when you turn on **Allow actions**,
+and the Pin then asks you to confirm each call unless you turn off **Ask
+before actions**. Each tool has its own switch. **Use while locked** offers a
+server's tools while the Pin is locked. You can say "turn off the … tools" to
+switch a server by voice. The rules the assistant follows are in
+[MCP servers](assistant.md#mcp-servers).
+
 ### Music
 
 Music playback needs the `spotify` optional feature. In **Settings → Music**,
