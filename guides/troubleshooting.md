@@ -724,6 +724,24 @@ docker logs luma-ai-bus-1 2>&1 | grep "rejected a web Bearer"
 </details>
 
 <details>
+<summary>Center rejects your password after you added a second-factor code to your account</summary>
+
+Cause: Center's sign-in form has fields for a username and a password and no
+field for a one-time code, so Keycloak's direct password grant fails for an
+account that carries an authenticator — Keycloak's own pages ask for the code
+and work. Luma 0.3.37 fixed this: its realm policy makes the direct grant
+validate the password alone, and the code keeps protecting Keycloak's own
+pages. Center itself stays password-only, because the stock sign-in form and
+the Pin's enrollment have no field for a code.
+
+Fix: update the server (the **Install now** button on the Software updates
+page, or `./luma update production`), which reconciles the realm on deploy.
+Until then, removing the authenticator under **Account security** in
+Keycloak's account console restores sign-in.
+
+</details>
+
+<details>
 <summary>Sign-in says it is unavailable, or asks you to wait</summary>
 
 Cause: "Unavailable" means Keycloak did not answer. "Wait" means too many

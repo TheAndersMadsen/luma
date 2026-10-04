@@ -116,6 +116,7 @@ function missingCenterScopes(defaultScopes) {
  */
 function planRealmReconcile({
   realm, clientId, client, defaultScopes, optionalScopes = [], scopes, profile, users = [], defaultRoleHolders = [],
+  directGrantExecutions = [],
 }) {
   const changes = [];
   for (const name of missingCenterScopes(defaultScopes)) {
@@ -173,6 +174,22 @@ function planRealmReconcile({
       summary: `made ${required.map((attribute) => attribute.name).join(' and ')} optional in the user profile`,
       args: ['update', 'users/profile', '-r', REALM, '-f', '-'],
       body,
+    });
+  }
+
+  // Center's sign-in is Keycloak's direct password grant: the stock form has
+  // username and password and no field for a one-time code, and the Pin's
+  // enrollment sends the password alone. An authenticator added in Keycloak's
+  // account console must protect those pages without locking Center out,
+  // whose clients cannot answer a code, so the direct grant flow validates
+  // the password and nothing else. Keycloak's own sign-in keeps offering the
+  // code, because the browser flow is untouched.
+  const otp = directGrantExecutions.find((execution) => execution.providerId === 'direct-grant-validate-otp');
+  if (otp && otp.requirement !== 'disabled') {
+    changes.push({
+      summary: 'let an account with a second factor sign in to Center (the direct grant no longer asks for a code, which its form has no field for)',
+      args: ['update', `authentication/executions/${otp.id}`, '-r', REALM, '-f', '-'],
+      body: { ...otp, requirement: 'disabled' },
     });
   }
 
@@ -290,8 +307,16 @@ function reconcileRealm(admin, { clientId = 'center' } = {}) {
   const users = admin.run(['get', 'users', '-r', REALM, ...everyone]) || [];
   const role = realm.defaultRole?.name;
   const defaultRoleHolders = role ? admin.run(['get', `roles/${role}/users`, '-r', REALM, ...everyone]) || [] : [];
+  // Center's sign-in is the direct grant flow, so its executions carry the
+  // second-factor policy.
+  const flows = admin.run(['get', 'authentication/flows', '-r', REALM]) || [];
+  const directGrant = flows.find((flow) => flow.alias === 'direct grant' && flow.topLevel === true);
+  const directGrantExecutions = directGrant
+    ? admin.run(['get', `authentication/flows/${directGrant.id}/executions`, '-r', REALM]) || []
+    : [];
   const changes = planRealmReconcile({
     realm, clientId, client, defaultScopes, optionalScopes, scopes, profile, users, defaultRoleHolders,
+    directGrantExecutions,
   });
   for (const change of changes) admin.run(change.args, change.body);
   return changes.map((change) => change.summary);

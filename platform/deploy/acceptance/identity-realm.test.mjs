@@ -88,6 +88,14 @@ function earlierRealmState() {
     scopes,
     profile,
     defaultRoleHolders: [],
+    // Keycloak's default direct grant: it demands a code from any account
+    // that carries an authenticator, which Center's form has no field for.
+    flows: [{ id: "flow-direct", alias: "direct grant", topLevel: true }],
+    executions: [
+      { id: "exec-username", parentId: "flow-direct", providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
+      { id: "exec-password", parentId: "flow-direct", providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
+      { id: "exec-otp", parentId: "flow-direct", providerId: "direct-grant-validate-otp", requirement: "REQUIRED" },
+    ],
   };
 }
 
@@ -121,6 +129,18 @@ function fakeKeycloak(state = earlierRealmState()) {
       }
       if (verb === "get" && resource === "roles/default-roles-humane/users") {
         return structuredClone(state.defaultRoleHolders);
+      }
+      if (verb === "get" && resource === "authentication/flows") return structuredClone(state.flows);
+      const executions = /^authentication\/flows\/(.+)\/executions$/u.exec(resource);
+      if (verb === "get" && executions) {
+        return structuredClone(state.executions.filter((execution) => execution.parentId === executions[1]));
+      }
+      const execution = /^authentication\/executions\/(.+)$/u.exec(resource);
+      if (verb === "update" && execution) {
+        const found = state.executions.find((candidate) => candidate.id === execution[1]);
+        assert.equal(found.providerId, "direct-grant-validate-otp", "only the direct grant's code step is edited");
+        found.requirement = body.requirement;
+        return null;
       }
       if (verb === "add-roles") {
         assert.equal(args[args.indexOf("--rolename") + 1], "default-roles-humane");
@@ -174,6 +194,7 @@ test("an earlier realm is brought onto Luma's policy once, and a second deploy c
     "added the basic default scope to the center client",
     "gave owner@example.test the realm's default roles, which the account console requires",
     "made firstName and lastName optional in the user profile",
+    "let an account with a second factor sign in to Center (the direct grant no longer asks for a code, which its form has no field for)",
     "turned on brute-force protection (a temporary lockout after 10 failed sign-ins); " +
       "turned off Forgot password, which can only send an email and this realm has no SMTP server; " +
       "enabled persistent Center sign-in (ten-year sessions, fifteen-minute access tokens)",
@@ -197,6 +218,16 @@ test("an earlier realm is brought onto Luma's policy once, and a second deploy c
   assert.equal(SESSION_POLICY.accessTokenLifespan, 900);
   assert.equal(keycloak.state.realm.permanentLockout, false, "a lockout must never be permanent");
   assert.equal(keycloak.state.realm.resetPasswordAllowed, false);
+  assert.equal(
+    keycloak.state.executions.find((execution) => execution.providerId === "direct-grant-validate-otp").requirement,
+    "disabled",
+    "an authenticator on the account must not lock Center out",
+  );
+  assert.equal(
+    keycloak.state.executions.find((execution) => execution.providerId === "direct-grant-validate-password").requirement,
+    "REQUIRED",
+    "the password stays required",
+  );
   // Only the changed realm fields are written.
   const realmWrite = keycloak.calls.find((call) => call.args[1] === "realms/humane" && call.args[0] === "update");
   assert.deepEqual(Object.keys(realmWrite.body).sort(), ["bruteForceProtected", "failureFactor", "resetPasswordAllowed", ...Object.keys(SESSION_POLICY)].sort());
@@ -210,7 +241,8 @@ test("Forgot password follows the realm's SMTP server", () => {
   const withSmtp = earlierRealmState();
   withSmtp.realm.resetPasswordAllowed = false;
   withSmtp.realm.smtpServer = { host: "smtp.example.test", from: "luma@example.test" };
-  const [, , settings] = planRealmReconcile({ ...withSmtp, clientId: "center", client: withSmtp.clients[0] });
+  const settings = planRealmReconcile({ ...withSmtp, clientId: "center", client: withSmtp.clients[0] })
+    .find((change) => change.args[1] === "realms/humane");
   assert.equal(settings.body.resetPasswordAllowed, true);
   assert.match(settings.summary, /turned on Forgot password because an SMTP server is configured/u);
 
