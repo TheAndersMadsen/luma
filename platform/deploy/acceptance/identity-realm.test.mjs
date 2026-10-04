@@ -92,9 +92,9 @@ function earlierRealmState() {
     // that carries an authenticator, which Center's form has no field for.
     flows: [{ id: "flow-direct", alias: "direct grant", topLevel: true }],
     executions: [
-      { id: "exec-username", providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
-      { id: "exec-password", providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
-      { id: "exec-otp", providerId: "direct-grant-validate-otp", requirement: "CONDITIONAL" },
+      { id: "exec-username", priority: 0, providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
+      { id: "exec-password", priority: 1, providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
+      { id: "exec-otp", priority: 2, providerId: "direct-grant-validate-otp", requirement: "CONDITIONAL" },
     ],
   };
 }
@@ -135,11 +135,11 @@ function fakeKeycloak(state = earlierRealmState()) {
       if (verb === "get" && executions) {
         return structuredClone(state.executions);
       }
-      const execution = /^authentication\/flows\/(.+)\/executions\/(.+)$/u.exec(resource);
-      if (verb === "update" && execution) {
-        assert.equal(decodeURIComponent(execution[1]), "direct grant", "the execution is edited inside its flow");
-        const found = state.executions.find((candidate) => candidate.id === execution[2]);
+      if (verb === "update" && executions) {
+        assert.equal(decodeURIComponent(executions[1]), "direct grant", "the execution is edited inside its flow");
+        const found = state.executions.find((candidate) => candidate.id === body.id);
         assert.equal(found.providerId, "direct-grant-validate-otp", "only the direct grant's code step is edited");
+        assert.equal(body.priority, found.priority, "the priority travels with the change");
         found.requirement = body.requirement;
         return null;
       }
@@ -221,7 +221,7 @@ test("an earlier realm is brought onto Luma's policy once, and a second deploy c
   assert.equal(keycloak.state.realm.resetPasswordAllowed, false);
   assert.equal(
     keycloak.state.executions.find((execution) => execution.providerId === "direct-grant-validate-otp").requirement,
-    "disabled",
+    "DISABLED",
     "an authenticator on the account must not lock Center out",
   );
   assert.equal(

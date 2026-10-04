@@ -183,14 +183,16 @@ function planRealmReconcile({
   // account console must protect those pages without locking Center out,
   // whose clients cannot answer a code, so the direct grant flow validates
   // the password and nothing else. Keycloak's own sign-in keeps offering the
-  // code, because the browser flow is untouched. The execution update, like
-  // the execution listing, is keyed by the flow's alias.
+  // code, because the browser flow is untouched. Keycloak changes an
+  // execution's requirement through the flow: one PUT on the flow's
+  // executions carries the execution's id, its current priority, and the new
+  // requirement.
   const otp = directGrantExecutions.find((execution) => execution.providerId === 'direct-grant-validate-otp');
-  if (otp && directGrantAlias && otp.requirement !== 'disabled') {
+  if (otp && directGrantAlias && otp.requirement !== 'DISABLED' && typeof otp.priority === 'number') {
     changes.push({
       summary: 'let an account with a second factor sign in to Center (the direct grant no longer asks for a code, which its form has no field for)',
-      args: ['update', `authentication/flows/${encodeURIComponent(directGrantAlias)}/executions/${otp.id}`, '-r', REALM, '-f', '-'],
-      body: { ...otp, requirement: 'disabled' },
+      args: ['update', `authentication/flows/${encodeURIComponent(directGrantAlias)}/executions`, '-r', REALM, '-f', '-'],
+      body: { id: otp.id, requirement: 'DISABLED', priority: otp.priority },
     });
   }
 
