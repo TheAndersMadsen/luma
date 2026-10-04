@@ -1083,6 +1083,17 @@ first, then deploy:
 </details>
 
 <details>
+<summary>Connect your Pin says <b>This Pin is connected to another Luma server (edge IPv4 ADDRESS).</b></summary>
+
+Cause: the Pin is active with a different Luma server, not this one.
+
+Fix: choose **Switch this Pin to this server** on the same page. Switching
+disconnects the Pin from that server — the Pin restores the settings its
+connection there replaced — and connects it to this one.
+
+</details>
+
+<details>
 <summary>Guided setup says <b>The Pin didn’t finish its own setup within 30 seconds.</b></summary>
 
 Cause: the Pin's own setup did not finish. The passcode you entered differs
@@ -1091,6 +1102,49 @@ from the one in Center, or the Pin lost its network.
 Fix: look at the Pin's Laser Ink display for its setup message. Check that
 the four digits match **Settings → Passcode & password**, keep the Pin
 connected and online, and choose the step again.
+
+</details>
+
+<details>
+<summary>Stage 7 fails with certificate errors while stages 5 and 6 are green</summary>
+
+Cause: the Pin finished Humane's original setup before it ever reached this
+server, so this server never issued its credential, and the stock setup
+ceremony cannot run on such a Pin unaided. Provisioning names the same cause:
+"This Pin finished its original setup before this server could issue its
+credential."
+
+Fix: open **Provisioning** and choose **Run its original setup**. Center
+re-arms the Pin's original setup ceremony, reconnects it, and opens its setup
+screen on the Pin. Follow the prompts on the Pin, and finish Guided setup
+stage 6 with the same four digits when Center asks for them. The Pin keeps the
+passcode it already unlocks with.
+
+</details>
+
+<details>
+<summary>The installer says <b>Another project's apps are on this Pin</b></summary>
+
+Cause: the Pin runs the current generation of PenumbraOS. Its apps
+(`com.penumbraos.server`, `com.penumbraos.hook`,
+`com.penumbraos.hook.injector`, `com.penumbraos.systeminjector`) use Luma's
+package ids but are signed by a different key.
+
+Fix: choose **Replace and install**. Recovery removes those apps with their
+app data and installs Luma's signed apps. The confirmation says so before you
+confirm, because it erases the other project's app data.
+
+</details>
+
+<details>
+<summary>The installer says <b>The Setup Helper is present unexpectedly.</b></summary>
+
+Cause: an interrupted first install left Luma's Setup Helper
+(`com.penumbraos.systeminjector.exploit`) on the Pin. It no longer blocks
+anything.
+
+Fix: open **Software & updates** and choose **Repair**, the button the page
+offers. It removes the helper and continues.
 
 </details>
 

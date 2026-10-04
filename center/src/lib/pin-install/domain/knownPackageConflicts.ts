@@ -3,12 +3,13 @@ import type {
   KnownPackageConflictCleanupCommand,
   KnownPackageConflictDefinition,
 } from "./types";
+import { MANAGED_PACKAGES } from "./managedPackages";
 import {
   listInstalledPackages,
   matchesPackagePattern,
   type AdbSessionTransport,
 } from "../device";
-import { PACKAGES } from "../generated/tier-a-symbols";
+import { PACKAGES, PACKAGE_SETS } from "../generated/tier-a-symbols";
 
 export const PREINSTALL_CLEANUP_COMMANDS: readonly KnownPackageConflictCleanupCommand[] =
   [
@@ -37,19 +38,42 @@ const SHARED_CLEANUP_COMMANDS: readonly KnownPackageConflictCleanupCommand[] = [
   },
 ];
 
+/*
+ * pinitd's Zygote exploit sets the Settings.Global
+ * hidden_api_blacklist_exemptions key, and a crash can leave it set, which
+ * upstream documents as a boot-loop hazard (PenumbraOS/penumbra installer
+ * `penumbra.yml` uninstalls `com.penumbraos.mabl.*` for the same suite).
+ * Deleting an absent key is harmless, so the delete runs before the reboot.
+ */
+const PENUMBRA_V0_CLEANUP_COMMANDS: readonly KnownPackageConflictCleanupCommand[] =
+  [
+    {
+      argv: ["settings", "delete", "global", "hidden_api_blacklist_exemptions"],
+      description:
+        "Remove pinitd's exploit residue that can boot-loop the Pin",
+    },
+    {
+      argv: ["reboot"],
+      description: "Reboot device",
+    },
+  ];
+
 export const KNOWN_PACKAGE_CONFLICTS: readonly KnownPackageConflictDefinition[] =
   [
     {
       id: "penumbra-v0",
       label: "PenumbraOS v0",
       packageIds: [
-        "com.penumbraos.mabl",
+        "com.penumbraos.mabl*",
+        "com.penumbraos.cli",
+        "com.penumbraos.adbd",
         "com.penumbraos.plugins.*",
         "com.penumbraos.sdk.*",
         "com.penumbraos.bridge*",
         "com.penumbraos.pinitd",
       ],
-      cleanupCommands: SHARED_CLEANUP_COMMANDS,
+      cleanupCommands: PENUMBRA_V0_CLEANUP_COMMANDS,
+      cleanupFilePaths: ["/sdcard/penumbra", "/data/local/tmp/bin"],
     },
     {
       id: "fusionos",
@@ -62,6 +86,10 @@ export const KNOWN_PACKAGE_CONFLICTS: readonly KnownPackageConflictDefinition[] 
       label: "OpenPin",
       packageIds: ["org.openpin.primaryapp"],
       cleanupCommands: SHARED_CLEANUP_COMMANDS,
+      cleanupFilePaths: [
+        "/data/local/tmp/openpin-daemon",
+        "/data/local/tmp/pty_exec",
+      ],
     },
   ];
 
@@ -97,8 +125,16 @@ export async function detectKnownPackageConflicts(
   transport: AdbSessionTransport,
   definitions: readonly KnownPackageConflictDefinition[] = KNOWN_PACKAGE_CONFLICTS,
 ): Promise<DetectedPackageConflict[]> {
-  const installedPackages = await listInstalledPackages(transport);
+  return matchKnownPackageConflicts(
+    await listInstalledPackages(transport),
+    definitions,
+  );
+}
 
+export function matchKnownPackageConflicts(
+  installedPackages: readonly string[],
+  definitions: readonly KnownPackageConflictDefinition[] = KNOWN_PACKAGE_CONFLICTS,
+): DetectedPackageConflict[] {
   const conflictResults: Array<DetectedPackageConflict | null> =
     definitions.map((definition) => {
       const installedPackageIds = [
@@ -123,10 +159,45 @@ export async function detectKnownPackageConflicts(
         warningCopy:
           definition.warningCopy ?? createDefaultWarningCopy(definition),
         cleanupCommands: definition.cleanupCommands ?? [],
+        cleanupFilePaths: definition.cleanupFilePaths,
       } satisfies DetectedPackageConflict;
     });
 
   return conflictResults.filter(
     (conflict): conflict is DetectedPackageConflict => conflict !== null,
   );
+}
+
+/** Stock packages the tier-a registry names, plus Android's own namespaces. */
+const KNOWN_STOCK_PACKAGES: ReadonlySet<string> = new Set([
+  ...PACKAGE_SETS.center_vendor_packages,
+  ...PACKAGE_SETS.hook_targets,
+  ...PACKAGE_SETS.host_query_packages,
+  ...Object.values(PACKAGES),
+  "android",
+]);
+
+export function isKnownStockPackageName(packageName: string): boolean {
+  return (
+    KNOWN_STOCK_PACKAGES.has(packageName) ||
+    packageName.startsWith("com.android.") ||
+    packageName.startsWith("com.google.")
+  );
+}
+
+/**
+ * Advisory only: installed packages that are neither Luma's, a known conflict,
+ * nor known stock. Nothing removes them automatically; Center only lists them.
+ */
+export function classifyUnrecognizedPackages(
+  installedPackages: readonly string[],
+  matchedConflictPackageIds: readonly string[],
+): string[] {
+  const known = new Set<string>([
+    ...Object.values(MANAGED_PACKAGES),
+    ...matchedConflictPackageIds,
+  ]);
+  return installedPackages
+    .filter((packageName) => !known.has(packageName) && !isKnownStockPackageName(packageName))
+    .sort();
 }

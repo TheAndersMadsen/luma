@@ -600,11 +600,51 @@ the server's own address is wrong, run
 </details>
 
 <details>
+<summary><b>This Pin is connected to another Luma server (edge IPv4 …).</b></summary>
+
+The Pin is active with a different Luma server. Choose **Switch this Pin to
+this server**: switching disconnects it from that server (the Pin restores
+its previous settings) and connects it to this one.
+
+</details>
+
+<details>
 <summary><b>The Pin didn’t finish its own setup within 30 seconds.</b></summary>
 
 Read the setup message on the Pin's display. Check that the four digits
 match **Settings → Passcode & password**, keep the Pin connected and online,
 and try the step again.
+
+</details>
+
+<details>
+<summary>Stage 7 fails with certificate errors while stages 5–6 are green</summary>
+
+The Pin finished Humane's original setup, so this server never issued its
+credential. In **Provisioning**, choose **Run its original setup**, follow the
+prompts on the Pin's own setup screen, and finish Guided setup stage 6 with
+the same four digits. The Pin keeps its current passcode.
+
+</details>
+
+<details>
+<summary>The installer says <b>Another project's apps are on this Pin</b></summary>
+
+The Pin runs the current PenumbraOS: its apps use Luma's package ids
+(`com.penumbraos.server`, `com.penumbraos.hook`,
+`com.penumbraos.hook.injector`, `com.penumbraos.systeminjector`) under a
+different signing key. Choose **Replace and install**; recovery removes
+those apps with their app data and installs Luma's signed apps.
+
+</details>
+
+<details>
+<summary><b>The Setup Helper is present unexpectedly.</b></summary>
+
+An interrupted first install left the Setup Helper
+(`com.penumbraos.systeminjector.exploit`) on the Pin. Nothing is blocked:
+choose **Repair** on **Software & updates**; it removes the helper and
+continues.
 
 </details>
 

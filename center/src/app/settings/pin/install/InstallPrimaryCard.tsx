@@ -43,6 +43,7 @@ export interface PrimaryCardHandlers {
   onPrimaryAction: () => void;
   onUninstall: () => void;
   onRemoveConflicts: () => void;
+  onRemoveUnrecognized: () => void;
 }
 
 function runAction(options: {
@@ -132,6 +133,7 @@ export function InstallPrimaryCard({
     controller.state,
     controller.commands,
   );
+  const { commands } = controller;
   const [helpOpen, setHelpOpen] = useState(false);
   const primaryHeldByStep = viewModel.steps.some((step) => step.holdsPrimaryAction);
   // Offered until a Pin is attached, including while the USB chooser is open.
@@ -248,6 +250,40 @@ export function InstallPrimaryCard({
                 ...pkg,
               }))}
             />
+
+            {viewModel.unrecognizedApps ? (
+              <details className={styles.unrecognized}>
+                <summary className={styles.unrecognizedSummary}>
+                  <span className={styles.unrecognizedTitle}>
+                    Unrecognized apps
+                  </span>
+                  <span className={styles.unrecognizedCount}>
+                    {viewModel.unrecognizedApps.count}
+                  </span>
+                </summary>
+                <div className={styles.unrecognizedBody}>
+                  <ul className={styles.unrecognizedList}>
+                    {viewModel.unrecognizedApps.packages.map((packageId) => (
+                      <li
+                        key={packageId}
+                        className={styles.unrecognizedItem}
+                      >
+                        {packageId}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    className={styles.unrecognizedButton}
+                    onClick={handlers.onRemoveUnrecognized}
+                    disabled={commands.removeUnrecognized.disabled}
+                    title={commands.removeUnrecognized.reason ?? undefined}
+                  >
+                    Remove unrecognized apps…
+                  </button>
+                </div>
+              </details>
+            ) : null}
           </section>
         ) : null}
       </div>

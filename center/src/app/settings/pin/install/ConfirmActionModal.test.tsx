@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createInitialInstallControllerState,
+  MANAGED_PACKAGES,
   type InstallControllerState,
   type InstallInspectionResult,
   type ManagedPackageRole,
@@ -147,5 +148,21 @@ describe("Install confirmation on a Pin without a working Device Installer", () 
 
     expect(within(dialog).getByRole("heading", { name: "Recover this Pin?" })).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Start recovery" })).toBeInTheDocument();
+  });
+
+  it("offers Replace and install when another project's apps use Luma's package names", async () => {
+    const foreign = inspection({ installedRoles: ["installer", "hook", "server", "loader"] });
+    const packages = Object.fromEntries(
+      (Object.keys(foreign.packages) as ManagedPackageRole[]).map((role) => [
+        role,
+        { ...foreign.packages[role], packageName: MANAGED_PACKAGES[role], signerIdentity: "aaaaaaaa" },
+      ]),
+    );
+    const { onConfirm, dialog } = showPrimaryDialog({ ...foreign, packages } as InstallInspectionResult);
+
+    expect(within(dialog).getByRole("heading", { name: "Another project's apps are on this Pin" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Recovery removes them with their data, then installs Luma’s signed apps.");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Replace and install" }));
+    expect(onConfirm).toHaveBeenCalledWith("bootstrap-recovery");
   });
 });

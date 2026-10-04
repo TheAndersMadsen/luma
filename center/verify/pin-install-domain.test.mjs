@@ -61,8 +61,16 @@ const { inspectInstallState } = await import(
 const { classifyInstalledVersion, compareInstallVersions, parseInstallVersion } = await import(
   `../src/lib/pin-install/domain/versions.ts${QUERY}`
 );
-const { decideInstallMigration, PIN_RELEASE_SIGNER_IDENTITY } = await import(
+const { decideInstallMigration, inspectionHasForeignSigners, inspectionIsFirstInstall, PIN_RELEASE_SIGNER_IDENTITY } = await import(
   `../src/lib/pin-install/domain/migrationDecision.ts${QUERY}`
+);
+const {
+  classifyUnrecognizedPackages,
+  isKnownStockPackageName,
+  KNOWN_PACKAGE_CONFLICTS,
+  matchKnownPackageConflicts,
+} = await import(
+  `../src/lib/pin-install/domain/knownPackageConflicts.ts${QUERY}`
 );
 const { isRecognizedAiPin } = await import(
   `../src/lib/pin-install/domain/recognition.ts${QUERY}`
@@ -410,6 +418,128 @@ test("inspectInstallState detects known conflicting package groups by wildcard p
   );
 });
 
+/*
+ * Advisory detection of apps outside every known group: Luma's managed
+ * packages, the Setup Helper, the known conflicts, the stock packages the
+ * tier-a registry names, and Android's own namespaces all read as known; an
+ * installed package that matches none of them is listed, sorted, and nothing
+ * removes it automatically.
+ */
+test("inspectInstallState lists installed apps that match no known group as unrecognized", async () => {
+  const result = await inspectInstallState(
+    fakeDevice(
+      deviceShell({
+        "pm list packages": OK(
+          [
+            "package:com.penumbraos.systeminjector",
+            "package:com.penumbraos.hook",
+            "package:com.penumbraos.server",
+            "package:com.penumbraos.hook.injector",
+            "package:com.penumbraos.systeminjector.exploit",
+            "package:com.penumbraos.mabl",
+            "package:hu.ma.ne.bort",
+            "package:com.android.systemui",
+            "package:com.google.android.gms",
+            "package:com.example.sideapp",
+            "package:com.zzz.anotherapp",
+          ].join("\n"),
+        ),
+      }),
+    ),
+    { target: createResolvedInstallTargetFixture(), readinessSettleDelayMs: 0 },
+  );
+
+  assert.deepEqual(result.unrecognizedPackages, [
+    "com.example.sideapp",
+    "com.zzz.anotherapp",
+  ]);
+});
+
+test("classifyUnrecognizedPackages knows the stock registries and conflict matches", () => {
+  assert.equal(isKnownStockPackageName("hu.ma.ne.bort"), true);
+  assert.equal(isKnownStockPackageName("humane.experience.settings"), true);
+  assert.equal(isKnownStockPackageName("com.android.systemui"), true);
+  assert.equal(isKnownStockPackageName("com.google.android.gms"), true);
+  assert.equal(isKnownStockPackageName("android"), true);
+  assert.equal(isKnownStockPackageName("com.example.app"), false);
+
+  assert.deepEqual(
+    classifyUnrecognizedPackages(
+      [
+        "com.example.b",
+        "hu.ma.ne.bort",
+        "com.penumbraos.systeminjector",
+        "com.penumbraos.mabl",
+        "com.example.a",
+      ],
+      ["com.penumbraos.mabl"],
+    ),
+    ["com.example.a", "com.example.b"],
+  );
+});
+
+/*
+ * PenumbraOS v0's shipped launcher applicationId is `com.penumbraos.mabl.pin`
+ * (applicationIdSuffix `.pin`); the bare `com.penumbraos.mabl` pattern missed
+ * it, and upstream's own installer uninstalls `com.penumbraos.mabl.*`. The
+ * CLI APK and the optional TCP adbd APK were not covered at all.
+ */
+test("penumbra-v0 conflict patterns cover the shipped app id, the CLI, and adbd", () => {
+  const conflict = matchKnownPackageConflicts([
+    "com.penumbraos.mabl.pin",
+    "com.penumbraos.mabl",
+    "com.penumbraos.cli",
+    "com.penumbraos.adbd",
+    "com.penumbraos.pinitd",
+  ]).find((entry) => entry.id === "penumbra-v0");
+
+  assert.ok(conflict);
+  for (const packageId of [
+    "com.penumbraos.mabl.pin",
+    "com.penumbraos.mabl",
+    "com.penumbraos.cli",
+    "com.penumbraos.adbd",
+  ]) {
+    assert.ok(conflict.installedPackageIds.includes(packageId), packageId);
+  }
+});
+
+/*
+ * pinitd's Zygote exploit sets the Settings.Global
+ * hidden_api_blacklist_exemptions key and a crash can leave it set, which
+ * upstream documents as a boot-loop hazard, so the delete runs before the
+ * reboot and penumbra-v0 no longer shares the plain reboot-only list.
+ */
+test("penumbra-v0 cleanup deletes the exploit settings residue before the reboot", () => {
+  const definition = KNOWN_PACKAGE_CONFLICTS.find(
+    (entry) => entry.id === "penumbra-v0",
+  );
+  assert.ok(definition);
+  const commands = definition.cleanupCommands ?? [];
+  const settingsIndex = commands.findIndex(
+    (command) =>
+      command.argv.join(" ") ===
+      "settings delete global hidden_api_blacklist_exemptions",
+  );
+  const rebootIndex = commands.findIndex(
+    (command) => command.argv[0] === "reboot",
+  );
+  assert.notEqual(settingsIndex, -1);
+  assert.notEqual(rebootIndex, -1);
+  assert.ok(settingsIndex < rebootIndex);
+});
+
+/* OpenPin's daemon binaries survive `pm uninstall`, so they are removed by path. */
+test("openpin cleanup removes the daemon binaries pm uninstall leaves behind", () => {
+  const definition = KNOWN_PACKAGE_CONFLICTS.find(
+    (entry) => entry.id === "openpin",
+  );
+  assert.deepEqual(definition?.cleanupFilePaths, [
+    "/data/local/tmp/openpin-daemon",
+    "/data/local/tmp/pty_exec",
+  ]);
+});
+
 /* ── versions ─────────────────────────────────────────────────────────────── */
 
 test("parseInstallVersion parses a valid install version", () => {
@@ -660,18 +790,203 @@ test("decideInstallMigration blocks an unexpected package identity for any role"
   }
 });
 
-test("decideInstallMigration blocks a missing or mismatched signer for any role", () => {
+/*
+ * A CURRENT-generation PenumbraOS build ships Luma's exact package IDs under a
+ * different signing key. That used to dead-end Center with the signer block
+ * below; now, when the whole installed set is foreign-signed and otherwise
+ * matches a recovery baseline, the decision routes to bootstrap recovery.
+ * Anything mixed with a Luma-signed role, an unexpected package name, or an
+ * unreadable version is not that shape and keeps failing closed.
+ */
+const FOREIGN_SIGNER = "aaaaaaaa";
+
+function foreignSignedAllRoles(overrides = {}) {
+  return Object.fromEntries(
+    MANAGED_ROLES.map((role) => [
+      role,
+      { signerIdentity: FOREIGN_SIGNER, ...overrides },
+    ]),
+  );
+}
+
+test("decideInstallMigration routes a wholly foreign-signed healthy baseline to bootstrap recovery", () => {
   const target = createResolvedInstallTargetFixture();
-  for (const role of MANAGED_ROLES) {
+  const result = decideInstallMigration({
+    target,
+    inspection: inspection({
+      target,
+      packageOverrides: foreignSignedAllRoles(),
+    }),
+  });
+
+  assert.equal(result.kind, "bootstrap-recovery");
+  assert.equal(
+    result.reason,
+    "The Pin runs another project's versions of Luma's apps.",
+  );
+  assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
+  assert.equal(result.retainedInstaller, null);
+});
+
+test("decideInstallMigration routes a wholly foreign-signed missing-installer device to bootstrap recovery", () => {
+  const target = createResolvedInstallTargetFixture();
+  const result = decideInstallMigration({
+    target,
+    inspection: inspection({
+      target,
+      packageOverrides: {
+        ...foreignSignedAllRoles(),
+        installer: {
+          installed: false,
+          healthy: false,
+          versionName: null,
+          signerIdentity: null,
+          versionReadable: false,
+          querySucceeded: false,
+          rawOutput: null,
+          versionComparison: null,
+        },
+      },
+    }),
+  });
+
+  assert.equal(result.kind, "bootstrap-recovery");
+  assert.equal(
+    result.reason,
+    "The Pin runs another project's versions of Luma's apps.",
+  );
+  assert.deepEqual(result.rolesToInstall, IN_PLACE_ROLES);
+});
+
+test("decideInstallMigration blocks a wholly foreign-signed device with an unknown-version role", () => {
+  const target = createResolvedInstallTargetFixture();
+  const result = decideInstallMigration({
+    target,
+    inspection: inspection({
+      target,
+      packageOverrides: {
+        ...foreignSignedAllRoles(),
+        hook: {
+          signerIdentity: FOREIGN_SIGNER,
+          versionName: "someone-elses-build",
+          versionComparison: null,
+        },
+      },
+    }),
+  });
+
+  assert.equal(result.kind, "blocked");
+  assert.match(result.reason, /recovery state/u);
+});
+
+test("decideInstallMigration blocks a foreign signer beside a Luma-signed role", () => {
+  const target = createResolvedInstallTargetFixture();
+  for (const lumaSignedRole of MANAGED_ROLES) {
+    const overrides = foreignSignedAllRoles();
+    overrides[lumaSignedRole] = { signerIdentity: PIN_RELEASE_SIGNER_IDENTITY };
     const result = decideInstallMigration({
       target,
-      inspection: inspection({
-        target,
-        packageOverrides: { [role]: { signerIdentity: null } },
-      }),
+      inspection: inspection({ target, packageOverrides: overrides }),
     });
-    assert.equal(result.kind, "blocked", `missing ${role} signer`);
+    assert.equal(
+      result.kind,
+      "blocked",
+      `mixed signer set with ${lumaSignedRole} Luma-signed`,
+    );
+    assert.match(result.reason, /missing or unexpected/u);
   }
+});
+
+test("inspectionHasForeignSigners reads only a wholly foreign-signed package set", () => {
+  const target = createResolvedInstallTargetFixture();
+  const absent = {
+    installed: false,
+    healthy: false,
+    versionName: null,
+    signerIdentity: null,
+    versionReadable: false,
+    querySucceeded: false,
+    rawOutput: null,
+    versionComparison: null,
+  };
+  const nothingInstalled = Object.fromEntries(
+    MANAGED_ROLES.map((role) => [role, absent]),
+  );
+
+  assert.equal(inspectionHasForeignSigners(null), false);
+  assert.equal(inspectionHasForeignSigners(inspection({ target })), false);
+  assert.equal(
+    inspectionHasForeignSigners(
+      inspection({ target, packageOverrides: nothingInstalled }),
+    ),
+    false,
+  );
+  // The whole installed set foreign: the CURRENT-generation PenumbraOS shape.
+  assert.equal(
+    inspectionHasForeignSigners(
+      inspection({ target, packageOverrides: foreignSignedAllRoles() }),
+    ),
+    true,
+  );
+  // One Luma-signed role makes the set mixed, not wholly foreign.
+  assert.equal(
+    inspectionHasForeignSigners(
+      inspection({
+        target,
+        packageOverrides: {
+          ...foreignSignedAllRoles(),
+          installer: { signerIdentity: PIN_RELEASE_SIGNER_IDENTITY },
+        },
+      }),
+    ),
+    false,
+  );
+  // A foreign signer on an unexpected package name is not this state.
+  assert.equal(
+    inspectionHasForeignSigners(
+      inspection({
+        target,
+        packageOverrides: {
+          ...foreignSignedAllRoles(),
+          installer: {
+            signerIdentity: FOREIGN_SIGNER,
+            packageName: "com.other.installer",
+          },
+        },
+      }),
+    ),
+    false,
+  );
+  // A single foreign-signed role alone is still wholly foreign, and a missing
+  // signature reads as foreign for the same reason.
+  assert.equal(
+    inspectionHasForeignSigners(
+      inspection({
+        target,
+        packageOverrides: {
+          installer: { signerIdentity: FOREIGN_SIGNER },
+          hook: absent,
+          server: absent,
+          loader: absent,
+        },
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    inspectionHasForeignSigners(
+      inspection({
+        target,
+        packageOverrides: {
+          installer: { signerIdentity: null },
+          hook: absent,
+          server: absent,
+          loader: absent,
+        },
+      }),
+    ),
+    true,
+  );
 });
 
 test("decideInstallMigration blocks an unsupported version baseline for any role", () => {
@@ -732,8 +1047,8 @@ test("decideInstallMigration routes only missing or unhealthy supported installe
  * Everything outside the device itself that has to hold before any package is
  * touched. A target the inspection did not actually look at, an unverified
  * manifest, a locked Pin whose credential-encrypted storage is unavailable, a
- * conflicting runtime, the bootstrap helper left behind, or a device that is
- * not an Ai Pin: each one alone ends the install.
+ * conflicting runtime, or a device that is not an Ai Pin: each one alone ends
+ * the install. A Setup Helper left behind does NOT, every plan removes it.
  */
 test("decideInstallMigration blocks stale, unverified, locked, conflicting, and unsupported targets", () => {
   const target = createResolvedInstallTargetFixture();
@@ -748,16 +1063,57 @@ test("decideInstallMigration blocks stale, unverified, locked, conflicting, and 
     ],
     ["a locked Pin", { target, inspection: inspection({ target, credentialState: "locked" }) }],
     ["a conflicting runtime", { target, inspection: inspection({ target, conflicts: true }) }],
-    [
-      "the bootstrap helper left behind",
-      { target, inspection: inspection({ target, helperPresent: true }) },
-    ],
     ["an unrecognised device", { target, inspection: inspection({ target, recognized: false }) }],
   ];
 
   for (const [description, options] of cases) {
     assert.equal(decideInstallMigration(options).kind, "blocked", description);
   }
+});
+
+/*
+ * A bootstrap that died partway leaves the Setup Helper installed, and that
+ * alone must not dead-end Center: beside a healthy installer the plan is the
+ * ordinary in-place decision (the op removes the helper as a cleanup step), and
+ * with nothing else of Luma's on the Pin it is read as a first install that
+ * reaches the recovery plan, whose cleanupManagedPackages uninstalls the helper.
+ */
+test("decideInstallMigration lets a leftover Setup Helper reach the in-place plan", () => {
+  const target = createResolvedInstallTargetFixture();
+  const result = decideInstallMigration({
+    target,
+    inspection: inspection({ target, helperPresent: true }),
+  });
+
+  assert.equal(result.kind, "routine-in-place");
+});
+
+test("inspectionIsFirstInstall reads a helper-only device as a first install", () => {
+  const target = createResolvedInstallTargetFixture();
+  const absent = {
+    installed: false,
+    healthy: false,
+    versionName: null,
+    signerIdentity: null,
+    versionReadable: false,
+    querySucceeded: false,
+    rawOutput: null,
+    versionComparison: null,
+  };
+  const helperOnly = inspection({
+    target,
+    helperPresent: true,
+    packageOverrides: Object.fromEntries(
+      MANAGED_ROLES.map((role) => [role, absent]),
+    ),
+  });
+
+  assert.equal(inspectionIsFirstInstall(helperOnly), true);
+  // With Luma partly present the same helper is a recovery, not a first install.
+  assert.equal(
+    inspectionIsFirstInstall(inspection({ target, helperPresent: true })),
+    false,
+  );
 });
 
 /* ── keep-data update eligibility ─────────────────────────────────────────── */

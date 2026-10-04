@@ -68,8 +68,21 @@ export type {
   SystemInstallerProgressEvent,
 } from "@/lib/pin-device/adb";
 
+export { waitForBootCompleted } from "@/lib/pin-device/adb";
+
+export { shellCommand, shellSingleQuote } from "@/lib/pin-device/adb";
+
 export { createDeviceLogLine } from "@/lib/pin-device/adb";
 export type { DeviceLogLine } from "@/lib/pin-device/adb";
 
 export { getBrowserSupport } from "@/lib/pin-device/adb";
 export type { BrowserSupportResult } from "@/lib/pin-device/adb";
+
+export {
+  clearCosmosIdentity,
+  CosmosIdentityRefusedError,
+  CosmosIdentityUnavailableError,
+  COSMOS_IDENTITY_URI,
+  deactivateCosmosIdentity,
+} from "@/lib/pin-device/cosmosIdentity";
+export type { CosmosIdentityCallResult } from "@/lib/pin-device/cosmosIdentity";

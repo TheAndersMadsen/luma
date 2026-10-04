@@ -40,6 +40,7 @@ import {
   cleanupManagedPackages,
   disableConfiguredPackages,
   installManagedPackages,
+  uninstallLeftoverHelper,
   type InstallVerificationPolicy,
   verifyInstalledManagedState,
 } from "./shared";
@@ -82,6 +83,7 @@ export interface InstallOperationInternals {
     command: KnownPackageConflictCleanupCommand,
   ): Promise<{ success: boolean; message: string }>;
   cleanupManagedPackages(transport: AdbSessionTransport): Promise<void>;
+  uninstallLeftoverHelper(transport: AdbSessionTransport): Promise<void>;
   bootstrapFinalInstaller(
     transport: AdbSessionTransport,
     assets: {
@@ -140,6 +142,7 @@ const defaultInstallInternals: InstallOperationInternals = {
     };
   },
   cleanupManagedPackages,
+  uninstallLeftoverHelper,
   bootstrapFinalInstaller,
   installManagedPackages,
   disableConfiguredPackages,
@@ -254,6 +257,8 @@ export interface InstallPlan {
   readonly verificationPolicy: InstallVerificationPolicy;
   readonly shouldRunPreinstallCleanup: boolean;
   readonly shouldCleanupManagedPackages: boolean;
+  /** The inspection proved the Setup Helper is installed. */
+  readonly shouldCleanupLeftoverHelper: boolean;
   readonly shouldBootstrapInstaller: boolean;
   readonly shouldDisableConfiguredPackages: boolean;
   readonly shouldSetHomeActivity: boolean;
@@ -301,6 +306,8 @@ export function createInstallPlan(options: InstallOperationOptions): InstallPlan
     },
     shouldRunPreinstallCleanup: recovery,
     shouldCleanupManagedPackages: recovery,
+    shouldCleanupLeftoverHelper:
+      options.inspection?.helperPresentUnexpectedly === true,
     shouldBootstrapInstaller: recovery,
     shouldDisableConfiguredPackages: recovery,
     shouldSetHomeActivity: recovery,
@@ -414,9 +421,16 @@ export async function runInstallOperation(
       logEntry: true,
     });
 
+    // The recovery plan's cleanupManagedPackages already uninstalls the Setup
+    // Helper (it is the last entry of MANAGED_CLEANUP_ORDER); the dedicated
+    // step is for the in-place plan, which retains everything else.
+    const cleanupRunsLeftoverHelper =
+      installPlan.shouldCleanupLeftoverHelper &&
+      !installPlan.shouldCleanupManagedPackages;
     const willMutate =
       installPlan.shouldRunPreinstallCleanup ||
       installPlan.shouldCleanupManagedPackages ||
+      installPlan.shouldCleanupLeftoverHelper ||
       installPlan.shouldBootstrapInstaller ||
       installPlan.packageRoles.length > 0 ||
       installPlan.shouldDisableConfiguredPackages ||
@@ -429,7 +443,8 @@ export async function runInstallOperation(
 
     if (
       installPlan.shouldRunPreinstallCleanup ||
-      installPlan.shouldCleanupManagedPackages
+      installPlan.shouldCleanupManagedPackages ||
+      cleanupRunsLeftoverHelper
     ) {
       deviceChangesStarted = true;
     }
@@ -437,7 +452,8 @@ export async function runInstallOperation(
       (installPlan.shouldRunPreinstallCleanup
         ? PREINSTALL_CLEANUP_COMMANDS.length
         : 0) +
-      (installPlan.shouldCleanupManagedPackages ? 1 : 0);
+      (installPlan.shouldCleanupManagedPackages ? 1 : 0) +
+      (cleanupRunsLeftoverHelper ? 1 : 0);
     let cleanupCompleted = 0;
     emitProgress({
       phase: "Cleanup",
@@ -508,6 +524,28 @@ export async function runInstallOperation(
       emitProgress({
         phase: "Cleanup",
         message: "Package cleanup skipped; installer and app data are retained.",
+        phaseIndex: 1,
+        phaseCompleted: cleanupCompleted,
+        phaseTotal: cleanupSteps,
+        phaseUnitLabel: "step",
+        logEntry: true,
+      });
+    }
+    if (cleanupRunsLeftoverHelper) {
+      emitProgress({
+        phase: "Cleanup",
+        message: "Removing the leftover Setup Helper.",
+        phaseIndex: 1,
+        phaseCompleted: cleanupCompleted,
+        phaseTotal: cleanupSteps,
+        phaseUnitLabel: "step",
+        logEntry: true,
+      });
+      await internals.uninstallLeftoverHelper(deviceTransport);
+      cleanupCompleted += 1;
+      emitProgress({
+        phase: "Cleanup",
+        message: "Leftover Setup Helper removed.",
         phaseIndex: 1,
         phaseCompleted: cleanupCompleted,
         phaseTotal: cleanupSteps,

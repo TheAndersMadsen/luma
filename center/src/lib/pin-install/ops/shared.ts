@@ -47,6 +47,17 @@ export async function cleanupManagedPackages(
   await cleanupPackages(transport, new Set(MANAGED_CLEANUP_ORDER));
 }
 
+/**
+ * Removes the Setup Helper a failed bootstrap left behind. Separate from
+ * `cleanupManagedPackages` so the routine in-place plan (which retains the
+ * installer and keeps everything else) can still clear exactly this package.
+ */
+export async function uninstallLeftoverHelper(
+  transport: AdbSessionTransport,
+): Promise<void> {
+  await uninstallPackage(transport, MANAGED_PACKAGES.bootstrapHelper);
+}
+
 export async function disableConfiguredPackages(
   transport: AdbSessionTransport,
   packageNames: readonly string[] = DEFAULT_DISABLE_PACKAGES,

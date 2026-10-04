@@ -1,7 +1,12 @@
 import {
+  clearCosmosIdentity,
+  CosmosIdentityRefusedError,
+  CosmosIdentityUnavailableError,
   createTimedAdbSessionTransport,
+  deactivateCosmosIdentity,
   waitForPackageManagerReady,
   type AdbSessionTransport,
+  type CosmosIdentityCallResult,
 } from "../device";
 import {
   UNINSTALL_OPERATION_PHASES,
@@ -28,6 +33,12 @@ export interface UninstallOperationOptions {
 
 export interface UninstallOperationInternals {
   waitForPackageManagerReady(transport: AdbSessionTransport): Promise<void>;
+  deactivateCosmosIdentity(
+    transport: AdbSessionTransport,
+  ): Promise<CosmosIdentityCallResult>;
+  clearCosmosIdentity(
+    transport: AdbSessionTransport,
+  ): Promise<CosmosIdentityCallResult>;
   cleanupManagedPackages(transport: AdbSessionTransport): Promise<void>;
   restoreConfiguredPackages(transport: AdbSessionTransport): Promise<OperationWarning[]>;
   verifyUninstalledManagedState(transport: AdbSessionTransport): Promise<void>;
@@ -35,10 +46,21 @@ export interface UninstallOperationInternals {
 
 const defaultUninstallInternals: UninstallOperationInternals = {
   waitForPackageManagerReady,
+  deactivateCosmosIdentity,
+  clearCosmosIdentity,
   cleanupManagedPackages,
   restoreConfiguredPackages,
   verifyUninstalledManagedState,
 };
+
+function isCosmosIdentityError(
+  error: unknown,
+): error is CosmosIdentityUnavailableError | CosmosIdentityRefusedError {
+  return (
+    error instanceof CosmosIdentityUnavailableError ||
+    error instanceof CosmosIdentityRefusedError
+  );
+}
 
 function emitPhaseProgress(
   onProgress: UninstallOperationOptions["onProgress"],
@@ -85,7 +107,7 @@ export async function runUninstallOperation(
 
   try {
     emitProgress({
-      phase: "Cleanup",
+      phase: "Deactivate",
       message: "Waiting for Android package services before uninstall.",
       phaseIndex: 0,
       phaseCompleted: 0,
@@ -95,10 +117,62 @@ export async function runUninstallOperation(
     });
     await internals.waitForPackageManagerReady(deviceTransport);
 
+    // The identity provider lives in the server APK, so the Cosmos identity is
+    // deactivated before cleanupManagedPackages uninstalls the package that
+    // answers these calls.
+    try {
+      const deactivation = await internals.deactivateCosmosIdentity(deviceTransport);
+      emitProgress({
+        phase: "Deactivate",
+        message: "Removed this Pin's connection to your server.",
+        phaseIndex: 0,
+        phaseCompleted: 1,
+        phaseTotal: 2,
+        phaseUnitLabel: "step",
+        logEntry: true,
+      });
+      if (!deactivation.rollbackComplete) {
+        warnings.push({
+          code: "identity-deactivate-failed",
+          message:
+            "The Pin could not restore its previous settings while deactivating; its assistant may need a repair.",
+        });
+      }
+      try {
+        await internals.clearCosmosIdentity(deviceTransport);
+        emitProgress({
+          phase: "Deactivate",
+          message:
+            "Removed this Pin's connection to your server and its leftover identity.",
+          phaseIndex: 0,
+          phaseCompleted: 2,
+          phaseTotal: 2,
+          phaseUnitLabel: "step",
+          logEntry: true,
+        });
+      } catch (error) {
+        if (!isCosmosIdentityError(error)) {
+          throw error;
+        }
+        warnings.push({
+          code: "identity-clear-failed",
+          message: error.message,
+        });
+      }
+    } catch (error) {
+      if (!isCosmosIdentityError(error)) {
+        throw error;
+      }
+      warnings.push({
+        code: "identity-deactivate-failed",
+        message: error.message,
+      });
+    }
+
     emitProgress({
       phase: "Cleanup",
       message: "Uninstall cleanup started.",
-      phaseIndex: 0,
+      phaseIndex: 1,
       phaseCompleted: 0,
       phaseTotal: 1,
       phaseUnitLabel: "step",
@@ -108,7 +182,7 @@ export async function runUninstallOperation(
     emitProgress({
       phase: "Cleanup",
       message: "Managed package cleanup finished.",
-      phaseIndex: 0,
+      phaseIndex: 1,
       phaseCompleted: 1,
       phaseTotal: 1,
       phaseUnitLabel: "step",
@@ -118,7 +192,7 @@ export async function runUninstallOperation(
     emitProgress({
       phase: "Restore",
       message: "Restore of stock/system packages started.",
-      phaseIndex: 1,
+      phaseIndex: 2,
       phaseCompleted: 0,
       phaseTotal: 1,
       phaseUnitLabel: "step",
@@ -128,7 +202,7 @@ export async function runUninstallOperation(
     emitProgress({
       phase: "Restore",
       message: "Configured stock/system package restore finished.",
-      phaseIndex: 1,
+      phaseIndex: 2,
       phaseCompleted: 1,
       phaseTotal: 1,
       phaseUnitLabel: "step",
@@ -138,7 +212,7 @@ export async function runUninstallOperation(
     emitProgress({
       phase: "Verify",
       message: "Uninstall verification started.",
-      phaseIndex: 2,
+      phaseIndex: 3,
       phaseCompleted: 0,
       phaseTotal: 1,
       phaseUnitLabel: "step",
@@ -148,7 +222,7 @@ export async function runUninstallOperation(
     emitProgress({
       phase: "Verify",
       message: "Uninstall verification complete.",
-      phaseIndex: 2,
+      phaseIndex: 3,
       phaseCompleted: 1,
       phaseTotal: 1,
       phaseUnitLabel: "step",

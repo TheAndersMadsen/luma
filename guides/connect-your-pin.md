@@ -46,25 +46,50 @@ Installing Luma replaces what is on the Pin, and there is no button to go
 back. If the Pin runs PenumbraOS v0 (MABL), FusionOS, or OpenPin, the
 **Software & updates** page in Stage 3 lists those apps. When you choose
 **Install Luma**, Center asks **Remove conflicting apps first?** and offers
-**Remove and install**. That button does three things, in this order:
+**Remove and install**. That button does all of this, in this order:
 
 - It uninstalls every installed app that matches this list. Their app data
   goes with them.
-  - PenumbraOS v0: `com.penumbraos.mabl`, `com.penumbraos.plugins.*`,
-    `com.penumbraos.sdk.*`, `com.penumbraos.bridge*`, and
-    `com.penumbraos.pinitd`.
+  - PenumbraOS v0: `com.penumbraos.mabl*` (this includes
+    `com.penumbraos.mabl.pin`, the id PenumbraOS v0 ships its launcher
+    under), `com.penumbraos.cli`, `com.penumbraos.adbd`,
+    `com.penumbraos.plugins.*`, `com.penumbraos.sdk.*`,
+    `com.penumbraos.bridge*`, and `com.penumbraos.pinitd`.
   - FusionOS: `com.ghost.fuionwebhost` and `com.ghost.fusion*`.
   - OpenPin: `org.openpin.primaryapp`.
-- It restarts the Pin.
-- It installs Luma. First it re-enables Humane's Ironman, Onboarding, and
-  System Navigation apps and clears PenumbraOS's expanded logging
-  (`persist.log.tag`).
+- It removes the project's leftover device files: PenumbraOS v0's
+  `/sdcard/penumbra` and `/data/local/tmp/bin`, and OpenPin's
+  `/data/local/tmp/openpin-daemon` and `/data/local/tmp/pty_exec`.
+- It re-enables Humane's Ironman, Onboarding, and System Navigation apps,
+  clears PenumbraOS's expanded logging (`persist.log.tag`), and sets the
+  stock launcher.
+- It deletes pinitd's exploit residue (the `hidden_api_blacklist_exemptions`
+  setting, which upstream documents as a boot-loop hazard when a crash leaves
+  it set), restarts the Pin, and waits for it to finish starting.
+- It installs Luma.
 
-The page also has a **Remove conflicting apps…** link. It does only the first
-two things: it uninstalls the apps and restarts the Pin.
+The confirmation lists the apps under **Apps from another Ai Pin project**
+and, because this removal takes the project's files with them, names the
+file removal with the backup reminder below.
 
-Neither one touches PenumbraOS's files in `/sdcard/penumbra` and
-`/data/local/tmp/bin`.
+The page also has a **Remove conflicting apps…** link. It does everything
+above except the last step: it removes the apps and the leftover files,
+restores the stock launcher, and restarts the Pin.
+
+A Pin that runs the current generation of PenumbraOS is a different case. Its
+apps use Luma's own package ids (`com.penumbraos.server`,
+`com.penumbraos.hook`, `com.penumbraos.hook.injector`, and
+`com.penumbraos.systeminjector`) but are signed by a different key. This no
+longer dead-ends: the installer offers **Replace and install**, and its
+confirmation (**Another project's apps are on this Pin**) says before you
+confirm that recovery removes those apps with their app data and installs
+Luma's signed apps. That erases the other project's app data, so copy
+anything you want to keep first.
+
+A leftover Luma Setup Helper (`com.penumbraos.systeminjector.exploit`, left
+behind by an interrupted first install) no longer blocks everything either.
+The page reports **The Setup Helper is present unexpectedly.** and offers
+**Repair**; choosing it removes the helper and continues.
 
 Back up first, with the ADB access you used to install PenumbraOS:
 
@@ -81,11 +106,14 @@ a password, because it holds that key.
 To go back to PenumbraOS later, connect the Pin and open
 **Settings → Advanced → Software & updates**. Open the **More tools** menu
 (the **⋯** button), choose **Uninstall Luma…**, and confirm with
-**Uninstall**. Center removes Luma's five apps. It then turns back on the
-Humane apps that installing Luma turned off: Bort, Bort OTA, the Memfault
-usage reporter, the metric reporter, and Humane OTA. It does not restart the
-Pin, and it does not reinstall PenumbraOS. Reinstall that with PenumbraOS's
-own installer ([penumbraos.com](https://penumbraos.com)), then restore your
+**Uninstall**. Center first disconnects the Pin from your server: it removes
+the Cosmos connection and the identity material left on the Pin, and the Pin
+restores the settings those replaced. It then removes Luma's five apps and
+turns back on the Humane apps that installing Luma turned off: Bort, Bort
+OTA, the Memfault usage reporter, the metric reporter, and Humane OTA. The
+Pin no longer points at your server. It does not restart the Pin, and it
+does not reinstall PenumbraOS. Reinstall that with PenumbraOS's own
+installer ([penumbraos.com](https://penumbraos.com)), then restore your
 settings from the backup.
 
 One Luma server serves one Pin. So if you want to try Luma first, set up a
@@ -254,12 +282,21 @@ titled **Recover this Pin?**, with the note **Recovery erases Luma's app
 data** and the button **Start recovery**. Center removes what is left of
 Luma and installs it again.
 
+The page can also show a quiet **Unrecognized apps** advisory. It lists
+installed apps that are neither Luma's, the Pin's original software, nor
+known conflicts. Nothing removes them by itself. **Remove unrecognized
+apps…** behind the advisory asks **Remove unrecognized apps?** and names the
+exact packages before Center removes the ones you confirmed.
+
 > **If stage 3 says known conflicting apps must be removed before
 > installing:** the Pin has apps from another Ai Pin project. Choose **Open
 > installer**, then **Install Luma VERSION**. Center asks **Remove
 > conflicting apps first?** and lists the apps under **Apps from another Ai
-> Pin project**. **Remove and install** removes them, then installs. Back
-> them up before you choose it. See
+> Pin project**. When the project also leaves device files behind, the
+> confirmation names them with a backup reminder:
+> `adb pull /sdcard/penumbra penumbra-backup`. **Remove and install** removes
+> the apps and the files, restores the stock launcher, restarts the Pin, and
+> installs. See
 > [Coming from PenumbraOS or another Ai Pin project](#coming-from-penumbraos-or-another-ai-pin-project).
 >
 > **If stage 3 shows a command instead of Open installer:** your server has
@@ -327,6 +364,12 @@ them later in **Settings → Assistant & voice** or **Settings → Music**.
 > opens the installer. If the page shows **Remote access pending**, choose
 > **Retry remote access**. It keeps the identity already installed on the
 > Pin.
+>
+> **If Connect your Pin says "This Pin is connected to another Luma
+> server":** the message names the other server's address. The Pin is active
+> with a different Luma server. **Switch this Pin to this server**
+> disconnects it from that server — the Pin restores the settings its
+> connection there replaced — and connects it to this one.
 
 ## Stage 6: Pin passcode
 
@@ -367,6 +410,16 @@ to your touch.*
 
 The Pin stores that confirmation itself, tied to its serial, the installed
 release, and your server. A new release or a new server asks for it again.
+
+> **If stage 7 fails with certificate errors while stages 5 and 6 are
+> green:** the Pin finished Humane's original setup before it ever reached
+> this server, so the server never issued its credential, and the stock
+> setup ceremony cannot run on such a Pin unaided. In **Provisioning**,
+> choose **Run its original setup**. Center re-arms the Pin's original setup
+> ceremony, reconnects it, and opens its setup screen on the Pin. Follow the
+> prompts on the Pin, and finish Guided setup stage 6 with the same four
+> digits when Center asks for them; the Pin keeps the passcode it already
+> unlocks with.
 
 ## Afterwards
 

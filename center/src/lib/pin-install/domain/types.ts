@@ -60,6 +60,8 @@ export interface KnownPackageConflictDefinition {
   packageIds: readonly string[];
   warningCopy?: string;
   cleanupCommands?: readonly KnownPackageConflictCleanupCommand[];
+  /** Device paths the suite leaves behind, removed with its packages. */
+  cleanupFilePaths?: readonly string[];
 }
 
 export interface DetectedPackageConflict {
@@ -69,4 +71,5 @@ export interface DetectedPackageConflict {
   installedPackageIds: readonly string[];
   warningCopy: string | null;
   cleanupCommands: readonly KnownPackageConflictCleanupCommand[];
+  cleanupFilePaths?: readonly string[];
 }

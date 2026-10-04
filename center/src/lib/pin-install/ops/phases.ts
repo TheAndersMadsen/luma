@@ -14,6 +14,7 @@ export const INSTALL_OPERATION_PHASES = [
 ] as const;
 
 export const UNINSTALL_OPERATION_PHASES = [
+  "Deactivate",
   "Cleanup",
   "Restore",
   "Verify",
@@ -27,7 +28,10 @@ export type OperationWarningCode =
   | "disable-failed"
   | "restore-failed"
   | "conflict-cleanup-command-failed"
-  | "preinstall-cleanup-command-failed";
+  | "conflict-file-cleanup-failed"
+  | "preinstall-cleanup-command-failed"
+  | "identity-deactivate-failed"
+  | "identity-clear-failed";
 
 export interface OperationWarning {
   readonly code: OperationWarningCode;

@@ -24,6 +24,7 @@ function getRequirementToneClass(requirement: InstallConfirmationRequirement) {
 
   if (
     requirement.kind === "known-conflicts" ||
+    requirement.kind === "foreign-apps" ||
     requirement.kind === "remove-conflicts" ||
     requirement.kind === "bootstrap-recovery" ||
     requirement.kind === "unsupported-device" ||

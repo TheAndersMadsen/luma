@@ -72,6 +72,7 @@ export default function InstallView({
     runPrimaryAction: controller.runPrimaryAction,
     runUninstall: controller.runUninstall,
     runRemoveConflicts: controller.runRemoveConflicts,
+    runRemoveUnrecognized: controller.runRemoveUnrecognizedPackages,
     runFixConflictsThenPrimaryAction:
       controller.runFixConflictsThenPrimaryAction,
   });
@@ -116,6 +117,9 @@ export default function InstallView({
           },
           onRemoveConflicts: () => {
             void confirmation.requestRemoveConflicts();
+          },
+          onRemoveUnrecognized: () => {
+            void confirmation.requestRemoveUnrecognized();
           },
         }}
       />
