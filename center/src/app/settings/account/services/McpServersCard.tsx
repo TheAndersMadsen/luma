@@ -316,7 +316,7 @@ function ServerForm({
         <input id={urlId} className={styles.integrationInput} type="url" value={url} placeholder="https://example.com/mcp" autoCapitalize="none" autoCorrect="off" onChange={(event) => setUrl(event.target.value)} />
       </div>
       {!server ? (
-        <div className={styles.integrationField} role="radiogroup" aria-labelledby={accessId}>
+        <div className={`${styles.integrationField} ${styles.mcpStacked}`} role="radiogroup" aria-labelledby={accessId}>
           <span className={styles.mcpHeaderLabel}>
             <strong id={accessId}>How it lets you in</strong>
             <small>
@@ -337,7 +337,7 @@ function ServerForm({
         </div>
       ) : null}
       {signsIn ? null : (
-      <div className={styles.integrationField}>
+      <div className={`${styles.integrationField} ${styles.mcpStacked}`}>
         <span className={styles.mcpHeaderLabel}>
           <strong>Request headers</strong>
           <small>
