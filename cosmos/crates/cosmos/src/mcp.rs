@@ -94,6 +94,11 @@
 //!     recorded as `sign_in_required` so Center can offer the sign-in. A
 //!     server with a typed `Authorization` header stays `unauthorized`. The
 //!     sign-in's own failures are listed in `crate::mcp_oauth`.
+//! 25. The Pin is locked and a server is not allowed while locked: its tools
+//!     are withheld, and the model would tell the wearer it has no such tool.
+//!     The model is told which servers need an unlocked Pin
+//!     (`turn::context::situation_line`), by name only, so it can say that.
+//!     Nothing is offered or run because of it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1134,6 +1139,18 @@ pub fn allowed_when_locked(name: &str) -> bool {
         .offered()
         .iter()
         .any(|tool| tool.model_name == name && tool.allow_when_locked)
+}
+
+/// The names of the servers whose tools a locked Pin is not offered: switched
+/// on, with something to offer, and not allowed while locked.
+pub fn withheld_while_locked() -> Vec<String> {
+    let mut servers: Vec<String> = Vec::new();
+    for tool in active().offered() {
+        if !tool.allow_when_locked && !servers.contains(&tool.server_name) {
+            servers.push(tool.server_name);
+        }
+    }
+    servers
 }
 
 /// The offered MCP tool `name`, when the wearer must confirm a call to it

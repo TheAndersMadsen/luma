@@ -144,7 +144,10 @@ retyping one keeps it.
   and at most 15 seconds. Its result is cut to a spoken-answer size and reaches
   the model as untrusted data.
 - **A locked Pin is offered none of them**, unless the owner turns on Use while
-  locked for a server. A Pin is locked whenever it is off the body.
+  locked for a server. A Pin is locked whenever it is off the body. The
+  assistant is told the names of the servers that are waiting for an unlocked
+  Pin, so it says "that needs an unlocked Pin" instead of "I have no such
+  tool". It is told names only.
 - **By voice.** While at least one server is set up, the assistant has a
   built-in `manage_tool_servers` tool that lists the servers and switches one on
   or off by name ("turn on the home tools").

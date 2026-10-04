@@ -137,6 +137,19 @@ pub(crate) fn situation_line(req: &pb::SynapseUnderstandingRequest) -> Option<St
         }
         if dc.is_locked {
             parts.push("The pin is locked.".to_owned());
+            // INFERRED: a locked Pin is offered no tool of a server the owner
+            // did not allow while locked, so the model would answer that it
+            // has no such tool. It is told which servers are waiting for an
+            // unlocked Pin, by name only, so it can say that instead.
+            let withheld = crate::mcp::withheld_while_locked();
+            if !withheld.is_empty() {
+                parts.push(format!(
+                    "These tool servers of the owner's need an unlocked pin and are not \
+                     available now: {}. If the wearer asks for something one of them does, \
+                     say it needs an unlocked pin",
+                    withheld.join(", ")
+                ));
+            }
         }
     }
     if let Some(loc) = req.location.as_ref() {

@@ -32,6 +32,11 @@
 //! 11. The two transports drift apart.
 //! 12. A device function call, which carries no conversation, runs an action
 //!     tool that nobody confirmed.
+//!
+//! The same harness covers one failure that is not about confirmation:
+//!
+//! 13. A locked Pin is not offered a server's tools, and the model, knowing
+//!     nothing of the server, tells the wearer it has no such tool.
 
 use std::collections::VecDeque;
 
@@ -813,4 +818,53 @@ fn asking_is_the_default_and_the_owners_choice_is_kept() {
         .expect("saved");
     assert!(!added.actions_without_asking);
     let _ = fs::remove_dir_all(directory);
+}
+
+/// What the model was shown on its first step of a run.
+async fn shown_to_the_model(
+    transport: Transport,
+    request: &pb::SynapseUnderstandingRequest,
+) -> String {
+    let model = script(vec![say("That needs an unlocked Pin.")]);
+    run(transport, &model, request).await;
+    let shown = model.shown.lock().expect("lock");
+    shown.first().expect("one model step").clone()
+}
+
+#[tokio::test]
+async fn a_locked_pin_is_told_which_servers_need_it_unlocked() {
+    const NEEDS_UNLOCKING: &str = "need an unlocked pin and are not available now: Bookmarks.";
+    for transport in TRANSPORTS {
+        let fixture = Fixture::start().await;
+        let unlocked = request(&[], "Look through my bookmarks.");
+        let mut locked = unlocked.clone();
+        locked
+            .device_context
+            .as_mut()
+            .expect("a device context")
+            .is_locked = true;
+
+        // Locked, and the server is not allowed while locked: the model hears
+        // which server is waiting, and is offered none of its tools.
+        let shown = shown_to_the_model(transport, &locked).await;
+        assert!(shown.contains(NEEDS_UNLOCKING), "{transport:?}: {shown}");
+
+        // An unlocked Pin is offered the tools and told nothing of the kind.
+        let shown = shown_to_the_model(transport, &unlocked).await;
+        assert!(!shown.contains("unlocked pin"), "{transport:?}: {shown}");
+
+        // Allowed while locked, there is nothing to wait for.
+        fixture.change(|server| server.allow_when_locked = true);
+        let shown = shown_to_the_model(transport, &locked).await;
+        assert!(!shown.contains("unlocked pin"), "{transport:?}: {shown}");
+
+        // A server that is switched off is not named either.
+        fixture.change(|server| {
+            server.allow_when_locked = false;
+            server.enabled = false;
+        });
+        let shown = shown_to_the_model(transport, &locked).await;
+        assert!(!shown.contains("unlocked pin"), "{transport:?}: {shown}");
+        assert!(fixture.ran().is_empty(), "{transport:?}");
+    }
 }
