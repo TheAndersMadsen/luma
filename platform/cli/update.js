@@ -58,6 +58,8 @@ const CURRENT_LINK = path.join(OPERATORS_DIR, 'current');
 // Center reads status.json through a read-only bind mount as its own user, so
 // this one directory and its file are world-readable. Nothing secret is in it.
 const UPDATES_DIR = path.join(DATA_DIR, 'updates');
+const REQUESTS_DIR = path.join(UPDATES_DIR, 'requests');
+const REQUEST_FILE = path.join(REQUESTS_DIR, 'update-now');
 const STATUS_FILE = path.join(UPDATES_DIR, 'status.json');
 const DOWNLOADS_DIR = path.join(DATA_DIR, 'update-downloads');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
@@ -67,7 +69,8 @@ const UNITS_DIR = path.join(CONFIG_DIR, 'production', 'systemd');
 const SYSTEM_UNITS_DIR = '/etc/systemd/system';
 const UPDATE_TIMER = 'luma-update.timer';
 const CHECK_TIMER = 'luma-update-check.timer';
-const UNIT_NAMES = Object.freeze(['luma-update.service', UPDATE_TIMER, 'luma-update-check.service', CHECK_TIMER]);
+const REQUEST_PATH_UNIT = 'luma-update-request.path';
+const UNIT_NAMES = Object.freeze(['luma-update.service', UPDATE_TIMER, 'luma-update-check.service', CHECK_TIMER, REQUEST_PATH_UNIT]);
 const CHECK_TIMEOUT_MS = 5_000;
 const MAX_VERSION_BYTES = 64 * 1024;
 const MAX_NOTES = 2_000;
@@ -147,6 +150,21 @@ function ensureUpdatesDirectory() {
   fs.chmodSync(UPDATES_DIR, 0o755);
 }
 
+// Where Center drops its `update-now` request marker, which the
+// luma-update-request.path unit turns into an update run. The Center
+// container writes it under whatever user its image runs, so the directory
+// is world-writable; its only content is that one empty marker file, and the
+// update service removes it when it starts.
+function ensureRequestsDirectory() {
+  ensureUpdatesDirectory();
+  const stat = fs.lstatSync(REQUESTS_DIR, { throwIfNoEntry: false });
+  if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
+    throw new Error(`${REQUESTS_DIR} must be a real directory`);
+  }
+  if (!stat) fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o777 });
+  fs.chmodSync(REQUESTS_DIR, 0o777);
+}
+
 function readStatus() {
   try {
     const status = JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
@@ -216,6 +234,10 @@ function renderUpdateUnits({ user = os.userInfo().username, home = os.homedir() 
     `User=${user}`,
     ...environment,
     `ExecStart=${unitValue(luma)} update production ${mode}`,
+    // Consumes a Center's update request, whether the run was requested from
+    // Center or came from the nightly timer, so a finished request never
+    // triggers a second update.
+    `ExecStopPost=/usr/bin/rm -f ${REQUEST_FILE}`,
     '',
   ].join('\n');
   const timer = (description, calendar, delay) => [
@@ -231,11 +253,24 @@ function renderUpdateUnits({ user = os.userInfo().username, home = os.homedir() 
     'WantedBy=timers.target',
     '',
   ].join('\n');
+  const requestPath = [
+    '[Unit]',
+    'Description=Run an update the operator requested from Center (luma update production --auto)',
+    '',
+    '[Path]',
+    `PathExistsGlob=${REQUEST_FILE}`,
+    'Unit=luma-update.service',
+    '',
+    '[Install]',
+    'WantedBy=timers.target',
+    '',
+  ].join('\n');
   return Object.freeze({
     'luma-update.service': service('Install a newer Luma release (luma update production --auto)', '--auto'),
     [UPDATE_TIMER]: timer('Install newer Luma releases at night', '*-*-* 03:00:00', '2h'),
     'luma-update-check.service': service('Check for a newer Luma release (luma update production --check)', '--check'),
     [CHECK_TIMER]: timer('Check for newer Luma releases every hour', 'hourly', '5m'),
+    'luma-update-request.path': requestPath,
   });
 }
 
@@ -306,7 +341,13 @@ function configureAutomaticUpdates({ enabled }, runtime = {}) {
   secureDirectory(path.dirname(unitsDir));
   if (!fs.existsSync(unitsDir)) fs.mkdirSync(unitsDir, { mode: 0o755 });
   fs.chmodSync(unitsDir, 0o755);
-  const wanted = enabled ? UNIT_NAMES : UNIT_NAMES.filter((name) => name.startsWith('luma-update-check.'));
+  // The request directory must exist before the path unit watches it and the
+  // overlay mounts it into Center.
+  (runtime.ensureRequestsDirectory ?? ensureRequestsDirectory)();
+  // The nightly timer runs only with automatic updates on. The update
+  // service itself is always wanted: the request path unit starts it when
+  // the operator asks for an update from Center.
+  const wanted = enabled ? UNIT_NAMES : UNIT_NAMES.filter((name) => name !== UPDATE_TIMER);
   for (const name of UNIT_NAMES) {
     const file = path.join(unitsDir, name);
     if (wanted.includes(name)) {
@@ -322,6 +363,7 @@ function configureAutomaticUpdates({ enabled }, runtime = {}) {
   const status = runtime.systemctl ?? systemctl;
   const upToDate = UNIT_NAMES.every((name) => installed(name) === (wanted.includes(name) ? units[name] : null)) &&
     status(['is-enabled', CHECK_TIMER]) === 'enabled' &&
+    status(['is-enabled', REQUEST_PATH_UNIT]) === 'enabled' &&
     (!enabled || status(['is-enabled', UPDATE_TIMER]) === 'enabled');
   const on = enabled ? 'on: this server installs newer releases between 03:00 and 05:00' : 'off';
   if (upToDate) return Object.freeze({ state: 'unchanged', message: `Automatic updates are ${on}.` });
@@ -329,10 +371,10 @@ function configureAutomaticUpdates({ enabled }, runtime = {}) {
     ...wanted.map((name) => `install -m 0644 ${JSON.stringify(path.join(unitsDir, name))} ${systemDir}/${name}`),
     ...(enabled ? [] : [
       `systemctl disable --now ${UPDATE_TIMER} 2>/dev/null || true`,
-      `rm -f ${systemDir}/luma-update.service ${systemDir}/${UPDATE_TIMER}`,
+      `rm -f ${systemDir}/${UPDATE_TIMER}`,
     ]),
     'systemctl daemon-reload',
-    `systemctl enable --now ${CHECK_TIMER}${enabled ? ` ${UPDATE_TIMER}` : ''}`,
+    `systemctl enable --now ${CHECK_TIMER} ${REQUEST_PATH_UNIT}${enabled ? ` ${UPDATE_TIMER}` : ''}`,
   ];
   if ((runtime.runPrivileged ?? runPrivileged)(commands.join(' && '))) {
     return Object.freeze({ state: 'installed', message: `Automatic updates are ${on}.` });
@@ -990,12 +1032,15 @@ module.exports = {
   CURRENT_LINK,
   GITHUB_TOKEN_FILE,
   OPERATORS_DIR,
+  REQUEST_FILE,
+  REQUESTS_DIR,
   STATUS_FILE,
   UPDATES_DIR,
   USAGE,
   UpdateStopped,
   automaticUpdatesReport,
   configureAutomaticUpdates,
+  ensureRequestsDirectory,
   ensureUpdatesDirectory,
   parseLatest,
   pointCurrentOperator,

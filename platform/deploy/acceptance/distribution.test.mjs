@@ -626,12 +626,17 @@ test("operator release is lean, versioned, and bound to exact OCI digests", asyn
   assert.match(setup.stdout, /Updates: this server asks https:\/\/[^ ]+ for newer releases\./u);
   assert.match(setup.stdout, /the timers start once this server runs a release in .+\/operators/u);
   // Center reads the update status through a read-only mount of a
-  // world-readable directory.
+  // world-readable directory, and writes its update request into a
+  // world-writable sibling the update service consumes.
   const updates = path.join(operatorEnv.LUMA_DATA_DIR, "updates");
   assert.equal(fs.statSync(updates).mode & 0o777, 0o755);
+  const requests = path.join(updates, "requests");
+  assert.equal(fs.statSync(requests).mode & 0o777, 0o777);
   const overlay = fs.readFileSync(path.join(operatorEnv.LUMA_CONFIG_DIR, "production", "operator.compose.yaml"), "utf8");
   assert.match(overlay, /LUMA_UPDATE_STATUS_FILE: \/luma-updates\/status\.json/u);
   assert.ok(overlay.includes(`source: ${JSON.stringify(updates)}\n        target: /luma-updates\n        read_only: true`), overlay);
+  assert.match(overlay, /LUMA_UPDATE_REQUESTS_DIR: \/luma-update-requests/u);
+  assert.ok(overlay.includes(`source: ${JSON.stringify(requests)}\n        target: /luma-update-requests\n        bind: { create_host_path: false }`), overlay);
 
   const production = path.join(operatorEnv.LUMA_CONFIG_DIR, "production");
   const preservedRealm = fs.readFileSync(path.join(production, "realm.json"), "utf8");

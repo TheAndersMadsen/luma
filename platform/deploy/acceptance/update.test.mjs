@@ -534,10 +534,12 @@ test("the systemd units run the current operator nightly and check hourly, as th
   const units = update.renderUpdateUnits({ user: "luma", home: "/home/luma" });
   assert.deepEqual(Object.keys(units), [
     "luma-update.service", "luma-update.timer", "luma-update-check.service", "luma-update-check.timer",
+    "luma-update-request.path",
   ]);
   const service = units["luma-update.service"];
   assert.match(service, /^User=luma$/mu);
   assert.match(service, new RegExp(`^ExecStart="${OPERATORS}/current/luma" update production --auto$`, "mu"));
+  assert.match(service, new RegExp(`^ExecStopPost=/usr/bin/rm -f ${DATA}/updates/requests/update-now$`, "mu"));
   for (const [name, value] of [["LUMA_CONFIG_DIR", CONFIG], ["LUMA_SECRETS_DIR", SECRETS], ["LUMA_DATA_DIR", DATA], ["LUMA_ENV_FILE", ENV]]) {
     assert.match(service, new RegExp(`^Environment="${name}=${value}"$`, "mu"), name);
   }
@@ -545,6 +547,8 @@ test("the systemd units run the current operator nightly and check hourly, as th
   assert.match(units["luma-update.timer"], /^OnCalendar=\*-\*-\* 03:00:00\nRandomizedDelaySec=2h\nPersistent=true$/mu);
   assert.match(units["luma-update-check.timer"], /^OnCalendar=hourly$/mu);
   assert.match(units["luma-update-check.timer"], /^WantedBy=timers\.target$/mu);
+  assert.match(units["luma-update-request.path"], /^Unit=luma-update\.service$/mu);
+  assert.match(units["luma-update-request.path"], new RegExp(`^PathExistsGlob=${DATA}/updates/requests/update-now$`, "mu"));
 });
 
 test("setup installs the timers through the privileged step, removes the nightly one when off, and prints the commands without sudo", () => {
@@ -575,9 +579,9 @@ test("setup installs the timers through the privileged step, removes the nightly
   assert.equal(on.state, "installed");
   assert.equal(on.message, "Automatic updates are on: this server installs newer releases between 03:00 and 05:00.");
   assert.deepEqual(fs.readdirSync(system).sort(), [
-    "luma-update-check.service", "luma-update-check.timer", "luma-update.service", "luma-update.timer",
+    "luma-update-check.service", "luma-update-check.timer", "luma-update-request.path", "luma-update.service", "luma-update.timer",
   ]);
-  assert.match(scripts[0], /systemctl daemon-reload && systemctl enable --now luma-update-check\.timer luma-update\.timer$/u);
+  assert.match(scripts[0], /systemctl daemon-reload && systemctl enable --now luma-update-check\.timer luma-update-request\.path luma-update\.timer$/u);
   // Nothing changed, so nothing privileged runs again.
   assert.equal(update.configureAutomaticUpdates({ enabled: true }, common).state, "unchanged");
   assert.equal(scripts.length, 1);
@@ -585,15 +589,16 @@ test("setup installs the timers through the privileged step, removes the nightly
   const off = update.configureAutomaticUpdates({ enabled: false }, common);
   assert.equal(off.state, "installed");
   assert.equal(off.message, "Automatic updates are off.");
-  assert.deepEqual(fs.readdirSync(system).sort(), ["luma-update-check.service", "luma-update-check.timer"],
-    "the hourly check stays so Center's status stays fresh");
+  assert.deepEqual(fs.readdirSync(system).sort(), [
+    "luma-update-check.service", "luma-update-check.timer", "luma-update-request.path", "luma-update.service",
+  ], "the nightly timer goes; the update service stays so Center can request an update");
   assert.match(scripts[1], /systemctl disable --now luma-update\.timer/u);
 
   const manual = update.configureAutomaticUpdates({ enabled: true }, { ...common, runPrivileged: () => false });
   assert.equal(manual.state, "manual");
   assert.match(manual.message, /sudo was not available\. Run these once as root/u);
   assert.deepEqual(manual.commands.slice(-2), [
-    "systemctl daemon-reload", "systemctl enable --now luma-update-check.timer luma-update.timer",
+    "systemctl daemon-reload", "systemctl enable --now luma-update-check.timer luma-update-request.path luma-update.timer",
   ]);
   assert.ok(manual.commands[0].startsWith(`install -m 0644 "${CONFIG}/production/systemd/luma-update.service" `));
 

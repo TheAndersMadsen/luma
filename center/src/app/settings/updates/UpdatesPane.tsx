@@ -5,6 +5,7 @@ import controls from "@/components/controls.module.css";
 import { CopyCommand } from "@/components/CopyCommand";
 import { StatusMessage } from "@/components/Status";
 import type { UpdateOverview } from "@/lib/contracts/updates";
+import { UpdateProgress } from "./UpdateProgress";
 import {
   AUTO_UPDATES_COMMAND,
   UPDATE_COMMAND,
@@ -43,7 +44,7 @@ const TONE = { live: "info", info: "info", warning: "warning", danger: "danger" 
 
 /** The pane, from one server-resolved overview. Every field tolerates absence. */
 export function UpdatesPane({ overview }: { overview: UpdateOverview }) {
-  const { current, check, autoUpdates, source, lastUpdate } = overview;
+  const { current, check, autoUpdates, source, lastUpdate, request } = overview;
   const published = formatReleaseDate(current.publishedAt);
   const checkSentence = describeCheck(check);
   const last = describeLastUpdate(lastUpdate);
@@ -51,6 +52,7 @@ export function UpdatesPane({ overview }: { overview: UpdateOverview }) {
 
   return (
     <>
+      {request.pending ? <UpdateProgress /> : null}
       <section className={settings.section} data-testid="updates-current">
         <div className={settings.sectionHeader}>
           <span className={settings.sectionTitle}>Luma on this server</span>
@@ -93,8 +95,26 @@ export function UpdatesPane({ overview }: { overview: UpdateOverview }) {
           <div className={settings.infoRowRoot}>
             <span className={settings.titleInfo}>Install it</span>
             <div className={settings.descWrapper}>
+              {request.supported ? (
+                request.pending ? (
+                  <StatusMessage tone="info" inline>
+                    <span data-testid="updates-install-pending">
+                      Luma {check.latest.version} is installing now. Your Center may pause for a few minutes; the
+                      result appears in Last update below.
+                    </span>
+                  </StatusMessage>
+                ) : (
+                  <form method="post" action="/api/admin/updates/update-now" className={styles.checkForm}>
+                    <button type="submit" className={controls.buttonSecondary} data-testid="updates-install-button">
+                      Install now
+                    </button>
+                  </form>
+                )
+              ) : null}
               <CopyCommand command={UPDATE_COMMAND} label="update command" />
-              <span className={settings.muted}>Run this on your server, in the Luma folder (usually ~/.local/share/luma/operators/current). Your Center may pause for a minute while it updates.</span>
+              <span className={settings.muted}>
+                {request.supported ? "Or run this on your server, in the Luma folder (usually ~/.local/share/luma/operators/current)." : "Run this on your server, in the Luma folder (usually ~/.local/share/luma/operators/current). Your Center may pause for a minute while it updates."}
+              </span>
             </div>
           </div>
         ) : null}

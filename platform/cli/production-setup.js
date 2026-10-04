@@ -33,7 +33,8 @@ const {
 const { detectPublicIpv4, duckDnsDomain, duckDnsSubdomain, registerDuckDns } = require('./public-network');
 const { secretFromStdin } = require('./terminal');
 const {
-  UPDATES_DIR, configureAutomaticUpdates, ensureUpdatesDirectory, pointCurrentOperator,
+  REQUESTS_DIR, UPDATES_DIR, configureAutomaticUpdates, ensureRequestsDirectory, ensureUpdatesDirectory,
+  pointCurrentOperator,
 } = require('./update');
 const { isUpdateSourceOrigin } = require('../distribution/release-descriptor.mjs');
 
@@ -1131,15 +1132,24 @@ function renderOperatorCompose(profiles, expectedPinRelease = null, extraNetwork
     );
     centerSecrets.push('      - { source: spotify_adapter_token, target: /run/secrets/spotify_adapter_token }');
   }
-  // The update status `./luma update production` writes for Center. The mount
-  // never creates its source, so the directory is made here, before every
-  // deploy that could start Center (a restore onto a fresh host included).
+  // The update status `./luma update production` writes for Center, and the
+  // request directory a Center's Install now button drops its marker into,
+  // which the luma-update-request.path unit turns into an update run. The
+  // mount never creates its source, so the directories are made here, before
+  // every deploy that could start Center (a restore onto a fresh host
+  // included).
   ensureUpdatesDirectory();
+  ensureRequestsDirectory();
   centerEnvironment.push('      LUMA_UPDATE_STATUS_FILE: /luma-updates/status.json');
   centerVolumes.push(`      - type: bind
         source: ${safeYaml(UPDATES_DIR)}
         target: /luma-updates
         read_only: true
+        bind: { create_host_path: false }`);
+  centerEnvironment.push('      LUMA_UPDATE_REQUESTS_DIR: /luma-update-requests');
+  centerVolumes.push(`      - type: bind
+        source: ${safeYaml(REQUESTS_DIR)}
+        target: /luma-update-requests
         bind: { create_host_path: false }`);
   if (centerEnvironment.length || centerVolumes.length || centerSecrets.length) {
     services.push([

@@ -38,7 +38,10 @@ asks it too, and shows the answer to its operator in two places:
 - **Settings → Advanced → Software updates**. It shows the release on your
   server, the newest one available and its notes, the update source, whether
   automatic updates are on, and what the last update did. **Check now** asks
-  again.
+  again, and **Install now** asks the server's update service to install the
+  offered release the way `./luma update production` does — verified,
+  backup first. Servers whose setup carries no request directory name the
+  command to run instead.
 
 With automatic updates on, the server installs a newer release by itself
 between 03:00 and 05:00, server time. If the server was off that night, the

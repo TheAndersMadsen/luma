@@ -144,6 +144,12 @@ export const updateOverviewSchema = z.object({
   autoUpdates: z.enum(["on", "off", "unknown"]),
   check: updateCheckSchema,
   lastUpdate: z.nullable(lastUpdateSchema),
+  request: z.object({
+    /** This Center can hand an update to the operator's update service. */
+    supported: z.boolean(),
+    /** A requested update has not finished yet. */
+    pending: z.boolean(),
+  }),
 });
 export type UpdateOverview = z.infer<typeof updateOverviewSchema>;
 

@@ -1,14 +1,16 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { UpdateOverview } from "@/lib/contracts/updates";
 import { UpdatesPane } from "./UpdatesPane";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
 /*
  * Settings → Advanced → Software updates renders one server-resolved overview.
- * It must read plainly in every state, name the server commands instead of
- * changing anything itself, and work without JavaScript ("Check now" is a
- * form post).
+ * It must read plainly in every state, and either hand the update to the
+ * server's update service with a plain same-origin form post ("Install now")
+ * or name the server command — never change anything itself.
  */
 
 const LATEST = {
@@ -33,6 +35,7 @@ function overview(patch: Partial<UpdateOverview> = {}): UpdateOverview {
     autoUpdates: "off",
     check: { outcome: "update-available", checkedAt: "2026-10-03T02:00:00Z", latest: LATEST },
     lastUpdate: null,
+    request: { supported: false, pending: false },
     ...patch,
   };
 }
@@ -64,6 +67,21 @@ describe("Software updates", () => {
     expect(form).toHaveAttribute("method", "post");
     expect(form).toHaveAttribute("action", "/api/admin/updates/check");
     expect(button).toBeEnabled();
+  });
+
+  it("offers Install now as a plain same-origin form post when this server carries the request directory", () => {
+    render(<UpdatesPane overview={overview({ request: { supported: true, pending: false } })} />);
+    const button = screen.getByTestId("updates-install-button");
+    const form = button.closest("form")!;
+    expect(form).toHaveAttribute("method", "post");
+    expect(form).toHaveAttribute("action", "/api/admin/updates/update-now");
+    expect(button).toBeEnabled();
+  });
+
+  it("says an install requested from here is running until Last update says what happened", () => {
+    render(<UpdatesPane overview={overview({ request: { supported: true, pending: true } })} />);
+    expect(screen.getByTestId("updates-install-pending")).toHaveTextContent("Luma 0.3.18 is installing now.");
+    expect(screen.queryByTestId("updates-install-button")).not.toBeInTheDocument();
   });
 
   it("says the update installs itself when automatic updates are on", () => {
@@ -113,6 +131,7 @@ describe("Software updates", () => {
       autoUpdates: "unknown",
       check: { outcome: "source-unknown" },
       lastUpdate: null,
+      request: { supported: false, pending: false },
     }} />);
     expect(screen.getByTestId("updates-current-version")).toHaveTextContent("Unknown");
     expect(screen.getByTestId("updates-check-sentence")).toHaveTextContent("This server has no update source, so it never checks for updates.");

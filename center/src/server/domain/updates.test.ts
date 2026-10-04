@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { checkForUpdate, readUpdateStatus, resetUpdateCheckCache, updateOverview, updateSettings } from "./updates";
+import { checkForUpdate, readUpdateRequestState, readUpdateStatus, requestUpdateNow, resetUpdateCheckCache, updateOverview, updateSettings } from "./updates";
 
 /*
  * The update check asks one https origin for its `/api/version`, compares
@@ -255,5 +255,31 @@ describe("updateSettings", () => {
     expect(updateSettings({}).autoUpdates).toBe("unknown");
     expect(updateSettings({ LUMA_AUTO_UPDATES: "sometimes" }).autoUpdates).toBe("unknown");
     expect(updateSettings({ LUMA_AUTO_UPDATES: " ON " }).autoUpdates).toBe("on");
+  });
+});
+
+describe("the update request", () => {
+  it("is unsupported without a request directory, and supported and idle with one", async () => {
+    expect(readUpdateRequestState({})).toEqual({ supported: false, pending: false });
+    expect(await requestUpdateNow({})).toBe("unsupported");
+    expect(readUpdateRequestState({ LUMA_UPDATE_REQUESTS_DIR: "/does-not-exist" })).toEqual({
+      supported: true,
+      pending: false,
+    });
+  });
+
+  it("drops one marker, says so the second time, and reports it as pending until it is gone", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "update-request-"));
+    try {
+      const environment = { LUMA_UPDATE_REQUESTS_DIR: dir };
+      expect(await requestUpdateNow(environment)).toBe("requested");
+      expect(await readFile(join(dir, "update-now"), "utf8")).toBe("");
+      expect(await requestUpdateNow(environment)).toBe("already-requested");
+      expect(readUpdateRequestState(environment)).toEqual({ supported: true, pending: true });
+      await rm(join(dir, "update-now"));
+      expect(readUpdateRequestState(environment)).toEqual({ supported: true, pending: false });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

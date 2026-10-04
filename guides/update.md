@@ -27,7 +27,8 @@ it restarts. You do nothing. No GitHub token is needed, because Luma's
 releases are public. (A private fork's server downloads with the token that
 `./luma registry login` saved.)
 
-With automatic updates off, the banner shows the one command to run instead,
+With automatic updates off, the banner shows the release with an **Install
+now** button (on a server set up for it) or the one command to run instead,
 `./luma update production` (see [Update now](#update-now)).
 
 To see where things stand, open **Settings → Advanced → Software updates**.
@@ -74,6 +75,14 @@ releases.
 > it prints as root (`sudo -i`), once.
 
 ## Update now
+
+The Software updates page (**Settings → Advanced → Software updates**) has an
+**Install now** button while a newer release is offered. It asks the server's
+update service for the same verified update the command runs: it downloads
+the release, checks the maintainer's signature, backs up, deploys, and
+verifies, and your Center pauses for a few minutes. The page says the update
+is running and shows the result under **Last update**. (Servers set up before
+the button existed run the command instead.)
 
 Sign in to the server over SSH and run:
 

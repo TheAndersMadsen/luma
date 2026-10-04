@@ -77,9 +77,13 @@ export function describeCheck(check: UpdateCheck): { tone: UpdateTone; sentence:
 }
 
 /** What happens next once an update is available. */
-export function describeNextStep(autoUpdates: "on" | "off" | "unknown"): string {
-  return autoUpdates === "on"
-    ? "It installs itself tonight; your Center may pause for a minute."
+export function describeNextStep(
+  autoUpdates: "on" | "off" | "unknown",
+  request?: { supported: boolean },
+): string {
+  if (autoUpdates === "on") return "It installs itself tonight; your Center may pause for a minute.";
+  return request?.supported
+    ? "Install it here with Install now; your Center may pause for a few minutes."
     : `To install it, run ${UPDATE_COMMAND} on your server.`;
 }
 

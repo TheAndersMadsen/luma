@@ -35,6 +35,7 @@ function overview(patch: Partial<UpdateOverview> = {}): UpdateOverview {
     autoUpdates: "off",
     check: { outcome: "update-available", checkedAt: "2026-10-03T02:00:00Z", latest: LATEST },
     lastUpdate: null,
+    request: { supported: false, pending: false },
     ...patch,
   };
 }

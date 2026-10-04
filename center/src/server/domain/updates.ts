@@ -5,8 +5,11 @@
  * Center asks the Center at `LUMA_UPDATE_SOURCE` for its `/api/version`, the
  * same manifest this Center serves, and compares release versions. The
  * server's `./luma update production --check|--auto` writes a status file
- * Center reads and never writes. Nothing here changes the server: the page
- * names the command the operator runs.
+ * Center reads and never writes. The one thing Center itself changes is the
+ * `update-now` marker in the request directory its operator setup mounts:
+ * a systemd path unit hands it to the update service, which runs the same
+ * verified update the command runs, backup first. Nothing else here touches
+ * the server.
  *
  * One check per hour per process (a failed one is retried after five
  * minutes); "Check now" forces one. The fetch has its own 5 s deadline so a
@@ -14,7 +17,8 @@
  * banner asks `GET /api/admin/updates` from the browser.
  */
 
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 
 import {
   compareReleaseVersions,
@@ -41,6 +45,8 @@ export interface UpdateSettings {
   source: string | null;
   autoUpdates: "on" | "off" | "unknown";
   statusFile: string | null;
+  /** The directory a requested update's marker is dropped into, or `null` when this setup carries none. */
+  requestsDir: string | null;
 }
 
 /** The server-side update settings, read once per call from the environment. */
@@ -50,6 +56,7 @@ export function updateSettings(environment: Environment = process.env): UpdateSe
     source: sourceOrigin(environment.LUMA_UPDATE_SOURCE),
     autoUpdates: auto === "on" || auto === "off" ? auto : "unknown",
     statusFile: environment.LUMA_UPDATE_STATUS_FILE?.trim() || null,
+    requestsDir: environment.LUMA_UPDATE_REQUESTS_DIR?.trim() || null,
   };
 }
 
@@ -172,12 +179,48 @@ export async function readUpdateStatus(environment: Environment = process.env): 
   }
 }
 
+const REQUEST_FILE = "update-now";
+
+/** Whether this Center can request an update, and whether one is on its way. */
+export function readUpdateRequestState(environment: Environment = process.env): {
+  supported: boolean;
+  pending: boolean;
+} {
+  const { requestsDir } = updateSettings(environment);
+  if (!requestsDir) return { supported: false, pending: false };
+  return { supported: true, pending: existsSync(`${requestsDir}/${REQUEST_FILE}`) };
+}
+
+export type UpdateRequestOutcome = "requested" | "already-requested" | "unsupported" | "failed";
+
+/**
+ * Drop the request marker the operator's path unit acts on. The update
+ * service runs the release-verified update itself, backup first, and removes
+ * the marker when it starts or stops; Center never runs the update.
+ */
+export async function requestUpdateNow(environment: Environment = process.env): Promise<UpdateRequestOutcome> {
+  const { requestsDir } = updateSettings(environment);
+  if (!requestsDir) return "unsupported";
+  try {
+    await writeFile(`${requestsDir}/${REQUEST_FILE}`, "", { flag: "wx", mode: 0o644 });
+    return "requested";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "EEXIST") return "already-requested";
+    logWarn("[updates] the update request could not be written", error instanceof Error ? error.name : error);
+    return "failed";
+  }
+}
+
 /** Everything the banner and the Software updates page render. */
 export async function updateOverview(options: CheckOptions = {}): Promise<UpdateOverview> {
   const environment = options.environment ?? process.env;
   const identity = centerRuntimeIdentity(environment);
   const settings = updateSettings(environment);
-  const [check, status] = await Promise.all([checkForUpdate(options), readUpdateStatus(environment)]);
+  const [check, status, request] = await Promise.all([
+    checkForUpdate(options),
+    readUpdateStatus(environment),
+    readUpdateRequestState(environment),
+  ]);
   return {
     current: {
       release: identity.release,
@@ -191,5 +234,6 @@ export async function updateOverview(options: CheckOptions = {}): Promise<Update
     autoUpdates: settings.autoUpdates === "unknown" && status?.autoUpdates ? status.autoUpdates : settings.autoUpdates,
     check,
     lastUpdate: status?.lastUpdate ?? null,
+    request,
   };
 }
