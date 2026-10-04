@@ -70,8 +70,8 @@
 //!     the session or protocol-version headers): refused when saved.
 //! 16. The owner edits a server without retyping a header's value: the stored
 //!     value for that name is kept, so Center never has to show it.
-//! 17. Settings saved before headers existed carry `bearer_token`: folded into
-//!     an `Authorization` header on load and not written again.
+//! 17. Stored settings carry a field this build does not know: read as
+//!     malformed (as in 1), never half-applied.
 //! 18. Settings saved before single tools could be switched off have no
 //!     `disabled_tools`: every tool stays as it was. The field is written only
 //!     once the owner switches a tool off, so a build without it still reads
@@ -170,10 +170,6 @@ pub struct McpServer {
     /// Request headers the server needs, such as `Authorization` or an API
     /// key header. Sent on every request to this server and nowhere else.
     pub headers: Vec<McpHeader>,
-    /// Read from settings saved before headers existed. Folded into `headers`
-    /// on load and never written again.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bearer_token: Option<String>,
     pub enabled: bool,
     /// Offer tools that do not declare `readOnlyHint`. Off by default.
     pub allow_actions: bool,
@@ -476,10 +472,6 @@ impl McpStore {
                 fs::read(path)
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<McpSettings>(&bytes).ok())
-                    .map(|mut settings| {
-                        settings.servers.iter_mut().for_each(fold_legacy_token);
-                        settings
-                    })
                     .filter(|settings| validate(settings).is_ok())
                     .unwrap_or_else(|| {
                         tracing::warn!(
@@ -591,7 +583,6 @@ impl McpStore {
                     name,
                     url: input.url.unwrap_or_default().trim().to_owned(),
                     headers: merged_headers(&[], input.headers.unwrap_or_default())?,
-                    bearer_token: None,
                     enabled: input.enabled.unwrap_or(true),
                     allow_actions: input.allow_actions.unwrap_or(false),
                     allow_when_locked: input.allow_when_locked.unwrap_or(false),
@@ -1470,23 +1461,6 @@ fn merged_headers(
     Ok(merged)
 }
 
-/// Settings saved before headers existed held one bearer token.
-fn fold_legacy_token(server: &mut McpServer) {
-    let Some(token) = server.bearer_token.take().as_deref().and_then(optional) else {
-        return;
-    };
-    if !server
-        .headers
-        .iter()
-        .any(|header| header.name.eq_ignore_ascii_case("authorization"))
-    {
-        server.headers.push(McpHeader {
-            name: "Authorization".to_owned(),
-            value: format!("Bearer {token}"),
-        });
-    }
-}
-
 fn validate_url(value: &str) -> Result<(), McpError> {
     const MESSAGE: &str = "server URL is invalid";
     if value.len() > MAX_URL_BYTES {
@@ -1738,7 +1712,6 @@ mod tests {
             name: name.to_owned(),
             url: "http://127.0.0.1:9/mcp".to_owned(),
             headers: Vec::new(),
-            bearer_token: None,
             enabled,
             allow_actions,
             allow_when_locked: false,
@@ -2005,11 +1978,11 @@ mod tests {
     }
 
     #[test]
-    fn a_token_saved_before_headers_existed_becomes_an_authorization_header() {
-        let directory = state_dir("legacy");
+    fn settings_without_the_newer_switches_load_and_an_unknown_field_is_refused() {
+        let directory = state_dir("older");
         fs::write(
             Path::new(&directory).join(SETTINGS_FILE),
-            br#"{"schema_version":1,"servers":[{"id":"old","name":"Old","url":"http://127.0.0.1:9/mcp","bearer_token":"abc","enabled":true,"allow_actions":false}]}"#,
+            br#"{"schema_version":1,"servers":[{"id":"old","name":"Old","url":"http://127.0.0.1:9/mcp","headers":[{"name":"Authorization","value":"Bearer abc"}],"enabled":true,"allow_actions":false}]}"#,
         )
         .expect("written");
         let store = McpStore::load(Some(&directory));
@@ -2017,14 +1990,25 @@ mod tests {
         assert_eq!(server.headers.len(), 1);
         assert_eq!(server.headers[0].name, "Authorization");
         assert_eq!(server.headers[0].value, "Bearer abc");
-        // Saved before single tools could be switched off: none is.
+        // No list of switched-off tools was saved: none is.
         assert!(server.disabled_tools.is_empty());
-        // The next save writes headers only, and no list of switched-off
-        // tools while there is none, so an earlier build still reads the file.
+        // The next save writes no list while there is none.
         store.set_enabled("old", false).expect("saved");
         let written = fs::read_to_string(Path::new(&directory).join(SETTINGS_FILE)).expect("read");
-        assert!(!written.contains("bearer_token"));
         assert!(!written.contains("disabled_tools"));
+
+        // A field this build does not know is not half-applied: no servers.
+        fs::write(
+            Path::new(&directory).join(SETTINGS_FILE),
+            br#"{"schema_version":1,"servers":[{"id":"old","name":"Old","url":"http://127.0.0.1:9/mcp","made_up":true}]}"#,
+        )
+        .expect("written");
+        assert!(
+            McpStore::load(Some(&directory))
+                .snapshot()
+                .servers
+                .is_empty()
+        );
         let _ = fs::remove_dir_all(directory);
     }
 
