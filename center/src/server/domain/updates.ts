@@ -125,15 +125,18 @@ async function fetchCheck(
     const text = await response.text();
     if (text.length > MAX_MANIFEST_BYTES) return { outcome: "source-unreachable", checkedAt };
     const parsed = versionManifestSchema.safeParse(JSON.parse(text));
-    // A source that names no release version gives nothing to compare.
-    if (!parsed.success || !parsed.data.version) return { outcome: "source-unreachable", checkedAt };
-    const manifest = { ...parsed.data, version: parsed.data.version };
+    // A source that names no release version — in its `latest` advertisement
+    // or its own identity — gives nothing to compare.
+    if (!parsed.success) return { outcome: "source-unreachable", checkedAt };
+    const manifest = parsed.data;
+    const advertised = manifest.latest && manifest.latest.version ? manifest.latest : manifest;
+    if (!advertised.version) return { outcome: "source-unreachable", checkedAt };
     latest = {
-      version: manifest.version,
-      tag: manifest.tag ?? null,
-      pinVersion: manifest.pin?.version ?? null,
-      notes: manifest.notes ?? null,
-      publishedAt: manifest.publishedAt ?? null,
+      version: advertised.version,
+      tag: advertised.tag ?? null,
+      pinVersion: advertised.pin?.version ?? null,
+      notes: advertised.notes ?? null,
+      publishedAt: advertised.publishedAt ?? null,
     };
   } catch (error) {
     logWarn("[updates] the update source did not answer", error instanceof Error ? error.name : error);

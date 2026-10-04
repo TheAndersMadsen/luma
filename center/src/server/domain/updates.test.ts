@@ -89,6 +89,43 @@ describe("checkForUpdate", () => {
     }
   });
 
+  it("compares against the source's latest advertisement before its own running version", async () => {
+    const advertisement = {
+      version: "0.3.20",
+      tag: "v0.3.20",
+      pin: { version: "2026-10-05.1", versionCode: null },
+      notes: "Tool servers for everyone.",
+      publishedAt: "2026-10-05T09:00:00Z",
+    };
+    // The source still runs 0.3.16; what it advertises decides.
+    const available = await checkForUpdate({
+      environment: ENV,
+      fetchImpl: answering(manifest("0.3.16", { latest: advertisement })) as typeof fetch,
+      now,
+    });
+    expect(available).toEqual({
+      outcome: "update-available",
+      checkedAt: "2026-10-03T02:00:00.000Z",
+      latest: {
+        version: "0.3.20",
+        tag: "v0.3.20",
+        pinVersion: "2026-10-05.1",
+        notes: "Tool servers for everyone.",
+        publishedAt: "2026-10-05T09:00:00Z",
+      },
+    });
+
+    // Running exactly the advertised release is up to date even while the
+    // source's identity field still names its older deployment.
+    const current = await checkForUpdate({
+      environment: { ...ENV, LUMA_RELEASE_VERSION: "0.3.20" },
+      fetchImpl: answering(manifest("0.3.16", { latest: advertisement })) as typeof fetch,
+      now,
+      force: true,
+    });
+    expect(current.outcome).toBe("up-to-date");
+  });
+
   it("says source-unknown without fetching when no https source is set", async () => {
     const fetchImpl = answering(manifest("0.3.18"));
     for (const source of [undefined, "", "http://plain.example.test", "not a url", "file:///etc/passwd"]) {

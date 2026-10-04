@@ -28,8 +28,11 @@ shell finds and what to do next, run:
 Your server looks after its own updates. Every hour it asks its **update
 source** which release is newest. The update source is a Luma Center: the one
 whose installer you used, or, for a server installed from the release files,
-the one that release names, unless you chose another. Center asks it too, and
-shows the answer to its operator in two places:
+the one that release names, unless you chose another. A Luma Center answers
+with the newest release published at its releases repository
+(`github.com/TheAndersMadsen/luma` by default), whether or not it runs that
+release yet, so a published release is visible everywhere at once. Center
+asks it too, and shows the answer to its operator in two places:
 
 - A banner at the top of every page when something is new.
 - **Settings → Advanced → Software updates**. It shows the release on your
@@ -193,11 +196,12 @@ development Keycloak once it is healthy.
 #### Run your own update source
 
 Any Luma Center is an update source. Its public `/api/version` names the
-release it runs, with its Pin apps and notes. That is the manifest a server
-following it compares with its own release. The server then downloads that
-release from GitHub. It installs it only when the release comes from the same
-GitHub repository and carries a signature from the same release signing key
-as the release it runs.
+release it runs, with its Pin apps and notes, and the newest release it
+advertises (`LUMA_RELEASES_REPO`, `TheAndersMadsen/luma` by default; `off`
+advertises none). A server following it compares that advertisement with its
+own release. The server then downloads that release from GitHub. It installs
+it only when the release comes from the same GitHub repository and carries a
+signature from the same release signing key as the release it runs.
 
 To point a server at another Center, run this from `operators/current`
 (guided setup asks too):

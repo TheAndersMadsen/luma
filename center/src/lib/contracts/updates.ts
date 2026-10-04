@@ -25,10 +25,26 @@ const trimmedString = (max: number) => z.string().check(z.trim(), z.maxLength(ma
 /** A field an older Center or the server's status file may omit or set to `null`. Readers treat both as unknown. */
 const absent = <T extends z.ZodMiniType>(schema: T) => z.optional(z.nullable(schema));
 
+/** One release a manifest advertises as newest, with the manifest's nested `pin`. */
+const advertisedReleaseSchema = z.object({
+  version: trimmedString(32),
+  tag: absent(trimmedString(64)),
+  pin: absent(
+    z.object({
+      version: trimmedString(32),
+      versionCode: z.nullable(z.number().check(z.int(), z.nonnegative())),
+    }),
+  ),
+  notes: absent(z.string().check(z.maxLength(MAX_RELEASE_NOTES_CHARS))),
+  publishedAt: absent(z.string().check(z.maxLength(64))),
+});
+
 /**
  * What `GET /api/version` serves, and what this Center reads back from its
  * update source. This Center always sends every key (`null` when unset). A
- * source running an older Center may omit the release fields.
+ * source running an older Center may omit the release fields. `latest` names
+ * the release the source advertises as newest — for a Luma Center, the newest
+ * published upstream release, which it serves whether or not it runs it yet.
  */
 export const versionManifestSchema = z.object({
   product: trimmedString(64),
@@ -44,6 +60,7 @@ export const versionManifestSchema = z.object({
   ),
   notes: absent(z.string().check(z.maxLength(MAX_RELEASE_NOTES_CHARS))),
   publishedAt: absent(z.string().check(z.maxLength(64))),
+  latest: absent(advertisedReleaseSchema),
 });
 export type VersionManifest = z.infer<typeof versionManifestSchema>;
 

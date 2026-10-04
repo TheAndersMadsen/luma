@@ -9,8 +9,10 @@ stay the reference. Unfamiliar terms are in the [glossary](glossary.md).
 
 ## Your server updates itself at night
 
-Every hour your server asks its [update source](glossary.md), the Luma Center
-you installed it from, whether a newer Luma release exists. When one does,
+Every hour your server asks its [update source](glossary.md) whether a newer
+Luma release exists. The source is a Luma Center, and it answers with the
+newest release published at `github.com/TheAndersMadsen/luma`, whether or not
+it runs that release yet. When one does,
 you see a banner at the top of Center. Only the owner who runs the server sees
 it.
 

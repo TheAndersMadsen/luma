@@ -1402,6 +1402,12 @@
       "home": "runtime.env"
     },
     {
+      "name": "LUMA_RELEASES_REPO",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
       "name": "LUMA_AUTO_UPDATES",
       "group": "production",
       "sensitivity": "operational",

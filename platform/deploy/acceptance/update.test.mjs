@@ -4,7 +4,9 @@
 // `luma` records every command, and the real status.json Center reads.
 //
 // Ways it could fail, each exercised below: the source is unreachable or says
-// nothing newer. The install runs without consent. No token is saved. The
+// nothing newer. What the source advertises as `latest` and what it runs are
+// different things, and the advertisement decides; a source with no
+// advertisement is read as before. The install runs without consent. No token is saved. The
 // signature is not the key packed in the running operator. A step of the
 // update fails before the configuration moves (nothing to undo) or after it
 // (--auto restores the backup with the release that made it, then deploys and
@@ -298,6 +300,32 @@ test("--check records the newest release for Center and says whether this server
   answer = { version: NEW.version };
   await update.updateProduction({ check: true, auto: false }, runtime().overrides);
   assert.deepEqual(status().latest, { version: NEW.version, tag: null, pinVersion: null, notes: null, publishedAt: null });
+});
+
+test("a Center's latest advertisement decides, even while the source itself runs older", async () => {
+  freshServer();
+  // The source still runs OLD and says so in its identity fields, while it
+  // advertises NEW as the newest published release.
+  answer = {
+    ...releaseAnswer(OLD.version),
+    latest: {
+      version: NEW.version, tag: `v${NEW.version}`, pin: { version: NEW.pin, versionCode: 202609201 },
+      notes: NOTES, publishedAt: PUBLISHED_AT,
+    },
+  };
+  const newer = runtime();
+  const result = await update.updateProduction({ check: true, auto: false }, newer.overrides);
+  assert.equal(result.updated, false);
+  assert.deepEqual(newer.lines, [`Luma ${NEW.version} is available (this server runs ${OLD.version}).`, NOTES]);
+  assert.equal(status().latest.version, NEW.version);
+  assert.deepEqual(log(), [], "a check runs no operator command");
+
+  // A source with no advertisement (an older Center) is read as before.
+  answer = releaseAnswer(OLD.version);
+  await update.updateProduction({ check: true, auto: false }, runtime().overrides);
+  assert.deepEqual(status().latest, {
+    version: OLD.version, tag: `v${OLD.version}`, pinVersion: NEW.pin, notes: NOTES, publishedAt: PUBLISHED_AT,
+  });
 });
 
 test("an unreachable update source is recorded for Center and ends with the standard recovery lines", async () => {

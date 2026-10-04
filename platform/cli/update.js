@@ -388,22 +388,33 @@ function nullableString(value, pattern = null, maximum = 200) {
   return pattern && !pattern.test(value) ? null : value;
 }
 
-// The update source's /api/version answer, with every field it lacks as null.
-function parseLatest(document) {
-  const pin = document?.pin && typeof document.pin === 'object' && !Array.isArray(document.pin)
+// One release as a manifest names it, with every field it lacks as null.
+function parseReleaseObject(release) {
+  const pin = release?.pin && typeof release.pin === 'object' && !Array.isArray(release.pin)
     ? {
-      version: nullableString(document.pin.version, PIN_VERSION),
-      versionCode: Number.isSafeInteger(document.pin.versionCode) && document.pin.versionCode > 0
-        ? document.pin.versionCode : null,
+      version: nullableString(release.pin.version, PIN_VERSION),
+      versionCode: Number.isSafeInteger(release.pin.versionCode) && release.pin.versionCode > 0
+        ? release.pin.versionCode : null,
     }
     : null;
   return {
-    version: nullableString(document?.version, RELEASE_VERSION),
-    tag: nullableString(document?.tag, /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/u),
+    version: nullableString(release?.version, RELEASE_VERSION),
+    tag: nullableString(release?.tag, /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/u),
     pin: pin && (pin.version || pin.versionCode) ? pin : null,
-    notes: nullableString(document?.notes, null, MAX_NOTES),
-    publishedAt: nullableString(document?.publishedAt, /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/u),
+    notes: nullableString(release?.notes, null, MAX_NOTES),
+    publishedAt: nullableString(release?.publishedAt, /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/u),
   };
+}
+
+// The update source's /api/version answer. A Luma Center names what it runs
+// in its identity fields and what it advertises as newest in `latest`, so a
+// published release is visible before the source has deployed it; prefer the
+// advertisement, and read a source that has none as before.
+function parseLatest(document) {
+  const advertised = document?.latest && typeof document.latest === 'object' && !Array.isArray(document.latest)
+    ? parseReleaseObject(document.latest)
+    : null;
+  return advertised?.version ? advertised : parseReleaseObject(document);
 }
 
 async function fetchLatest(source, fetchImpl) {

@@ -1,105 +1,114 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { versionManifestSchema } from "@/lib/contracts/updates";
-import { GET } from "./route";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
- * `GET /api/version` is public and other Centers poll it as their update
- * manifest: it must stay no-store, JSON, bounded, and free of anything the
- * server keeps to itself (its update source, settings, or secrets).
+ * The public version route. It serves this deployment's identity plus the
+ * release it advertises as newest. The ways it can fail, written before the
+ * tests:
+ *
+ * 1. GitHub is unreachable or answers an error: `latest` is null and the
+ *    identity still serves, with the same status and headers.
+ * 2. A failure is cached, so one bad minute cannot turn every page load into
+ *    a GitHub call.
+ * 3. The answer names a tag that is not a release: no latest.
+ * 4. The advertised release carries a Pin archive: its version is advertised
+ *    without a version code, which GitHub does not name.
+ * 5. `LUMA_RELEASES_REPO` is off or not owner/repo: nothing is advertised
+ *    and GitHub is never called.
  */
 
-const RELEASE_ENV = {
-  LUMA_RELEASE_ID: "0123456789abcdef0123456789abcdef01234567",
-  LUMA_ENVIRONMENT: "production",
-  LUMA_RELEASE_VERSION: "0.3.16",
-  LUMA_RELEASE_TAG: "v0.3.16",
-  LUMA_PIN_RELEASE_VERSION: "2026-09-29.2",
-  LUMA_PIN_RELEASE_VERSION_CODE: "2026092902",
-  LUMA_RELEASE_NOTES: "Faster weather.\nCalmer banner.",
-  LUMA_RELEASE_PUBLISHED_AT: "2026-09-29T18:00:00Z",
-} as const;
+import { GET } from "./route";
+import { releasesRepository, resetUpstreamReleaseCache } from "@/server/upstream-releases";
 
-const UNSET = [
-  "LUMA_RELEASE_VERSION",
-  "LUMA_RELEASE_TAG",
-  "LUMA_PIN_RELEASE_VERSION",
-  "LUMA_PIN_RELEASE_VERSION_CODE",
-  "LUMA_RELEASE_NOTES",
-  "LUMA_RELEASE_PUBLISHED_AT",
-] as const;
+const RELEASE = {
+  tag_name: "v0.3.35",
+  published_at: "2026-10-04T12:00:00Z",
+  body: "MCP tool servers.\n",
+  assets: [
+    { name: "luma-operator-0.3.35-linux.tar.gz" },
+    { name: "luma-pin-2026-09-30.3.tar.gz" },
+    { name: "SHA256SUMS" },
+  ],
+};
 
-function stub(values: Record<string, string | undefined>) {
-  for (const [key, value] of Object.entries(values)) vi.stubEnv(key, value);
+function github(answer: unknown, init: ResponseInit = {}) {
+  return vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+    typeof answer === "string" ? new Response(answer, init) : Response.json(answer, init),
+  );
 }
 
+const IDENTITY = {
+  LUMA_RELEASE_ID: "abc123",
+  LUMA_ENVIRONMENT: "production",
+  LUMA_RELEASE_VERSION: "0.3.34",
+  LUMA_RELEASE_TAG: "v0.3.34",
+};
+
+beforeEach(() => {
+  resetUpstreamReleaseCache();
+  for (const name of ["LUMA_RELEASES_REPO", ...Object.keys(IDENTITY)]) delete process.env[name];
+  Object.assign(process.env, IDENTITY);
+});
+
 afterEach(() => {
-  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  for (const name of ["LUMA_RELEASES_REPO", ...Object.keys(IDENTITY)]) delete process.env[name];
 });
 
 describe("GET /api/version", () => {
-  it("serves the release manifest as uncached JSON", async () => {
-    stub(RELEASE_ENV);
+  it("serves the deployment identity and the advertised release", async () => {
+    const fetchImpl = github(RELEASE);
+    vi.stubGlobal("fetch", fetchImpl);
+
     const response = await GET();
-
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("application/json");
     expect(response.headers.get("cache-control")).toBe("no-store");
-    const body = await response.json();
-    expect(body).toEqual({
+    expect(await response.json()).toEqual({
       product: "Luma Center",
-      release: RELEASE_ENV.LUMA_RELEASE_ID,
+      release: "abc123",
       environment: "production",
-      version: "0.3.16",
-      tag: "v0.3.16",
-      pin: { version: "2026-09-29.2", versionCode: 2026092902 },
-      notes: "Faster weather.\nCalmer banner.",
-      publishedAt: "2026-09-29T18:00:00Z",
-    });
-    expect(versionManifestSchema.safeParse(body).success).toBe(true);
-  });
-
-  it("answers null for every release field a deployment did not set", async () => {
-    stub({ LUMA_RELEASE_ID: "abc", LUMA_ENVIRONMENT: "production" });
-    for (const key of UNSET) vi.stubEnv(key, undefined);
-    const body = await (await GET()).json();
-
-    expect(body).toEqual({
-      product: "Luma Center",
-      release: "abc",
-      environment: "production",
-      version: null,
-      tag: null,
+      version: "0.3.34",
+      tag: "v0.3.34",
       pin: null,
       notes: null,
       publishedAt: null,
+      latest: {
+        version: "0.3.35",
+        tag: "v0.3.35",
+        pin: { version: "2026-09-30.3", versionCode: null },
+        notes: "MCP tool servers.",
+        publishedAt: "2026-10-04T12:00:00Z",
+      },
     });
-    expect(versionManifestSchema.safeParse(body).success).toBe(true);
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("https://api.github.com/repos/TheAndersMadsen/luma/releases/latest");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect((init?.headers as Record<string, string>).accept).toBe("application/vnd.github+json");
   });
 
-  it("bounds the notes and drops an unreadable Pin version code", async () => {
-    stub({ ...RELEASE_ENV, LUMA_RELEASE_NOTES: "x".repeat(5000), LUMA_PIN_RELEASE_VERSION_CODE: "soon" });
-    const body = await (await GET()).json();
-
-    expect(body.notes).toHaveLength(2000);
-    expect(body.pin).toEqual({ version: "2026-09-29.2", versionCode: null });
-    expect(versionManifestSchema.safeParse(body).success).toBe(true);
+  it("serves latest: null when GitHub fails, and caches the failure briefly", async () => {
+    const fetchImpl = github("nope", { status: 500 });
+    vi.stubGlobal("fetch", fetchImpl);
+    expect((await (await GET()).json()).latest).toBeNull();
+    expect((await (await GET()).json()).latest).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("never publishes the update source, update settings, or secrets", async () => {
-    stub({
-      ...RELEASE_ENV,
-      LUMA_UPDATE_SOURCE: "https://private-source.example.test",
-      LUMA_AUTO_UPDATES: "on",
-      LUMA_UPDATE_STATUS_FILE: "/var/lib/luma/update-status.json",
-      AUTH_SESSION_SECRET: "session-secret-value",
-    });
-    const text = await (await GET()).text();
+  it("serves latest: null when the answer names no release", async () => {
+    vi.stubGlobal("fetch", github({ tag_name: "v0.3.35-rc1", assets: [] }));
+    expect((await (await GET()).json()).latest).toBeNull();
+  });
 
-    expect(text).not.toContain("private-source.example.test");
-    expect(text).not.toContain("update-status.json");
-    expect(text).not.toContain("session-secret-value");
-    expect(text).not.toMatch(/autoUpdates|source/u);
+  it("advertises nothing when LUMA_RELEASES_REPO is off, and never fetches", async () => {
+    process.env.LUMA_RELEASES_REPO = "off";
+    const fetchImpl = github(RELEASE);
+    vi.stubGlobal("fetch", fetchImpl);
+    expect((await (await GET()).json()).latest).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(releasesRepository({ LUMA_RELEASES_REPO: "off" })).toBeNull();
+    expect(releasesRepository({})).toBe("TheAndersMadsen/luma");
+    expect(releasesRepository({ LUMA_RELEASES_REPO: "" })).toBe("TheAndersMadsen/luma");
+    expect(releasesRepository({ LUMA_RELEASES_REPO: "someone/fork" })).toBe("someone/fork");
+    expect(releasesRepository({ LUMA_RELEASES_REPO: "not a repo" })).toBeNull();
   });
 });

@@ -143,6 +143,9 @@ services:
       LUMA_RELEASE_PUBLISHED_AT: ${LUMA_RELEASE_PUBLISHED_AT:-}
       LUMA_UPDATE_SOURCE: ${LUMA_UPDATE_SOURCE:-}
       LUMA_AUTO_UPDATES: ${LUMA_AUTO_UPDATES:-off}
+      # The GitHub repository whose newest published release this Center
+      # advertises as `latest` in /api/version; off advertises none.
+      LUMA_RELEASES_REPO: ${LUMA_RELEASES_REPO:-}
     volumes: !override
       - center-data:/data
     networks: !override
