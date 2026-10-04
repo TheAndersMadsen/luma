@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import styles from "./shell.module.css";
 import { AccountAvatar, ChevronLeft } from "@/icons";
+import { COMMUNITY_DISCORD_URL } from "@/lib/community";
 
 /**
  * NavMenu, the account menu, bottom-right of every page.
@@ -112,6 +113,14 @@ export function NavMenu() {
             >
               About this Center
             </Link>
+            <a
+              href={COMMUNITY_DISCORD_URL}
+              target="_blank" rel="noopener noreferrer"
+              className={styles.navMenuItem}
+              onClick={() => setOpen(false)}
+            >
+              Community Discord
+            </a>
           </div>
 
           <button

@@ -1,5 +1,6 @@
 import styles from "../settings.module.css";
 
+import { COMMUNITY_DISCORD_URL } from "@/lib/community";
 import { centerRuntimeIdentity } from "@/lib/runtimeIdentity";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +54,19 @@ export default function AboutPage() {
           <div className={styles.descWrapper}>
             <span className={styles.description} data-testid="about-environment">
               {environment}
+            </span>
+          </div>
+        </div>
+        <div className={styles.infoRowRoot}>
+          <span className={styles.titleInfo} data-testid="info-row-title">
+            Community
+          </span>
+          <div className={styles.descWrapper}>
+            <a className={styles.description} href={COMMUNITY_DISCORD_URL} target="_blank" rel="noopener noreferrer" data-testid="about-community">
+              reHumane Discord
+            </a>
+            <span className={styles.muted}>
+              Luma&apos;s official community for help and release news.
             </span>
           </div>
         </div>

@@ -10,13 +10,15 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT license"></a>
     <a href="https://github.com/TheAndersMadsen/luma/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/TheAndersMadsen/luma/ci.yml?branch=main&amp;style=flat-square&amp;label=CI" alt="CI status"></a>
     <img src="https://img.shields.io/badge/Ubuntu%2024.04-amd64%20%7C%20arm64-00ffe0?style=flat-square&amp;logo=ubuntu&amp;logoColor=000" alt="Ubuntu 24.04, amd64 and arm64">
+    <a href="https://discord.gg/ZBVZHqJkpn"><img src="https://img.shields.io/badge/Discord-reHumane-5865F2?style=flat-square&amp;logo=discord&amp;logoColor=fff" alt="reHumane Discord"></a>
   </p>
   <p>
     <a href="#quick-start">Quick start</a> ·
     <a href="#connect-a-pin">Connect a Pin</a> ·
     <a href="docs/README.md">Docs</a> ·
     <a href="docs/faq.md">FAQ</a> ·
-    <a href="#for-developers">Develop</a>
+    <a href="#for-developers">Develop</a> ·
+    <a href="https://discord.gg/ZBVZHqJkpn">Discord</a>
   </p>
 </div>
 
@@ -431,9 +433,16 @@ one attempt per boot. See
 
 Start with [docs/troubleshooting.md](docs/troubleshooting.md), which lists
 common symptoms and their fixes. The [Troubleshooting guide](guides/troubleshooting.md)
-goes through problems step by step. Still stuck? Open an
-[issue](https://github.com/TheAndersMadsen/luma/issues), and attach the file
+goes through problems step by step. Still stuck? Ask in the
+[reHumane Discord](https://discord.gg/ZBVZHqJkpn), or open an
+[issue](https://github.com/TheAndersMadsen/luma/issues) and attach the file
 `./luma support-bundle` writes. It leaves out your secrets.
+
+## Community
+
+The [reHumane Discord](https://discord.gg/ZBVZHqJkpn) is Luma's official
+community: ask for help, share what works on your Pin, and follow new
+releases there.
 
 ## Contributing
 

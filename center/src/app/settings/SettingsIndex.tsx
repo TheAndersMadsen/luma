@@ -6,6 +6,7 @@ import { ChevronLeft, SearchIcon } from "@/icons";
 import styles from "./settings.module.css";
 import { PIN_ADVANCED_GROUP, routeMatchesSearch, settingsGroupsFor, type SettingsGroup } from "./settingsRegistry";
 import { useOperatorEntitlement } from "./useOperatorEntitlement";
+import { COMMUNITY_DISCORD_URL } from "@/lib/community";
 import { useDeviceStatus, usePairedPins } from "@/lib/queries";
 
 function SettingLinks({ group }: { group: SettingsGroup }) {
@@ -56,6 +57,7 @@ function PinOverview() {
           <span>Check your software or get help with a connection or playback issue.</span>
           <Link href="/settings/pin/install">Software & updates <span aria-hidden>→</span></Link>
           <Link href="/settings/pin/diagnostics">Help & diagnostics <span aria-hidden>→</span></Link>
+          <a href={COMMUNITY_DISCORD_URL} target="_blank" rel="noopener noreferrer">Ask the community on Discord <span aria-hidden>→</span></a>
         </>}
       </div>
     </div>
