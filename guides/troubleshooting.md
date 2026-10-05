@@ -806,6 +806,27 @@ never needs a Pin reinstall.
 
 </details>
 
+<details>
+<summary>A video stays on "This video is still uploading from your Pin."</summary>
+
+Cause: the video is larger than the server accepts. Cosmos logs
+`capture upload refused: larger than COSMOS_CAPTURE_MAX_UPLOAD_BYTES`, and the
+Pin keeps its copy and retries. Releases before 0.3.45 allowed only 32 MiB,
+about 8 seconds of Pin video.
+
+Fix: update Luma. If you set a lower limit yourself, raise it (up to
+1073741824) and deploy:
+
+```sh
+docker logs luma-ai-bus-1 2>&1 | grep 'capture upload refused'
+./luma config set COSMOS_CAPTURE_MAX_UPLOAD_BYTES 268435456
+./luma deploy production --confirm
+```
+
+The Pin uploads the waiting video on its next retry.
+
+</details>
+
 ## Updates
 
 <details>

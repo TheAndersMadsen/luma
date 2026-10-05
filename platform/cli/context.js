@@ -622,6 +622,15 @@ function requireValue(values, name, problems, minimum = 1) {
   }
 }
 
+// Unset uses Cosmos's default; a value Cosmos would clamp or ignore is refused
+// here instead (services/capture/objects.rs MIN_/MAX_MAX_UPLOAD_BYTES).
+function requireOptionalByteCount(values, name, problems, minimum, maximum) {
+  const value = values[name] || '';
+  if (value && !(/^[0-9]+$/.test(value) && Number(value) >= minimum && Number(value) <= maximum)) {
+    problems.push(`${name} must be a whole number of bytes from ${minimum} to ${maximum}`);
+  }
+}
+
 function requireProductionPassword(values, source, name, problems) {
   const value = values[name] || '';
   if (!/^[A-Za-z0-9_-]{32,}$/.test(value) ||
@@ -891,6 +900,7 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
     }
   }
 
+  requireOptionalByteCount(values, 'COSMOS_CAPTURE_MAX_UPLOAD_BYTES', problems, 1048576, 1073741824);
   requireValue(values, 'AUTH_SESSION_SECRET', problems, 32);
   requireValue(values, 'COSMOS_SHARE_TOKEN_SECRET', problems, 32);
   requireValue(values, 'COSMOS_EDGE_TOKEN', problems, 32);

@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
@@ -284,16 +283,9 @@ fn build_router_with_uploads_and_keys(
     //
     // PUT only, and no matching GET: this is a sink for wearer photo and video
     // data, so there is no read route and no listing anywhere in this router.
-    // The body limit is the store's own ceiling, applied after the demo layer
-    // so the two do not clamp each other.
+    // The handler streams the body, so the store enforces its own ceiling.
     let router = match uploads {
-        Some(objects) => {
-            let limit = objects.max_upload_bytes();
-            router.route(
-                "/capture/:token",
-                put(capture_upload).layer(DefaultBodyLimit::max(limit)),
-            )
-        }
+        Some(_) => router.route("/capture/:token", put(capture_upload)),
         None => router,
     };
     let app = router.with_state(state);
@@ -345,7 +337,7 @@ async fn capture_upload(
     State(state): State<HttpState>,
     Path(token): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> Result<Response, StatusCode> {
     let Some(objects) = state.uploads else {
         return Err(StatusCode::NOT_FOUND);
@@ -358,14 +350,28 @@ async fn capture_upload(
     };
 
     objects
-        .accept(&token, declared, &body)
+        .accept_stream(&token, declared, body.into_data_stream())
         .await
         .map_err(|rejection| match rejection {
             // One status for unknown, expired, spent, and slot-mismatched, so a
             // caller cannot use the response to probe for live capabilities.
             UploadRejection::Unauthorized => StatusCode::FORBIDDEN,
             UploadRejection::Empty => StatusCode::BAD_REQUEST,
-            UploadRejection::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            UploadRejection::TooLarge => {
+                // The device retries a refused asset indefinitely and the
+                // capture stays pending, so this is the one place an operator
+                // learns the ceiling is too low. Sizes only, never content.
+                let content_length = headers
+                    .get(header::CONTENT_LENGTH)
+                    .and_then(|value| value.to_str().ok()?.parse::<u64>().ok());
+                tracing::warn!(
+                    limit_bytes = objects.max_upload_bytes(),
+                    content_length,
+                    "capture upload refused: larger than COSMOS_CAPTURE_MAX_UPLOAD_BYTES"
+                );
+                StatusCode::PAYLOAD_TOO_LARGE
+            }
+            UploadRejection::Interrupted => StatusCode::BAD_REQUEST,
             UploadRejection::Storage => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
@@ -1002,8 +1008,8 @@ mod tests {
         );
     }
 
-    /// The route caps the body, so an oversized asset is rejected at the edge
-    /// rather than after the volume has already taken it.
+    /// The store caps the streamed body, so an oversized asset is refused and
+    /// its partial bytes are discarded rather than committed.
     #[tokio::test]
     async fn an_oversized_asset_never_reaches_the_volume() {
         use crate::services::capture::CaptureObjectStore;
@@ -1027,6 +1033,14 @@ mod tests {
             !objects.holds("development-insecure-principal", slot).await,
             "a rejected body must not have been written"
         );
+        let mut pending = vec![objects.root().to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).expect("storage root") {
+                let path = entry.expect("entry").path();
+                assert!(path.is_dir(), "{} was left behind", path.display());
+                pending.push(path);
+            }
+        }
     }
 
     /// A deployment that stores nothing has no write surface at all, not a

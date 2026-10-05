@@ -1453,6 +1453,12 @@
       "home": "runtime.env"
     },
     {
+      "name": "COSMOS_CAPTURE_MAX_UPLOAD_BYTES",
+      "group": "production",
+      "sensitivity": "operational",
+      "home": "runtime.env"
+    },
+    {
       "name": "COSMOS_PG_PASSWORD",
       "group": "production",
       "sensitivity": "secret",

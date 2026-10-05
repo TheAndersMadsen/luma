@@ -190,6 +190,9 @@ test("core production validation rejects malformed endpoints, database URLs, and
       ["COSMOS_PG_PASSWORD", "too-short", /at least 32 characters/],
       ["COSMOS_PG_PASSWORD", `${"a".repeat(32)} # compose comment`, /using only letters/],
       ["COSMOS_PG_PASSWORD", "${A_VERY_LONG_INTERPOLATED_DATABASE_PASSWORD}", /using only letters/],
+      ["COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "256MiB", /whole number of bytes/],
+      ["COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "1048575", /whole number of bytes/],
+      ["COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "1073741825", /whole number of bytes/],
     ]) {
       fs.writeFileSync(env.LUMA_ENV_FILE, setValue(valid, name, value));
       const rejected = invoke(env, ["doctor", "production"]);
@@ -209,6 +212,13 @@ test("core production validation rejects malformed endpoints, database URLs, and
       const accepted = validateProduction(env);
       assert.equal(accepted.status, 0, accepted.stderr);
     }
+
+    fs.writeFileSync(
+      env.LUMA_ENV_FILE,
+      setValue(valid, "COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "1073741824"),
+    );
+    const acceptedUploadLimit = validateProduction(env);
+    assert.equal(acceptedUploadLimit.status, 0, acceptedUploadLimit.stderr);
 
     for (const acceptedDatabaseUrl of [
       databaseUrl.replace("@postgres:5432/", "@postgres/"),

@@ -19,9 +19,13 @@ const INCOMING_TTL_ENV: &str = "COSMOS_CAPTURE_INCOMING_TTL_SECS";
 /// forever, see [`Retention`].
 const OBJECT_RETENTION_DAYS_ENV: &str = "COSMOS_CAPTURE_RETENTION_DAYS";
 
-/// A generous ceiling for one encrypted frame or short video, small enough that
-/// an authenticated device cannot fill the volume with one request.
-const DEFAULT_MAX_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
+/// A ceiling for one encrypted frame or video, small enough that an
+/// authenticated device cannot fill the volume with one request. The stock
+/// camera records up to `videoDuration` (15 s) plus one second and budgets
+/// 4,000,000 bytes per second (`Video.BYTES_PER_SECOND`, `Video.mMaxDuration`),
+/// and a real 13 s clip is 51 MB, so 256 MiB keeps headroom for a longer
+/// served `videoDuration` without letting one request fill a small server.
+const DEFAULT_MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 pub(super) const MIN_MAX_UPLOAD_BYTES: usize = 1024 * 1024;
 const MAX_MAX_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
@@ -171,6 +175,8 @@ pub(crate) enum UploadRejection {
     Empty,
     /// The body exceeded the configured ceiling.
     TooLarge,
+    /// The body stopped arriving before it was complete.
+    Interrupted,
     /// The bytes could not be durably written.
     Storage,
 }
@@ -347,6 +353,24 @@ impl CaptureObjectStore {
         declared_slot: Option<&str>,
         body: &[u8],
     ) -> Result<(), UploadRejection> {
+        let chunks = futures_util::stream::iter([Ok::<_, std::convert::Infallible>(body)]);
+        self.accept_stream(token, declared_slot, chunks).await
+    }
+
+    /// [`Self::accept`] for a body that is still arriving. It is written to
+    /// staging as it comes, so a video is never held in memory, and nothing is
+    /// read until the capability has been authorized.
+    pub(crate) async fn accept_stream<S, B, E>(
+        &self,
+        token: &str,
+        declared_slot: Option<&str>,
+        body: S,
+    ) -> Result<(), UploadRejection>
+    where
+        S: futures_util::Stream<Item = Result<B, E>>,
+        B: AsRef<[u8]>,
+        E: std::fmt::Display,
+    {
         // Authorize before saying anything about the body, so an unauthenticated
         // prober cannot learn size limits or emptiness rules from the response.
         let (principal, slot) = self.resolve(token)?;
@@ -356,13 +380,6 @@ impl CaptureObjectStore {
         if declared_slot.is_some_and(|declared| declared != slot) {
             return Err(UploadRejection::Unauthorized);
         }
-        if body.len() > self.max_bytes {
-            return Err(UploadRejection::TooLarge);
-        }
-        if body.is_empty() {
-            return Err(UploadRejection::Empty);
-        }
-
         let path = self
             .object_path(&principal, &slot)
             .ok_or(UploadRejection::Storage)?;
@@ -670,14 +687,17 @@ impl CaptureObjectStore {
     /// at all: staged, fsynced, then renamed into place. A half-written frame
     /// that `holds` reported as present would be acknowledged, and the device
     /// would delete the only good copy.
-    async fn write_object(
+    async fn write_object<S, B, E>(
         &self,
         path: &Path,
         token: &str,
-        body: &[u8],
-    ) -> Result<(), UploadRejection> {
-        use tokio::io::AsyncWriteExt as _;
-
+        body: S,
+    ) -> Result<(), UploadRejection>
+    where
+        S: futures_util::Stream<Item = Result<B, E>>,
+        B: AsRef<[u8]>,
+        E: std::fmt::Display,
+    {
         let parent = path.parent().ok_or(UploadRejection::Storage)?;
         let incoming = self.root.join(INCOMING_DIR);
         for directory in [parent, incoming.as_path()] {
@@ -693,18 +713,9 @@ impl CaptureObjectStore {
         // The token is one we minted (`resolve` succeeded), so it is 43 chars of
         // base64url and safe as a filename.
         let staging = incoming.join(format!("{token}.part"));
-        let staged = async {
-            let mut file = tokio::fs::File::create(&staging).await?;
-            restrict_file(&staging).await;
-            file.write_all(body).await?;
-            file.flush().await?;
-            file.sync_all().await
-        }
-        .await;
-        if let Err(error) = staged {
-            tracing::warn!(%error, "capture asset could not be staged");
+        if let Err(rejection) = self.stage(&staging, body).await {
             let _ = tokio::fs::remove_file(&staging).await;
-            return Err(UploadRejection::Storage);
+            return Err(rejection);
         }
         if let Err(error) = tokio::fs::rename(&staging, path).await {
             tracing::warn!(%error, "capture asset could not be committed");
@@ -712,6 +723,44 @@ impl CaptureObjectStore {
             return Err(UploadRejection::Storage);
         }
         Ok(())
+    }
+
+    /// Write the body to `staging` as it arrives, refusing it as soon as it
+    /// passes the ceiling rather than after it has all been received.
+    async fn stage<S, B, E>(&self, staging: &Path, body: S) -> Result<(), UploadRejection>
+    where
+        S: futures_util::Stream<Item = Result<B, E>>,
+        B: AsRef<[u8]>,
+        E: std::fmt::Display,
+    {
+        use futures_util::StreamExt as _;
+        use tokio::io::AsyncWriteExt as _;
+
+        let not_staged = |error: std::io::Error| {
+            tracing::warn!(%error, "capture asset could not be staged");
+            UploadRejection::Storage
+        };
+        let mut file = tokio::fs::File::create(staging).await.map_err(not_staged)?;
+        restrict_file(staging).await;
+        let mut body = std::pin::pin!(body);
+        let mut received = 0usize;
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(|error| {
+                tracing::warn!(%error, "capture upload ended before its body arrived");
+                UploadRejection::Interrupted
+            })?;
+            let chunk = chunk.as_ref();
+            received = received.saturating_add(chunk.len());
+            if received > self.max_bytes {
+                return Err(UploadRejection::TooLarge);
+            }
+            file.write_all(chunk).await.map_err(not_staged)?;
+        }
+        if received == 0 {
+            return Err(UploadRejection::Empty);
+        }
+        file.flush().await.map_err(not_staged)?;
+        file.sync_all().await.map_err(not_staged)
     }
 
     /// Unlink the stored bytes for `slots`, and prune whatever directories that
