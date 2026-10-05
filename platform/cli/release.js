@@ -44,10 +44,12 @@ const {
 } = require('./context');
 const { parseVersion, versionAtLeast } = require('./toolchain');
 const { dockerCredential } = require('./registry');
+const { ANNOUNCE_USAGE, announceCommand, parseAnnounceArguments } = require('./release-announce');
 
 const USAGE = './luma release publish --version X.Y.Z ' +
   '[--pin-version YYYY-MM-DD.N --pin-version-code INTEGER] [--notes FILE|-] [--confirm]\n' +
-  '       ./luma release keygen';
+  '       ./luma release keygen\n' +
+  `       ${ANNOUNCE_USAGE}`;
 const RELEASE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/u;
 const PIN_VERSION = /^\d{4}-\d{2}-\d{2}\.\d+$/u;
 const REVISION = /^[0-9a-f]{40}$/u;
@@ -985,7 +987,8 @@ async function publishRelease(options, runtime) {
   }
   runtime.print(`To put it on GitHub: git push origin ${release.tag}, then gh release create ${release.tag} ` +
     `--verify-tag --draft --title "Luma ${release.version}"${notes !== null ? ` --notes-file ${paths.notes}` : ''} ` +
-    `${paths.operator}/* (README "Publish a release")`);
+    `${paths.operator}/*, publish it with gh release edit ${release.tag} --draft=false, and announce it with ` +
+    `./luma release announce --version ${release.version} --confirm (README "Publish a release")`);
   return Object.freeze({ directory: paths.operator, artifacts });
 }
 
@@ -1108,6 +1111,8 @@ function releaseCommand(args, runtime = null) {
       if (args.length) throw new Error('release keygen takes no options');
     } else if (operation === 'publish') {
       options = parsePublishArguments(args);
+    } else if (operation === 'announce') {
+      options = parseAnnounceArguments(args);
     } else {
       throw new Error(`unknown release command: ${operation ?? '(none)'}`);
     }
@@ -1115,9 +1120,11 @@ function releaseCommand(args, runtime = null) {
     fail(`${error.message}\nusage: ${USAGE}`, 64);
   }
   return Promise.resolve()
-    .then(() => (operation === 'keygen'
-      ? generateSigningKey(runtime || defaultRuntime())
-      : publishRelease(options, runtime || defaultRuntime())))
+    .then(() => {
+      if (operation === 'keygen') return generateSigningKey(runtime || defaultRuntime());
+      if (operation === 'announce') return announceCommand(options, ...(runtime ? [runtime] : []));
+      return publishRelease(options, runtime || defaultRuntime());
+    })
     .catch((error) => fail(error.message));
 }
 

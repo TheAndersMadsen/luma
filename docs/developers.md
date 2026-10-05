@@ -140,6 +140,7 @@ These are the ones you will use most:
 | `./luma pin ...` | Build, check, and install the Pin apps ([Build the Pin apps](#build-the-pin-apps)). `pin install` and `pin activate` act on one exact Pin and only show a plan until you add `--confirm` |
 | `./luma stock decompile` | Build the stock reference ([Stock reference](#stock-reference)) |
 | `./luma release publish` | Publish a release ([Publish a release](#publish-a-release)) |
+| `./luma release announce` | Post a published release's patch notes to Discord ([Publish a release](#publish-a-release)) |
 | `./luma support-bundle` | Write a redacted diagnostic file to attach to a report |
 
 `./luma COMMAND --help` describes each command and its options. It also says
@@ -413,6 +414,21 @@ archive, the Pin archive, the release descriptor, `SHA256SUMS`, and
 `SHA256SUMS.sigstore.json`. If that person has no cosign, also send the
 `sha256sum SHA256SUMS` line that the confirmed run prints. Send it separately,
 in a message, not next to the files.
+
+Once the release is published on GitHub, announce it in Discord. The command
+posts one embed to a channel webhook. The embed holds the release notes, the
+commits since the previous tag as links, and how to update:
+
+```sh
+./luma release announce --set-webhook    # once: paste the channel's webhook URL
+./luma release announce --version 1.2.3            # prints the message only
+./luma release announce --version 1.2.3 --confirm  # posts it
+```
+
+The webhook URL is saved in `~/.config/luma/secrets/release/discord-webhook`
+with mode 0600, and the command never prints it. The command refuses a
+release that GitHub still has as a draft. A receipt in the publication
+directory makes sure each release is posted only once.
 
 There is no CI publication path. CI only runs the checks, and the release
 signing key never leaves the maintainer's machine. Every release is built and

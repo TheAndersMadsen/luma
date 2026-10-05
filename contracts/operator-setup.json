@@ -646,6 +646,21 @@
       "documentationAnchor": "README.md#publish-a-release"
     },
     {
+      "id": "release.announce",
+      "tokens": [
+        "release",
+        "announce"
+      ],
+      "aliases": [],
+      "lifecycle": "current",
+      "effect": "remote-mutation",
+      "confirmationRequired": true,
+      "exactSerialRequired": false,
+      "summary": "Post a published release's patch notes to the maintainer's Discord updates channel.",
+      "usage": "luma release announce --version X.Y.Z [--confirm] | --set-webhook",
+      "documentationAnchor": "README.md#publish-a-release"
+    },
+    {
       "id": "setup.local",
       "tokens": [
         "setup",
