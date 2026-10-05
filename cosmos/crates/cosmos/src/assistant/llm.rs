@@ -1563,6 +1563,76 @@ impl OpenAiChatModel {
     }
 }
 
+/// The names the provider sees for Cosmos's own tools, where they differ from
+/// the catalog's.
+///
+/// An agent gateway that answers chat completions keeps its own tool names for
+/// itself. OpenClaw refuses the whole request (HTTP 400, "invalid tool
+/// configuration") when a client tool shares a name with one of the agent's
+/// tools, and `web_search` is one of them: every turn failed, from the Pin and
+/// from Center alike. The tool keeps its name everywhere inside Cosmos, in the
+/// trace and in the evaluator. Only the provider sees the prefixed one.
+const WIRE_TOOL_NAMES: &[(&str, &str)] = &[("web_search", "luma_web_search")];
+
+/// The name the provider sees for the catalog tool `name`.
+fn wire_tool_name(name: &str) -> &str {
+    WIRE_TOOL_NAMES
+        .iter()
+        .find(|(catalog, _)| *catalog == name)
+        .map_or(name, |(_, wire)| wire)
+}
+
+/// The catalog tool the provider called as `name`.
+fn catalog_tool_name(name: String) -> String {
+    WIRE_TOOL_NAMES
+        .iter()
+        .find(|(_, wire)| *wire == name)
+        .map_or(name, |(catalog, _)| (*catalog).to_owned())
+}
+
+/// `text` with every mention of a renamed tool given its wire name, so a
+/// description that points the model at another tool names the one on offer.
+fn wire_tool_text(text: &str) -> std::borrow::Cow<'_, str> {
+    let in_a_name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut text = std::borrow::Cow::Borrowed(text);
+    for (catalog, wire) in WIRE_TOOL_NAMES {
+        let bytes = text.as_bytes();
+        let mut renamed = String::new();
+        let mut copied = 0;
+        for (at, _) in text.match_indices(catalog) {
+            let end = at + catalog.len();
+            // Part of a longer identifier is a different name.
+            if (at > 0 && in_a_name(bytes[at - 1])) || bytes.get(end).is_some_and(|b| in_a_name(*b))
+            {
+                continue;
+            }
+            renamed.push_str(&text[copied..at]);
+            renamed.push_str(wire);
+            copied = end;
+        }
+        if copied > 0 {
+            renamed.push_str(&text[copied..]);
+            text = std::borrow::Cow::Owned(renamed);
+        }
+    }
+    text
+}
+
+/// The provider's view of `tools`.
+fn wire_tools(tools: &[ToolDef]) -> Vec<WireTool<'_>> {
+    tools
+        .iter()
+        .map(|t| WireTool {
+            r#type: "function",
+            function: WireFn {
+                name: wire_tool_name(&t.name),
+                description: wire_tool_text(&t.description),
+                parameters: &t.parameters,
+            },
+        })
+        .collect()
+}
+
 // --- wire types for the OpenAI chat-completions API ---
 #[derive(Serialize)]
 struct ChatReq<'a> {
@@ -1641,7 +1711,7 @@ pub(super) fn wire_messages(messages: &[ChatMessage]) -> Vec<WireMsg> {
                     id: id.clone(),
                     r#type: "function",
                     function: WireCall {
-                        name: call.name,
+                        name: wire_tool_name(&call.name).to_owned(),
                         arguments: call.arguments,
                     },
                 }],
@@ -1724,7 +1794,7 @@ struct WireTool<'a> {
 #[derive(Serialize)]
 struct WireFn<'a> {
     name: &'a str,
-    description: &'a str,
+    description: std::borrow::Cow<'a, str>,
     parameters: &'a serde_json::Value,
 }
 #[derive(Deserialize)]
@@ -1809,21 +1879,10 @@ impl ChatModel for OpenAiChatModel {
         tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
         let msgs = wire_messages(messages);
-        let wire_tools = tools
-            .iter()
-            .map(|t| WireTool {
-                r#type: "function",
-                function: WireFn {
-                    name: &t.name,
-                    description: &t.description,
-                    parameters: &t.parameters,
-                },
-            })
-            .collect();
         let body = ChatReq {
             model: &self.model,
             messages: msgs,
-            tools: wire_tools,
+            tools: wire_tools(tools),
             tool_choice: explicit_playback_requires_tool(messages, tools).then_some("required"),
             max_tokens: self.max_tokens,
             reasoning: self
@@ -1865,7 +1924,7 @@ impl ChatModel for OpenAiChatModel {
             .ok_or_else(|| self.failed("llm_malformed", LlmError::Malformed))?
             .message;
         let mut calls = msg.tool_calls.into_iter().map(|tc| ToolCall {
-            name: tc.function.name,
+            name: catalog_tool_name(tc.function.name),
             // Never let a non-object reach the device. See `normalize_arguments`.
             arguments: normalize_arguments(&tc.function.arguments),
         });
@@ -1880,6 +1939,80 @@ impl ChatModel for OpenAiChatModel {
                 extra_tool_calls: calls.collect(),
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod wire_tool_name_tests {
+    use super::{
+        ChatMessage, ToolDef, catalog_tool_name, wire_messages, wire_tool_name, wire_tool_text,
+        wire_tools,
+    };
+
+    fn tool(name: &str, description: &str) -> ToolDef {
+        ToolDef {
+            name: name.to_owned(),
+            description: description.to_owned(),
+            parameters: serde_json::json!({ "type": "object", "properties": {} }),
+        }
+    }
+
+    #[test]
+    fn web_search_is_prefixed_for_the_provider_and_restored_from_its_call() {
+        assert_eq!(wire_tool_name("web_search"), "luma_web_search");
+        assert_eq!(
+            catalog_tool_name("luma_web_search".to_owned()),
+            "web_search"
+        );
+        for untouched in ["ask_online", "SetTimer", "mcp_bookmarks_search_bookmarks"] {
+            assert_eq!(wire_tool_name(untouched), untouched);
+            assert_eq!(catalog_tool_name(untouched.to_owned()), untouched);
+        }
+    }
+
+    #[test]
+    fn offered_tools_carry_the_wire_name_and_descriptions_point_at_it() {
+        let tools = [
+            tool("web_search", "Search raw web results."),
+            tool("ask_online", "Do not precede it with web_search."),
+        ];
+        let wire = serde_json::to_value(wire_tools(&tools)).unwrap();
+        assert_eq!(wire[0]["function"]["name"], "luma_web_search");
+        assert_eq!(
+            wire[0]["function"]["description"],
+            "Search raw web results."
+        );
+        assert_eq!(wire[1]["function"]["name"], "ask_online");
+        assert_eq!(
+            wire[1]["function"]["description"],
+            "Do not precede it with luma_web_search."
+        );
+    }
+
+    #[test]
+    fn only_a_whole_tool_name_is_rewritten_in_text() {
+        assert_eq!(
+            wire_tool_text("use web_search or ask_online, then web_search."),
+            "use luma_web_search or ask_online, then luma_web_search."
+        );
+        for untouched in ["luma_web_search", "web_search_service", "a web search", ""] {
+            assert_eq!(wire_tool_text(untouched), untouched);
+        }
+    }
+
+    #[test]
+    fn a_replayed_call_goes_back_under_the_name_the_provider_was_offered() {
+        let wire = serde_json::to_value(wire_messages(&[ChatMessage::tool_result(
+            "web_search",
+            r#"{"query":"news"}"#,
+            "headlines",
+        )]))
+        .unwrap();
+        assert_eq!(
+            wire[0]["tool_calls"][0]["function"]["name"],
+            "luma_web_search"
+        );
+        assert_eq!(wire[1]["role"], "tool");
     }
 }
 

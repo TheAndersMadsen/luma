@@ -136,7 +136,9 @@ turn, the JSON contains:
 - Luma system instructions and the wearer's current request;
 - bounded prior context, relevant wearer memory, and authenticated device
   context, with untrusted data kept in explicit envelopes;
-- OpenAI-style function tools with JSON Schema parameters;
+- OpenAI-style function tools with JSON Schema parameters. Web search is
+  offered as `luma_web_search`, because an agent gateway can refuse a request
+  that carries a tool named like one of its own, such as `web_search`;
 - assistant tool-call messages and tool-result messages;
 - low-detail image URL parts for camera requests and photo understanding.
 
