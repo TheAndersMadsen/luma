@@ -183,16 +183,33 @@ function planRealmReconcile({
   // account console must protect those pages without locking Center out,
   // whose clients cannot answer a code, so the direct grant flow validates
   // the password and nothing else. Keycloak's own sign-in keeps offering the
-  // code, because the browser flow is untouched. Keycloak changes an
-  // execution's requirement through the flow: one PUT on the flow's
-  // executions carries the execution's id, its current priority, and the new
-  // requirement.
-  const otp = directGrantExecutions.find((execution) => execution.providerId === 'direct-grant-validate-otp');
-  if (otp && directGrantAlias && otp.requirement !== 'DISABLED' && typeof otp.priority === 'number') {
+  // code, because the browser flow is untouched. The code step sits in the
+  // conditional subflow "Direct Grant - Conditional OTP", so the subflow is
+  // what gets disabled: disabling only its OTP step leaves "Condition - user
+  // configured" with nothing to check, the condition then matches every
+  // account, and Keycloak 26 fails the empty subflow with an uncaught
+  // AuthenticationFlowException (HTTP 500) on every password grant, the
+  // state 0.3.40 to 0.3.42 left behind, so a disabled OTP step is restored.
+  // Keycloak changes an execution's requirement through the flow: one PUT on
+  // the flow's executions carries the execution's id, its current priority,
+  // and the new requirement.
+  const otpAt = directGrantExecutions.findIndex((execution) => execution.providerId === 'direct-grant-validate-otp');
+  const otp = directGrantExecutions[otpAt];
+  const subflow = directGrantExecutions.slice(0, Math.max(otpAt, 0)).findLast((execution) =>
+    execution.authenticationFlow === true && execution.level === (otp?.level ?? 0) - 1);
+  const executionsPath = `authentication/flows/${encodeURIComponent(directGrantAlias)}/executions`;
+  if (subflow && directGrantAlias && subflow.requirement !== 'DISABLED' && typeof subflow.priority === 'number') {
     changes.push({
       summary: 'let an account with a second factor sign in to Center (the direct grant no longer asks for a code, which its form has no field for)',
-      args: ['update', `authentication/flows/${encodeURIComponent(directGrantAlias)}/executions`, '-r', REALM, '-f', '-'],
-      body: { id: otp.id, requirement: 'DISABLED', priority: otp.priority },
+      args: ['update', executionsPath, '-r', REALM, '-f', '-'],
+      body: { id: subflow.id, requirement: 'DISABLED', priority: subflow.priority },
+    });
+  }
+  if (subflow && directGrantAlias && otp.requirement === 'DISABLED' && typeof otp.priority === 'number') {
+    changes.push({
+      summary: 'restored the direct grant\'s code step inside its now-disabled subflow (disabling the step alone failed every Center sign-in)',
+      args: ['update', executionsPath, '-r', REALM, '-f', '-'],
+      body: { id: otp.id, requirement: 'REQUIRED', priority: otp.priority },
     });
   }
 

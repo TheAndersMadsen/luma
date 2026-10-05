@@ -742,6 +742,22 @@ Keycloak's account console restores sign-in.
 </details>
 
 <details>
+<summary>Center says "this server's Keycloak did not answer" on 0.3.40 to 0.3.42, though Keycloak's own pages accept your password</summary>
+
+Cause: those releases disabled only the code step inside Keycloak's direct
+grant subflow. Its condition then matched every account and Keycloak failed
+each password grant with HTTP 500 (`AuthenticationFlowException` in the
+Keycloak log), with or without an authenticator, so adding or removing one
+does not help. Luma 0.3.43 disables the whole subflow instead and restores
+the step inside it.
+
+Fix: update the server (the **Install now** button on the Software updates
+page, or `./luma update production`), which reconciles the realm on deploy.
+Update from the server itself: Center cannot sign you in until it has.
+
+</details>
+
+<details>
 <summary>Sign-in says it is unavailable, or asks you to wait</summary>
 
 Cause: "Unavailable" means Keycloak did not answer. "Wait" means too many

@@ -88,13 +88,16 @@ function earlierRealmState() {
     scopes,
     profile,
     defaultRoleHolders: [],
-    // Keycloak's default direct grant: it demands a code from any account
-    // that carries an authenticator, which Center's form has no field for.
+    // Keycloak 26's default direct grant, as its admin API lists it: it
+    // demands a code from any account that carries an authenticator, which
+    // Center's form has no field for.
     flows: [{ id: "flow-direct", alias: "direct grant", topLevel: true }],
     executions: [
-      { id: "exec-username", priority: 0, providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
-      { id: "exec-password", priority: 1, providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
-      { id: "exec-otp", priority: 2, providerId: "direct-grant-validate-otp", requirement: "CONDITIONAL" },
+      { id: "exec-username", level: 0, priority: 10, providerId: "direct-grant-validate-username", requirement: "REQUIRED" },
+      { id: "exec-password", level: 0, priority: 20, providerId: "direct-grant-validate-password", requirement: "REQUIRED" },
+      { id: "exec-otp-flow", level: 0, priority: 30, authenticationFlow: true, displayName: "Direct Grant - Conditional OTP", requirement: "CONDITIONAL" },
+      { id: "exec-condition", level: 1, priority: 10, providerId: "conditional-user-configured", requirement: "REQUIRED" },
+      { id: "exec-otp", level: 1, priority: 20, providerId: "direct-grant-validate-otp", requirement: "REQUIRED" },
     ],
   };
 }
@@ -138,7 +141,7 @@ function fakeKeycloak(state = earlierRealmState()) {
       if (verb === "update" && executions) {
         assert.equal(decodeURIComponent(executions[1]), "direct grant", "the execution is edited inside its flow");
         const found = state.executions.find((candidate) => candidate.id === body.id);
-        assert.equal(found.providerId, "direct-grant-validate-otp", "only the direct grant's code step is edited");
+        assert.ok(["exec-otp-flow", "exec-otp"].includes(found.id), "only the direct grant's code subflow and step are edited");
         assert.equal(body.priority, found.priority, "the priority travels with the change");
         found.requirement = body.requirement;
         return null;
@@ -220,9 +223,14 @@ test("an earlier realm is brought onto Luma's policy once, and a second deploy c
   assert.equal(keycloak.state.realm.permanentLockout, false, "a lockout must never be permanent");
   assert.equal(keycloak.state.realm.resetPasswordAllowed, false);
   assert.equal(
-    keycloak.state.executions.find((execution) => execution.providerId === "direct-grant-validate-otp").requirement,
+    keycloak.state.executions.find((execution) => execution.id === "exec-otp-flow").requirement,
     "DISABLED",
     "an authenticator on the account must not lock Center out",
+  );
+  assert.equal(
+    keycloak.state.executions.find((execution) => execution.id === "exec-otp").requirement,
+    "REQUIRED",
+    "the code step inside the subflow stays as Keycloak made it",
   );
   assert.equal(
     keycloak.state.executions.find((execution) => execution.providerId === "direct-grant-validate-password").requirement,
@@ -514,4 +522,25 @@ test("a confirmed deploy reconciles the running realm before verification", (t) 
   });
   assert.equal(preview.status, 0, preview.stderr);
   assert.match(preview.stdout, /^bun --no-env-file \S+\/platform\/cli\/realm\.js reconcile --project-name owner-stack$/mu);
+});
+
+test("the direct grant 0.3.40 to 0.3.42 left, which failed every password grant, is repaired", () => {
+  const state = earlierRealmState();
+  // Disabling only the code step left "Condition - user configured" with
+  // nothing to check, so it matched every account and Keycloak 26 failed the
+  // empty subflow with HTTP 500.
+  state.executions.find((execution) => execution.id === "exec-otp").requirement = "DISABLED";
+  const keycloak = fakeKeycloak(state);
+  const changed = reconcileRealm(keycloak, { clientId: "center" });
+  assert.ok(changed.includes(
+    "let an account with a second factor sign in to Center (the direct grant no longer asks for a code, which its form has no field for)",
+  ));
+  assert.ok(changed.includes(
+    "restored the direct grant's code step inside its now-disabled subflow (disabling the step alone failed every Center sign-in)",
+  ));
+  const edits = keycloak.calls.filter((call) => call.args[0] === "update" && /executions$/u.test(call.args[1]));
+  assert.deepEqual(edits.map((call) => call.body.id), ["exec-otp-flow", "exec-otp"], "the subflow is disabled before its step is restored");
+  assert.equal(state.executions.find((execution) => execution.id === "exec-otp-flow").requirement, "DISABLED");
+  assert.equal(state.executions.find((execution) => execution.id === "exec-otp").requirement, "REQUIRED");
+  assert.deepEqual(reconcileRealm(keycloak, { clientId: "center" }), []);
 });
