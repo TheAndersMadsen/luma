@@ -277,7 +277,9 @@ A Pin that is already online goes straight to step 3.
 A Pin that already runs an older Luma shows **Update to VERSION** instead.
 
 A Pin with only some of Luma's apps, or a broken Luma installer, shows
-**Your Pin needs a repair** and a **Repair** button. Its confirmation is
+**Your Pin needs a repair** and a **Repair** button. So does a Pin whose
+Device Installer is too old to update safely, such as one from an early
+PenumbraOS release. Its confirmation is
 titled **Recover this Pin?**, with the note **Recovery erases Luma's app
 data** and the button **Start recovery**. Center removes what is left of
 Luma and installs it again.

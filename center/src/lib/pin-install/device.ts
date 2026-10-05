@@ -58,12 +58,14 @@ export type {
 export {
   assertPackageManagerReady,
   bootstrapInstaller,
+  probeInstallerTransactionSupport,
   stageSystemApkBatchInstall,
   stageSystemApkInstall,
   waitForPackageManagerReady,
 } from "@/lib/pin-device/adb";
 export type {
   BootstrapInstallerAssets,
+  InstallerTransactionSupport,
   StageSystemApkInstallResult,
   SystemInstallerProgressEvent,
 } from "@/lib/pin-device/adb";

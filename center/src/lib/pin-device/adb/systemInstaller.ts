@@ -1151,37 +1151,50 @@ async function requireProviderOk(
   }
 }
 
+export type InstallerTransactionSupport = "supported" | "unsupported" | "unknown";
+
+/**
+ * observed: cancellation is idempotent, and an invalid activation package is
+ * rejected before policy state is touched. Together these are a no-op probe.
+ * The current Device Installer answers the zero token with OK and the invalid
+ * package with its exact refusal (StagingProvider.handleCancelInstall and
+ * handleActivateUpdates), so a provider that answers either one any other way
+ * predates the transaction API. A call that fails or gets no `Result:` answer
+ * proves nothing about the installer and is "unknown".
+ */
+export async function probeInstallerTransactionSupport(
+  transport: AdbSessionTransport,
+): Promise<InstallerTransactionSupport> {
+  const call = async (method: "cancel_install" | "activate_updates", arg: string) => {
+    const result = await transport.shell(
+      shellCommand(["content", "call", "--uri", STAGING_URI, "--method", method, "--arg", arg]),
+    );
+    const output = result.stdout.trim();
+    return result.exitCode === 0 && output.startsWith("Result:") ? output : null;
+  };
+
+  const cancelProbe = await call("cancel_install", "0".repeat(32));
+  if (cancelProbe === null) return "unknown";
+  if (parseProviderInstallResponse(cancelProbe).kind !== "ok") return "unsupported";
+
+  const activationProbe = await call("activate_updates", "invalid");
+  if (activationProbe === null) return "unknown";
+  return extractExactProviderMessage(activationProbe) ===
+    "Invalid activation package: invalid"
+    ? "supported"
+    : "unsupported";
+}
+
 async function requireSafeProviderCapabilities(
   transport: AdbSessionTransport,
-  onProgress?: (event: SystemInstallerProgressEvent) => void,
 ): Promise<void> {
-  // observed: cancellation is idempotent, and an invalid activation package is
-  // rejected before policy state is touched. Together these are a no-op probe.
-  const probeToken = "0".repeat(32);
-  await requireProviderOk(
-    await callStagingProvider(
-      transport,
-      "cancel_install",
-      probeToken,
-      "Could not probe safe installer transaction support.",
-      onProgress,
-    ),
-    "safe transaction capability probe",
-  );
-
-  const activationProbe = await callStagingProvider(
-    transport,
-    "activate_updates",
-    "invalid",
-    "Could not probe update activation support.",
-    onProgress,
-  );
-  if (
-    extractExactProviderMessage(activationProbe) !==
-    "Invalid activation package: invalid"
-  ) {
+  const support = await probeInstallerTransactionSupport(transport);
+  if (support === "unknown") {
+    throw new Error("Could not probe safe installer transaction support.");
+  }
+  if (support === "unsupported") {
     throw new Error(
-      "Installed Device Installer does not prove safe update activation support.",
+      "The Device Installer on this Pin predates safe updates. Inspect the Pin again and run Repair.",
     );
   }
 }
@@ -1250,7 +1263,7 @@ export async function stageSystemApkBatchInstall(
     message: `Confirming the Device Installer is ready for ${apks.length} app${apks.length === 1 ? "" : "s"}.`,
   });
   await waitForStagingProviderReady(transport);
-  await requireSafeProviderCapabilities(transport, options.onProgress);
+  await requireSafeProviderCapabilities(transport);
 
   const packageNames = apks.every((item) => item.packageName)
     ? apks.map((item) => item.packageName!)

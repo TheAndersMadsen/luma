@@ -17,10 +17,12 @@ import {
   getInstalledPackageMetadata,
   inspectPackageQueryability,
   listInstalledPackages,
+  probeInstallerTransactionSupport,
   waitForPackageManagerReady,
   type AdbSessionTransport,
   type DeviceIdentity,
   type DeviceReadinessResult,
+  type InstallerTransactionSupport,
   type InstalledPackageMetadata,
 } from "../device";
 import { classifyInstalledVersion } from "./versions";
@@ -83,6 +85,7 @@ function createPackageSnapshot(
   metadata: InstalledPackageMetadata | null,
   targetVersion: string | null,
   readiness: DeviceReadinessResult,
+  transactionSupport: InstallerTransactionSupport = "unknown",
 ): ManagedPackageVersionSnapshot {
   const readinessEntry = readiness.packageResults.find((entry) => entry.packageName === packageName);
   const installed = metadata !== null;
@@ -102,7 +105,12 @@ function createPackageSnapshot(
     role,
     packageName,
     installed,
-    healthy: installed && (readinessEntry?.queryable ?? false),
+    // A Device Installer that answers the safe-transaction probe outside its
+    // contract cannot update anything, however queryable it is.
+    healthy:
+      installed &&
+      (readinessEntry?.queryable ?? false) &&
+      transactionSupport !== "unsupported",
     versionName: metadata?.versionName ?? null,
     signerIdentity: metadata?.signerIdentity ?? null,
     versionReadable,
@@ -185,6 +193,15 @@ export async function inspectInstallStateAfterPackageManagerReady(
     getDetectedConflictPackageIds(detectedConflicts),
   );
 
+  const installerQueryable =
+    installerMetadata !== null &&
+    readiness.packageResults.some(
+      (entry) => entry.packageName === MANAGED_PACKAGES.installer && entry.queryable,
+    );
+  const installerTransactionSupport = installerQueryable
+    ? await probeInstallerTransactionSupport(deviceTransport)
+    : "unknown";
+
   const packages: Record<ManagedPackageRole, ManagedPackageVersionSnapshot> = {
     installer: createPackageSnapshot(
       "installer",
@@ -192,6 +209,7 @@ export async function inspectInstallStateAfterPackageManagerReady(
       installerMetadata,
       getTargetVersion(target),
       readiness,
+      installerTransactionSupport,
     ),
     hook: createPackageSnapshot(
       "hook",

@@ -46,7 +46,14 @@ import test from "node:test";
 // The fake Pin every `inspectInstallState` case below runs against. It is
 // shared with verify/pin-install-shared-ops.test.mjs so both suites agree on
 // what a healthy device answers. See the module header for how it works.
-import { OK, deviceShell, fakeDevice, packageDump } from "./fixtures/fake-pin-device.mjs";
+import {
+  INSTALLER_ACTIVATION_PROBE,
+  INSTALLER_CANCEL_PROBE,
+  OK,
+  deviceShell,
+  fakeDevice,
+  packageDump,
+} from "./fixtures/fake-pin-device.mjs";
 
 const FAILED = (stderr) => ({ stdout: "", stderr, exitCode: 20 });
 
@@ -336,6 +343,85 @@ test("inspectInstallState derives Repair when the bootstrap helper is unexpected
 
   assert.equal(result.helperPresentUnexpectedly, true);
   assert.equal(result.actionState.action, "Repair");
+});
+
+/*
+ * A Device Installer built before the safe-transaction API (a 2026-05-29.1
+ * build on a PenumbraOS-era Pin) is queryable, so it used to look healthy, and
+ * the routine update kept it, only for the install to stop at the capability
+ * probe. When the provider answers the probe with anything but its contract,
+ * the installer cannot update anything, so it is unhealthy and the Pin takes
+ * the confirmed recovery that replaces it. A provider that does not answer at
+ * all proves nothing, and must never push the Pin toward that recovery.
+ */
+function preTransactionInstallerPin(overrides = {}) {
+  return deviceShell({
+    "dumpsys package com.penumbraos.systeminjector": packageDump(
+      "com.penumbraos.systeminjector",
+      "2026-03-29.1",
+    ),
+    "dumpsys package com.penumbraos.hook": packageDump("com.penumbraos.hook", "2026-04-15.0"),
+    "dumpsys package com.penumbraos.server": packageDump("com.penumbraos.server", "2026-04-15.0"),
+    "dumpsys package com.penumbraos.hook.injector": packageDump(
+      "com.penumbraos.hook.injector",
+      "2026-04-15.0",
+    ),
+    [INSTALLER_CANCEL_PROBE]: OK("Result: Bundle[{message=Unknown method: cancel_install}]\n"),
+    ...overrides,
+  });
+}
+
+test("inspectInstallState recovers a Device Installer that predates safe transactions", async () => {
+  const target = createResolvedInstallTargetFixture();
+  const result = await inspectInstallState(fakeDevice(preTransactionInstallerPin()), {
+    target,
+    readinessSettleDelayMs: 0,
+  });
+
+  assert.equal(result.packages.installer.installed, true);
+  assert.equal(result.packages.installer.healthy, false);
+  assert.equal(result.actionState.action, "Repair");
+
+  const decision = decideInstallMigration({ target, inspection: result });
+  assert.equal(decision.kind, "bootstrap-recovery");
+  assert.equal(decision.reason, "The installer is present but unhealthy.");
+  assert.deepEqual(decision.rolesToInstall, IN_PLACE_ROLES);
+});
+
+test("inspectInstallState recovers an installer that knows cancellation but not activation", async () => {
+  const result = await inspectInstallState(
+    fakeDevice(
+      preTransactionInstallerPin({
+        [INSTALLER_CANCEL_PROBE]: OK("Result: Bundle[{message=OK}]\n"),
+        [INSTALLER_ACTIVATION_PROBE]: OK(
+          "Result: Bundle[{message=Unknown method: activate_updates}]\n",
+        ),
+      }),
+    ),
+    { target: createResolvedInstallTargetFixture(), readinessSettleDelayMs: 0 },
+  );
+
+  assert.equal(result.packages.installer.healthy, false);
+  assert.equal(result.actionState.action, "Repair");
+});
+
+test("inspectInstallState keeps an installer whose provider did not answer the probe", async () => {
+  const target = createResolvedInstallTargetFixture();
+  const result = await inspectInstallState(
+    fakeDevice(
+      preTransactionInstallerPin({
+        [INSTALLER_CANCEL_PROBE]: FAILED("Error while accessing provider"),
+      }),
+    ),
+    { target, readinessSettleDelayMs: 0 },
+  );
+
+  assert.equal(result.packages.installer.healthy, true);
+  assert.equal(result.actionState.action, "Update");
+  assert.equal(
+    decideInstallMigration({ target, inspection: result }).kind,
+    "routine-in-place",
+  );
 });
 
 /*

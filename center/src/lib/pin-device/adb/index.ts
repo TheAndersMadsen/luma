@@ -131,6 +131,7 @@ export {
   POLL_INTERVAL_MS,
   POLL_TIMEOUT_MS,
   pollForPackage,
+  probeInstallerTransactionSupport,
   SOFT_REBOOT_STABILIZATION_MS,
   STAGING_AUTHORITY,
   STAGING_URI,
@@ -146,6 +147,7 @@ export {
 } from "./systemInstaller";
 export type {
   BootstrapInstallerAssets,
+  InstallerTransactionSupport,
   StageSystemApkBatchInstallItem,
   StageSystemApkBatchInstallOptions,
   StageSystemApkInstallOptions,

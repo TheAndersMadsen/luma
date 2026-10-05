@@ -102,6 +102,14 @@ export function packageDump(packageName, version, signer = DEVICE_SIGNER_IDENTIT
   );
 }
 
+const STAGING_CALL = "content call --uri content://com.penumbraos.systeminjector.staging";
+
+/** The Device Installer's no-op capability probe, as the device runs it. */
+export const INSTALLER_CANCEL_PROBE =
+  `${STAGING_CALL} --method cancel_install --arg ${"0".repeat(32)}`;
+export const INSTALLER_ACTIVATION_PROBE =
+  `${STAGING_CALL} --method activate_updates --arg invalid`;
+
 /** A healthy Pin containing exactly the fixture target's version of everything. */
 export function deviceShell(overrides = {}) {
   const dump = (version, packageName) => packageDump(packageName, version);
@@ -141,6 +149,10 @@ export function deviceShell(overrides = {}) {
     "dumpsys package com.penumbraos.hook.injector": dump(
       "2026-04-29.1",
       "com.penumbraos.hook.injector",
+    ),
+    [INSTALLER_CANCEL_PROBE]: OK("Result: Bundle[{message=OK}]\n"),
+    [INSTALLER_ACTIVATION_PROBE]: OK(
+      "Result: Bundle[{message=Invalid activation package: invalid}]\n",
     ),
     ...overrides,
   };
