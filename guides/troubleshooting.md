@@ -1152,24 +1152,34 @@ connection there replaced — and connects it to this one.
 <summary>Guided setup says <b>The Pin didn’t finish its own setup within 30 seconds.</b></summary>
 
 Cause: the Pin's own setup did not finish. The passcode you entered differs
-from the one in Center, or the Pin lost its network.
+from the one in Center, the Pin lost its network, or the Pin's setup screen
+is not running at all, so nothing on the Pin takes the passcode.
 
-Fix: look at the Pin's Laser Ink display for its setup message. Check that
-the four digits match **Settings → Passcode & password**, keep the Pin
-connected and online, and choose the step again.
+Fix: look at the Pin's Laser Ink display. If it shows a setup message, check
+that the four digits match **Settings → Passcode & password**, keep the Pin
+connected and online, and choose the step again. If it shows no setup screen,
+the Pin has not received this server's credential yet: follow the next entry.
 
 </details>
 
 <details>
-<summary>Stage 7 fails with certificate errors while stages 5 and 6 are green</summary>
+<summary>The Pin is connected but every request fails, and the edge log shows <code>CERTIFICATE_VERIFY_FAILED</code></summary>
 
-Cause: the Pin finished Humane's original setup before it ever reached this
-server, so this server never issued its credential, and the stock setup
-ceremony cannot run on such a Pin unaided. Provisioning names the same cause:
-"This Pin finished its original setup before this server could issue its
-credential."
+Symptoms: the Pin answers "having trouble communicating with the server",
+Guided setup stage 6 times out or stage 7 fails with certificate errors, and
+Provisioning still says **Connected to Cosmos**. The edge log shows TLS
+failures for `api.cosmos.humane.cloud` with `CERTIFICATE_VERIFY_FAILED` while
+Cosmos logs nothing.
 
-Fix: open **Provisioning** and choose **Run its original setup**. Center
+Cause: the Pin still presents the DeviceUser certificate Humane issued it.
+This server never issued its own, because only the Pin's original setup
+ceremony asks for one, and that ceremony does not run again on its own once a
+Pin has finished Humane's setup. Provisioning names the same cause: "This
+server hasn't issued this Pin its credential yet." (**DeviceUser CA ready** on
+that page means the server can issue one, not that the Pin has it.)
+
+Fix: open **Provisioning**, connect over USB, choose **Connect this Pin to
+Cosmos**, and then **Run its original setup** when it appears. Center
 re-arms the Pin's original setup ceremony, reconnects it, and opens its setup
 screen on the Pin. Follow the prompts on the Pin, and finish Guided setup
 stage 6 with the same four digits when Center asks for them. The Pin keeps the

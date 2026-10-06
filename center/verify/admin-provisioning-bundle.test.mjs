@@ -629,7 +629,7 @@ test("a Pin that finished its original setup but never reported to this server s
   assert.ok(failure instanceof EnrollmentIncompleteError);
   assert.equal(
     failure.message,
-    "This Pin finished its original setup before this server could issue its credential. Run this Pin's original setup to connect it.",
+    "This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.",
   );
   assert.equal(failure.status.state, "inactive");
   assert.deepEqual(calls, ["status:preflight", "duc-flag", "reported"]);
@@ -683,6 +683,136 @@ test("a provisioned Pin that has reported to this server keeps its silent fast p
   ]);
 });
 
+test("an active Pin whose own setup never finished here is offered its original setup", async () => {
+  // The Pin is active with this server, but its stock setup flag is not "1"
+  // and it has never reported: the ceremony that issues this server's
+  // DeviceUser credential has not run, and nothing on the plain path starts it.
+  for (const flag of ["0", "null"]) {
+    const calls = [];
+    const failure = await provisionConnectedPin(
+      activeSession(calls, flag),
+      {
+        async updateSettings() { throw new Error("no remote settings before re-enrollment"); },
+        async getIrohTicket() { throw new Error("no ticket before re-enrollment"); },
+      },
+      {
+        hasDeviceReported: async () => {
+          calls.push("reported");
+          return false;
+        },
+        async pairDevice() { throw new Error("no pairing before re-enrollment"); },
+        async issueBundle() { throw new Error("no key before re-enrollment"); },
+        async getBridgeStatus() { throw new Error("no bridge before re-enrollment"); },
+        async pairBridge() { throw new Error("no bridge before re-enrollment"); },
+      },
+      "203.0.113.42",
+      "https://center.example/device-status/v1/report",
+    ).catch((error) => error);
+
+    assert.ok(failure instanceof EnrollmentIncompleteError, `flag ${flag}`);
+    assert.equal(
+      failure.message,
+      "This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.",
+    );
+    assert.deepEqual(calls, ["status:active", "duc-flag", "reported"]);
+  }
+});
+
+test("an inactive Pin that has not finished its own setup activates normally", async () => {
+  // A new Pin mid-onboarding: its stock setup runs on its own after activation.
+  const calls = [];
+  const session = {
+    async shell(command) {
+      if (command.includes("ro.boot.deviceid")) return { stdout: "00aa11bb\n", stderr: "", exitCode: 0 };
+      if (command.includes("sys.user.0.ce_available")) return { stdout: "1\n", stderr: "", exitCode: 0 };
+      if (command.includes("ACTIVATION_STATUS")) {
+        return {
+          stdout: "Result: Bundle[{ok=true, state=inactive, consistent=true, managed=false, remote_gate_enabled=false, target_matches=false, present=false, identity_usable=false}]\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (command.includes("humane.settings.global.DUC_PROVISIONED")) return { stdout: "0\n", stderr: "", exitCode: 0 };
+      throw new Error(`unexpected command ${command.join(" ")}`);
+    },
+  };
+  const failure = await provisionConnectedPin(
+    session,
+    {
+      async updateSettings() { throw new Error("unreached"); },
+      async getIrohTicket() { throw new Error("unreached"); },
+    },
+    {
+      hasDeviceReported: async () => {
+        calls.push("reported");
+        return false;
+      },
+      async pairDevice(id) {
+        calls.push(`pair:${id}`);
+        throw new Error("stop after pairing");
+      },
+      async issueBundle() { throw new Error("unreached"); },
+      async getBridgeStatus() { throw new Error("unreached"); },
+      async pairBridge() { throw new Error("unreached"); },
+    },
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(!(failure instanceof EnrollmentIncompleteError));
+  assert.deepEqual(calls, ["pair:00aa11bb"]);
+});
+
+test("an active Pin with an unfinished setup flag that has reported here keeps its fast path", async () => {
+  const calls = [];
+  const failure = await provisionConnectedPin(
+    activeSession(calls, "0"),
+    {
+      async updateSettings() { throw new Error("unreached"); },
+      async getIrohTicket() { throw new Error("unreached"); },
+    },
+    {
+      hasDeviceReported: async () => {
+        calls.push("reported");
+        throw new Error("device status unavailable");
+      },
+      async pairDevice(id) {
+        calls.push(`pair:${id}`);
+        throw new Error("stop after pairing");
+      },
+      async issueBundle() { throw new Error("unreached"); },
+      async getBridgeStatus() { throw new Error("unreached"); },
+      async pairBridge() { throw new Error("unreached"); },
+    },
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(!(failure instanceof EnrollmentIncompleteError));
+  assert.deepEqual(calls, ["status:active", "duc-flag", "reported", "pair:00aa11bb"]);
+});
+
+test("re-enrollment of an active Pin whose flag is already 0 activates without re-offering itself", async () => {
+  const calls = [];
+  const session = reenrollSession(calls, { initialFlag: "0" });
+  const status = await reenrollConnectedPin(
+    session,
+    {
+      async updateSettings() { calls.push("iroh-settings"); return { server: {} }; },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    reenrollOperations(calls),
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  );
+  assert.equal(status.state, "active");
+  assert.ok(calls.includes("activate"));
+  assert.equal(calls.at(-1), "am-start");
+});
+
 /**
  * A re-enrollment target: active (so it must be deactivated first), with the
  * stock `DUC_PROVISIONED` flag armed until the re-arm writes it back. The
@@ -690,13 +820,13 @@ test("a provisioned Pin that has reported to this server keeps its silent fast p
  * step that asks: 1 the re-enrollment preflight, 2 the delegated provisioning
  * preflight after deactivation and re-arm, 3 the post-activation verification.
  */
-function reenrollSession(calls, { rollbackComplete = true, readback = null, amStartExitCode = 0 } = {}) {
+function reenrollSession(calls, { rollbackComplete = true, readback = null, amStartExitCode = 0, initialFlag = "1" } = {}) {
   // The SHA-256 of the DER behind the "AQID" certificate the operations below
   // issue: the post-activation verification compares it against the envelope.
   const fingerprint = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
   const verified = `Result: Bundle[{ok=true, state=active, consistent=true, managed=true, remote_gate_enabled=true, target_matches=true, present=true, identity_usable=true, edge_ipv4=203.0.113.42, fingerprint_sha256=${fingerprint}, root_certificate_sha256=${fingerprint}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud, device_status_endpoint=https://center.example/device-status/v1/report}]\n`;
   let phase = 1;
-  let flagArmed = true;
+  let flagArmed = initialFlag === "1";
   return {
     async shell(command) {
       if (command.includes("ro.boot.deviceid")) {

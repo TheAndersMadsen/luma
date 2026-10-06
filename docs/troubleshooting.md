@@ -618,10 +618,12 @@ and try the step again.
 </details>
 
 <details>
-<summary>Stage 7 fails with certificate errors while stages 5–6 are green</summary>
+<summary>Stage 6 times out with no setup screen, or the edge refuses the Pin with <code>CERTIFICATE_VERIFY_FAILED</code></summary>
 
-The Pin finished Humane's original setup, so this server never issued its
-credential. In **Provisioning**, choose **Run its original setup**, follow the
+The Pin finished Humane's original setup, so it still presents Humane's
+DeviceUser certificate and this server never issued its own. In
+**Provisioning**, choose **Connect this Pin to Cosmos**, then **Run its
+original setup** when it appears, follow the
 prompts on the Pin's own setup screen, and finish Guided setup stage 6 with
 the same four digits. The Pin keeps its current passcode.
 

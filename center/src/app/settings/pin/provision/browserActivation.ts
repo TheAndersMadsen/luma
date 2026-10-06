@@ -284,19 +284,23 @@ export class ActiveIdentityMismatchError extends Error {
 }
 
 /**
- * The Pin finished Humane's original setup (`DUC_PROVISIONED=1`) but has never
- * reported device-status to this server, so this server never issued its
- * DeviceUser credential: that credential is issued only by the stock ceremony,
+ * The Pin has never reported device-status to this server, so this server never
+ * issued its DeviceUser credential: that credential is issued only by the stock
+ * ceremony, and nothing on the plain activation path starts it. Two states
+ * reach here. The Pin finished Humane's original setup (`DUC_PROVISIONED=1`),
  * and `OnboardingCoordinator.disableOnboarding` plus the flag itself mean the
- * ceremony cannot run again on its own. A normal activation would publish the
- * attestation handoff unconsumed and leave the Pin failing at every call.
+ * ceremony cannot run again on its own; a normal activation would publish the
+ * attestation handoff unconsumed. Or the Pin is already active here with the
+ * flag unset or "0" while its onboarding screen is not running, so it keeps
+ * presenting the DeviceUser certificate Humane issued, which the edge refuses,
+ * and Guided setup's passcode handoff has no `PincodeNode` to consume it.
  */
 export class EnrollmentIncompleteError extends Error {
   readonly status: ActivationStatus;
 
   constructor(status: ActivationStatus) {
     super(
-      "This Pin finished its original setup before this server could issue its credential. Run this Pin's original setup to connect it.",
+      "This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.",
     );
     this.name = "EnrollmentIncompleteError";
     this.status = status;
@@ -519,10 +523,12 @@ export async function provisionConnectedPin(
 ): Promise<ActivationStatus> {
   const preflight = await preflightConnectedPinActivation(session);
   const { deviceId } = preflight;
-  // flag=1 + never-reported ⇒ this server never issued the credential and the
-  // stock ceremony cannot run unaided. A thrown or unreadable answer is
-  // fail-safe true: a working Pin keeps its silent fast path.
-  if (preflight.ducProvisioned) {
+  // (flag=1, or already active here) + never-reported ⇒ this server never
+  // issued the credential and the stock ceremony cannot run unaided. An
+  // inactive Pin whose flag is unset is new: its own setup runs after this
+  // activation. A thrown or unreadable answer is fail-safe true: a working Pin
+  // keeps its silent fast path.
+  if (preflight.ducProvisioned || preflight.status.state === "active") {
     let reported: boolean;
     try {
       reported = await operations.hasDeviceReported();

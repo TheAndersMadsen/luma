@@ -88,9 +88,26 @@ function mismatchStatus(): ActivationStatus {
   };
 }
 
-function renderView() {
+function reported(serial: string) {
+  return {
+    device_id: "pin-1",
+    serial_number: serial,
+    firmware_version: "2.1",
+    os_version: "1.4",
+    battery_percent: 72,
+    battery_charging: false,
+    reported_at_epoch: 1_000,
+    wifi_networks: [],
+  };
+}
+
+function renderView(deviceStatus: unknown = { devices: [], state: "live" }) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) =>
-    url === "/api/admin/overview" ? Response.json(OVERVIEW) : Response.json({ set: true }),
+    url === "/api/admin/overview"
+      ? Response.json(OVERVIEW)
+      : url === "/api/devices/status"
+        ? Response.json(deviceStatus)
+        : Response.json({ set: true }),
   ));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -192,7 +209,7 @@ describe("ProvisioningView", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Connect this Pin to Cosmos" }));
     expect(
       await screen.findByText(
-        "This Pin finished its original setup before this server could issue its credential. Run this Pin's original setup to connect it.",
+        "This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.",
       ),
     ).toBeInTheDocument();
     let finishReenroll!: (value: unknown) => void;
@@ -203,6 +220,23 @@ describe("ProvisioningView", () => {
     await screen.findByText("Remote access is ready");
     expect(state.reenroll).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Run its original setup" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a live list without this Pin", { devices: [], state: "live" }, false],
+    ["a live list with this Pin", { devices: [reported("1H4MPA42230112")], state: "live" }, true],
+    ["a degraded list", { devices: [], state: "degraded" }, true],
+    ["an absent list", { devices: [], state: "absent" }, true],
+  ])("reads device status fresh on a cold page: %s", async (_name, deviceStatus, expected) => {
+    state.pin = usbPin();
+    let reportedHere: boolean | undefined;
+    state.provision.mockImplementationOnce(async (_session, _client, operations) => {
+      reportedHere = await operations.hasDeviceReported();
+      return { state: "active" };
+    });
+    renderView(deviceStatus);
+    await userEvent.click(await screen.findByRole("button", { name: "Connect this Pin to Cosmos" }));
+    await waitFor(() => expect(reportedHere).toBe(expected));
   });
 
   it("warns when the setup screen did not open after a completed re-enrollment", async () => {

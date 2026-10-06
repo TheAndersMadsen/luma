@@ -396,17 +396,19 @@ export function useBackendHealth() {
  */
 
 /** Settings → Devices, the settings index and Pin setup. */
+export async function fetchDeviceStatus() {
+  const response = await fetch("/api/devices/status", {
+    cache: "no-store",
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) throw new Error(`/api/devices/status → ${response.status}`);
+  return parseDeviceStatusResponse(await response.json());
+}
+
 export function useDeviceStatus({ retry = true }: { retry?: boolean } = {}) {
   return useQuery({
     queryKey: ["device-status"],
-    queryFn: async () => {
-      const response = await fetch("/api/devices/status", {
-        cache: "no-store",
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (!response.ok) throw new Error(`/api/devices/status → ${response.status}`);
-      return parseDeviceStatusResponse(await response.json());
-    },
+    queryFn: fetchDeviceStatus,
     retry,
     staleTime: 10_000,
     refetchInterval: 30_000,

@@ -9,7 +9,7 @@ import { GuidedSetupReturn } from "@/components/GuidedSetupReturn";
 import { StatusChip, StatusMessage } from "@/components/Status";
 import type { AdbSessionTransport } from "@/lib/pin-device/adb/transport";
 import type { PinClient } from "@/lib/pin-device/client";
-import type { DeviceStatusResponse } from "@/lib/contracts/deviceStatus";
+import { fetchDeviceStatus } from "@/lib/queries";
 import { usePinDevice } from "../PinDeviceProvider";
 import { deviceErrorMessage } from "../_lib/deviceErrorPresentation";
 import settings from "../../settings.module.css";
@@ -189,17 +189,23 @@ function ProvisioningContent() {
   function provisioningOperations() {
     return {
       ...centerRemoteAccess,
-      // The same ["device-status"] cache Guided setup reads for
-      // cloud.connectedPinReporting. The question is "has this Pin ever
-      // reported", not "is it fresh": a completed enrollment leaves a report
-      // behind even after the Pin goes offline. Nothing cached, or no serial
-      // to match against: fail-safe true, so a working Pin keeps its silent
-      // fast path.
+      // The same ["device-status"] query Guided setup reads for
+      // cloud.connectedPinReporting, read fresh here so the answer does not
+      // depend on which page the owner opened first. The question is "has
+      // this Pin ever reported", not "is it fresh": a completed enrollment
+      // leaves a report behind even after the Pin goes offline. Only a "live"
+      // list can say no; a degraded or absent list, or no serial to match
+      // against, is fail-safe true, so a working Pin keeps its silent fast path.
       hasDeviceReported: async () => {
         const serial = pin.connectionInfo?.serial?.trim().toLowerCase() ?? null;
-        const cached = queryClient.getQueryData<DeviceStatusResponse>(["device-status"]);
-        if (!cached || serial === null) return true;
-        return cached.devices.some((device) => device.serial_number.trim().toLowerCase() === serial);
+        if (serial === null) return true;
+        const status = await queryClient.fetchQuery({
+          queryKey: ["device-status"],
+          queryFn: fetchDeviceStatus,
+          staleTime: 0,
+        });
+        if (status.state !== "live") return true;
+        return status.devices.some((device) => device.serial_number.trim().toLowerCase() === serial);
       },
       async pairDevice(id: string) {
         const response = await fetch("/api/devices/pair", {
@@ -545,11 +551,11 @@ function ProvisioningContent() {
         <div className={styles.statusRow}>
           <StatusChip
             tone={enrollment.provisioning_configured ? "live" : "degraded"}
-            label={enrollment.provisioning_configured ? "Attestation ready" : "Attestation CA missing"}
+            label={enrollment.provisioning_configured ? "Attestation CA ready" : "Attestation CA missing"}
           />
           <StatusChip
             tone={enrollment.duc_ca_configured ? "live" : "degraded"}
-            label={enrollment.duc_ca_configured ? "DeviceUser ready" : "DeviceUser CA missing"}
+            label={enrollment.duc_ca_configured ? "DeviceUser CA ready" : "DeviceUser CA missing"}
           />
         </div>
       </details>
