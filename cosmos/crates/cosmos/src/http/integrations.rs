@@ -24,6 +24,23 @@ struct AssistantIntegrationView {
     fast_mode: bool,
     max_tokens: u32,
     codex: crate::assistant::codex_app_server::CodexAccountStatus,
+    /// The saved profile whose settings are in use, if any.
+    profile: Option<String>,
+    profiles: Vec<AssistantProfileView>,
+}
+
+/// A saved assistant profile as Center lists it: its settings, and whether
+/// it holds a key, never the key.
+#[derive(Serialize)]
+struct AssistantProfileView {
+    name: String,
+    provider: crate::integrations::AssistantProvider,
+    base_url: String,
+    api_key_configured: bool,
+    model: String,
+    reasoning_effort: Option<String>,
+    fast_mode: bool,
+    max_tokens: u32,
 }
 
 #[derive(Serialize)]
@@ -339,6 +356,22 @@ pub(super) async fn integrations_view(
             config.assistant.configured() && codex.connected
         }
     };
+    let profile = config.assistant.active_profile().map(str::to_owned);
+    let profiles = config
+        .assistant
+        .profiles
+        .iter()
+        .map(|profile| AssistantProfileView {
+            name: profile.name.clone(),
+            provider: profile.provider,
+            base_url: profile.base_url.clone(),
+            api_key_configured: profile.api_key.is_some(),
+            model: profile.model.clone(),
+            reasoning_effort: profile.reasoning_effort.clone(),
+            fast_mode: profile.fast_mode,
+            max_tokens: profile.max_tokens,
+        })
+        .collect();
     IntegrationsView {
         assistant: AssistantIntegrationView {
             provider: config.assistant.provider,
@@ -350,6 +383,8 @@ pub(super) async fn integrations_view(
             fast_mode: config.assistant.fast_mode,
             max_tokens: config.assistant.max_tokens,
             codex,
+            profile,
+            profiles,
         },
         search: SearchIntegrationView {
             configured: config.search.searxng_base_url.is_some()

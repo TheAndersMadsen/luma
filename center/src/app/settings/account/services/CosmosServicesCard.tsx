@@ -33,6 +33,18 @@ type Os3Status =
 
 type AssistantProvider = "openai-compatible" | "codex-subscription";
 
+/** A saved assistant profile: its settings and whether it holds a key, never the key. */
+type AssistantProfileView = {
+  name: string;
+  provider: AssistantProvider;
+  base_url: string;
+  api_key_configured: boolean;
+  model: string;
+  reasoning_effort: string | null;
+  fast_mode: boolean;
+  max_tokens: number;
+};
+
 type IntegrationsView = {
   assistant: {
     provider: AssistantProvider;
@@ -49,6 +61,9 @@ type IntegrationsView = {
       plan: string | null;
       email: string | null;
     };
+    /** The saved profile whose settings are in use, if any. */
+    profile: string | null;
+    profiles: AssistantProfileView[];
   };
   search: {
     configured: boolean;
@@ -85,6 +100,12 @@ type IntegrationsView = {
 };
 
 type IntegrationDraft = {
+  /** The saved profile the assistant fields belong to; null is unsaved settings or a new profile. */
+  profileSource: string | null;
+  /** The name the assistant fields are saved under. Empty saves them without a name. */
+  profileName: string;
+  /** A profile being created: a blank form that inherits no key and is saved only once named. */
+  newProfile: boolean;
   provider: AssistantProvider;
   baseUrl: string;
   model: string;
@@ -186,6 +207,11 @@ const SERVICES: readonly ServiceState[] = [
 
 const REQUIRED_SERVICES = SERVICES.filter((service) => !service.optional);
 
+/** The switcher's value while a profile is being created; no saved profile can have it. */
+const NEW_PROFILE = "\u0000new";
+/** Cosmos keeps at most this many saved profiles. */
+const MAX_PROFILES = 16;
+
 const EMPTY_SECRETS: SecretDraft = {
   assistantApiKey: null,
   serpapiKey: null,
@@ -280,6 +306,9 @@ function formatWhen(ms: number): string {
 
 function draftFrom(view: IntegrationsView): IntegrationDraft {
   return {
+    profileSource: view.assistant.profile,
+    profileName: view.assistant.profile ?? "",
+    newProfile: false,
     provider: view.assistant.provider,
     baseUrl: view.assistant.base_url,
     model: view.assistant.model,
@@ -291,6 +320,39 @@ function draftFrom(view: IntegrationsView): IntegrationDraft {
     azureRegion: view.speech.azure_region ?? "",
     azureVoice: view.speech.azure_voice,
     os3Enabled: view.os3.enabled,
+  };
+}
+
+/** The draft with the assistant fields of the settings in use; the other sections keep their edits. */
+function draftForActiveProfile(draft: IntegrationDraft, view: IntegrationsView): IntegrationDraft {
+  const source = view.assistant;
+  return {
+    ...draft,
+    profileSource: source.profile,
+    profileName: source.profile ?? "",
+    newProfile: false,
+    provider: source.provider,
+    baseUrl: source.base_url,
+    model: source.model,
+    reasoningEffort: source.reasoning_effort ?? "",
+    fastMode: source.fast_mode,
+    maxTokens: String(source.max_tokens),
+  };
+}
+
+/** The draft with a blank assistant form for a profile that does not exist yet. */
+function draftForNewProfile(draft: IntegrationDraft): IntegrationDraft {
+  return {
+    ...draft,
+    profileSource: null,
+    profileName: "",
+    newProfile: true,
+    provider: "openai-compatible",
+    baseUrl: "",
+    model: "openai/gpt-5.6-luna",
+    reasoningEffort: "",
+    fastMode: false,
+    maxTokens: "512",
   };
 }
 
@@ -500,16 +562,26 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
 
   function updatePayload() {
     if (!draft) return;
+    const profileName = draft.profileName.trim();
+    // A new profile is an incomplete draft until it has a name: saving another
+    // section must not put its blank form into use.
+    const assistant = draft.newProfile && profileName === "" ? undefined : {
+      // The saved profile supplies its key; the fields below are what the owner sees.
+      ...(draft.profileSource === null ? {} : { load_profile: draft.profileSource }),
+      provider: draft.provider,
+      base_url: draft.baseUrl,
+      model: draft.model,
+      reasoning_effort: draft.reasoningEffort,
+      fast_mode: draft.fastMode,
+      max_tokens: Number(draft.maxTokens),
+      // A new profile never inherits the key in use: it gets the typed one or none.
+      ...(draft.newProfile
+        ? { api_key: secrets.assistantApiKey ?? "" }
+        : secrets.assistantApiKey === null ? {} : { api_key: secrets.assistantApiKey }),
+      ...(profileName === "" ? {} : { save_profile: profileName }),
+    };
     return {
-      assistant: {
-        provider: draft.provider,
-        base_url: draft.baseUrl,
-        model: draft.model,
-        reasoning_effort: draft.reasoningEffort,
-        fast_mode: draft.fastMode,
-        max_tokens: Number(draft.maxTokens),
-        ...(secrets.assistantApiKey === null ? {} : { api_key: secrets.assistantApiKey }),
-      },
+      ...(assistant ? { assistant } : {}),
       search: {
         searxng_base_url: draft.searxngBaseUrl,
         perplexity_model: draft.perplexityModel,
@@ -548,8 +620,23 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
       body: JSON.stringify(payload),
     }));
     setView(next);
-    setDraft(draftFrom(next));
-    setSecrets(EMPTY_SECRETS);
+    // A new profile still without a name was not sent: keep its form and typed key.
+    const unsent = draft?.newProfile && payload.assistant === undefined ? draft : undefined;
+    setDraft(unsent
+      ? {
+          ...draftFrom(next),
+          profileSource: null,
+          profileName: unsent.profileName,
+          newProfile: true,
+          provider: unsent.provider,
+          baseUrl: unsent.baseUrl,
+          model: unsent.model,
+          reasoningEffort: unsent.reasoningEffort,
+          fastMode: unsent.fastMode,
+          maxTokens: unsent.maxTokens,
+        }
+      : draftFrom(next));
+    setSecrets(unsent ? { ...EMPTY_SECRETS, assistantApiKey: secrets.assistantApiKey } : EMPTY_SECRETS);
     return next;
   }
 
@@ -606,23 +693,98 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
     if (target === "os3") await load(false).catch(() => undefined);
   }
 
+  /** Switch the Pin to a saved profile at once. Unsaved edits in the other sections stay in the draft. */
+  async function switchProfile(name: string) {
+    if (!draft || !view || saving || testing !== undefined || codexBusy) return;
+    if (
+      view.assistant.profile === null
+      && !window.confirm("The settings in use are not saved as a profile and will be replaced. Switch anyway?")
+    ) return;
+    setSaving(true);
+    setMessage(undefined);
+    try {
+      const next = await responseJson<IntegrationsView>(await fetch("/api/admin/integrations", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assistant: { load_profile: name } }),
+      }));
+      setView(next);
+      setDraft((current) => current && draftForActiveProfile(current, next));
+      // A typed key belonged to the profile shown before; the picked one keeps its own.
+      setSecrets((current) => ({ ...current, assistantApiKey: null }));
+      setTestResults((current) => {
+        const results = { ...current };
+        delete results.assistant;
+        return results;
+      });
+      setMessage({ tone: "ok", text: `Now using ${name}. Your next request will use it.` });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        ...failureMessage(error, "Your session expired, so the profile was not switched.", "The profile could not be switched."),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** Save the assistant form as its profile and put it into use. Pending changes elsewhere are saved too. */
+  async function saveProfile() {
+    if (!draft) return;
+    const name = draft.profileName.trim();
+    setSaving(true);
+    setMessage(undefined);
+    try {
+      await persist();
+      setMessage({ tone: "ok", text: `Profile ${name} saved. Your next request will use it.` });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        ...failureMessage(error, "Your session expired, so nothing was saved.", "The profile could not be saved."),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** Delete a saved profile. The settings in use stay as they are. */
+  async function deleteProfile(name: string) {
+    if (!draft || saving || testing !== undefined || codexBusy) return;
+    if (!window.confirm(`Delete the profile ${name}? Its settings stay in use until you switch.`)) return;
+    setSaving(true);
+    setMessage(undefined);
+    try {
+      const next = await responseJson<IntegrationsView>(await fetch("/api/admin/integrations", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assistant: { delete_profile: name } }),
+      }));
+      setView(next);
+      setDraft((current) => current && current.profileSource === name
+        ? { ...current, profileSource: null, profileName: "" }
+        : current);
+      setMessage({ tone: "ok", text: `The profile ${name} was deleted.` });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        ...failureMessage(error, "Your session expired, so the profile was kept.", "The profile could not be deleted."),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function connectCodex() {
     if (!draft || saving || testing !== undefined || codexBusy) return;
     setCodexBusy(true);
     setMessage(undefined);
     try {
+      const assistant = updatePayload()?.assistant;
       const configured = await responseJson<IntegrationsView>(await fetch("/api/admin/integrations", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          assistant: {
-            provider: "codex-subscription",
-            base_url: draft.baseUrl,
-            model: draft.model,
-            reasoning_effort: draft.reasoningEffort,
-            fast_mode: draft.fastMode,
-            max_tokens: Number(draft.maxTokens),
-          },
+          assistant: { ...assistant, provider: "codex-subscription" },
         }),
       }));
       setView(configured);
@@ -691,6 +853,19 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
   }
 
   const dirty = Boolean(draft && view && (JSON.stringify(draft) !== JSON.stringify(draftFrom(view)) || Object.values(secrets).some((value) => value !== null)));
+  // The key the draft would keep: none for a new profile, else its profile's or the one in use.
+  const assistantKeyConfigured = Boolean(
+    draft && view && !draft.newProfile && (draft.profileSource === null
+      ? view.assistant.api_key_configured
+      : view.assistant.profiles.find((profile) => profile.name === draft.profileSource)?.api_key_configured),
+  );
+  // A name typed for a new or unsaved profile must not silently replace another profile.
+  const profileNameTaken = Boolean(
+    draft && view && draft.profileSource === null
+      && view.assistant.profiles.some((profile) => profile.name === draft.profileName.trim()),
+  );
+  // A new profile can be saved, tested or connected only once it has a name of its own.
+  const profileSavable = Boolean(draft && !profileNameTaken && !(draft.newProfile && draft.profileName.trim() === ""));
 
   return (
     <section className={`${settings.section} ${styles.servicesCard}`} data-testid="cosmos-services-card">
@@ -761,6 +936,78 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
               </span>
             </summary>
             <div className={styles.integrationField}>
+              <label htmlFor="assistant-profile"><strong>Profile</strong><small>Each profile keeps its own provider, key and model. Picking one switches your Pin to it.</small></label>
+              <div className={styles.secretControl}>
+                <select
+                  id="assistant-profile"
+                  className={styles.providerSelect}
+                  value={draft.newProfile ? NEW_PROFILE : draft.profileSource ?? ""}
+                  onChange={(event) => {
+                    const picked = event.target.value;
+                    if (view.assistant.profiles.some((profile) => profile.name === picked)) {
+                      void switchProfile(picked);
+                    } else if (picked === "") {
+                      // Back from a new profile to the unsaved settings in use.
+                      setDraft(draftForActiveProfile(draft, view));
+                      setSecrets((current) => ({ ...current, assistantApiKey: null }));
+                    }
+                  }}
+                >
+                  {draft.newProfile ? <option value={NEW_PROFILE}>New profile</option> : null}
+                  {view.assistant.profile === null ? <option value="">Unsaved settings</option> : null}
+                  {view.assistant.profiles.map((profile) => (
+                    <option key={profile.name} value={profile.name}>{profile.name}</option>
+                  ))}
+                </select>
+                {draft.newProfile ? (
+                  <button
+                    className={styles.inlineButton}
+                    type="button"
+                    onClick={() => {
+                      setDraft(draftForActiveProfile(draft, view));
+                      setSecrets((current) => ({ ...current, assistantApiKey: null }));
+                    }}
+                  >
+                    Cancel
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      className={styles.inlineButton}
+                      type="button"
+                      disabled={codexBusy || view.assistant.profiles.length >= MAX_PROFILES}
+                      onClick={() => {
+                        setDraft(draftForNewProfile(draft));
+                        setSecrets((current) => ({ ...current, assistantApiKey: null }));
+                      }}
+                    >
+                      New profile
+                    </button>
+                    {draft.profileSource !== null ? (
+                      <button className={styles.inlineButton} type="button" aria-label={`Delete ${draft.profileSource}`} disabled={codexBusy} onClick={() => void deleteProfile(draft.profileSource!)}>
+                        Delete
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </div>
+            {draft.newProfile || draft.profileSource === null ? (
+              <div className={styles.integrationField}>
+                <label htmlFor="assistant-profile-name">
+                  <strong>Profile name</strong>
+                  <small>
+                    {profileNameTaken
+                      ? "A profile with this name already exists."
+                      : draft.newProfile
+                        ? "Name the new profile, fill in its settings, then choose Save profile."
+                        : "Name these settings to keep them when you switch profiles."}
+                  </small>
+                </label>
+                <input id="assistant-profile-name" className={styles.integrationInput} value={draft.profileName} placeholder="For example, OpenRouter" maxLength={64} autoCapitalize="none" autoCorrect="off" spellCheck={false} aria-invalid={profileNameTaken} onChange={(event) => setDraft({ ...draft, profileName: event.target.value })} />
+              </div>
+            ) : null}
+            <div className={styles.integrationField}>
               <label htmlFor="assistant-provider"><strong>Provider</strong><small>OpenAI-compatible API or a Codex subscription.</small></label>
               <select
                 id="assistant-provider"
@@ -792,7 +1039,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                   <label htmlFor="assistant-base-url"><strong>API base URL</strong><small>For example, https://openrouter.ai/api/v1</small></label>
                   <input id="assistant-base-url" className={styles.integrationInput} type="url" value={draft.baseUrl} placeholder="https://openrouter.ai/api/v1" onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} />
                 </div>
-                <SecretField label="API key" detail="Kept on your server. Never sent to the Pin." configured={view.assistant.api_key_configured} value={secrets.assistantApiKey} onChange={(value) => secret("assistantApiKey", value)} onRemove={() => removeSecret("assistantApiKey")} />
+                <SecretField label="API key" detail="Kept on your server. Never sent to the Pin." configured={assistantKeyConfigured} value={secrets.assistantApiKey} onChange={(value) => secret("assistantApiKey", value)} onRemove={() => removeSecret("assistantApiKey")} />
               </>
             ) : (
               <div className={styles.codexConnect}>
@@ -809,7 +1056,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
                     {codexBusy ? "Disconnecting…" : "Disconnect"}
                   </button>
                 ) : (
-                  <button className={styles.primaryButton} type="button" disabled={!view.assistant.codex.available || saving || testing !== undefined || codexBusy} onClick={() => void connectCodex()}>
+                  <button className={styles.primaryButton} type="button" disabled={!view.assistant.codex.available || saving || testing !== undefined || codexBusy || !profileSavable} onClick={() => void connectCodex()}>
                     {codexBusy
                       ? "Starting…"
                       : view.assistant.codex.available
@@ -859,13 +1106,23 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
               <label htmlFor="max-tokens"><strong>Maximum response tokens</strong><small>Limit for each model response.</small></label>
               <input id="max-tokens" className={styles.integrationInput} type="number" min="64" max="8192" value={draft.maxTokens} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value })} />
             </div>
-            <div className={styles.integrationTestActions}>{testControl(
-                  "assistant",
-                  "Assistant",
-                  !draft.model.trim() || (draft.provider === "codex-subscription"
-                    ? !view.assistant.codex.connected
-                    : !draft.baseUrl.trim() || !secretReady("assistantApiKey", view.assistant.api_key_configured)),
-                )}</div>
+            <div className={styles.integrationTestActions}>
+              {testControl(
+                "assistant",
+                "Assistant",
+                !profileSavable || !draft.model.trim() || (draft.provider === "codex-subscription"
+                  ? !view.assistant.codex.connected
+                  : !draft.baseUrl.trim() || !secretReady("assistantApiKey", assistantKeyConfigured)),
+              )}
+              <button
+                className={styles.primaryButton}
+                type="button"
+                disabled={saving || testing !== undefined || codexBusy || !profileSavable || draft.profileName.trim() === "" || !draft.model.trim()}
+                onClick={() => void saveProfile()}
+              >
+                {saving ? "Saving…" : "Save profile"}
+              </button>
+            </div>
           </details>
 
           <details className={styles.integrationGroup} open={!view.speech.configured}>
@@ -978,7 +1235,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
             </div>
           ) : null}
           <div className={styles.integrationActions} data-dirty={dirty}>
-            <span>{dirty ? "You have unsaved changes. Testing a service also saves your changes." : "Changes apply to your next request."}</span>
+            <span>{dirty ? "You have unsaved changes. Saving a profile or testing a service also saves them." : "Changes apply to your next request."}</span>
             <button className={styles.primaryButton} type="button" disabled={saving || testing !== undefined} onClick={() => void save()}>{saving ? "Saving…" : "Save changes"}</button>
           </div>
         </fieldset>

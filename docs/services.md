@@ -31,6 +31,15 @@ you leave a page with an unsaved draft.
   page. Cosmos runs the official Codex app server and refreshes that session.
   A separate **Speed** selector can switch supported Codex models to Fast mode.
   Fast is about 1.5 times faster than Standard and uses more ChatGPT credits.
+  The assistant's settings are kept as named **profiles**, each with its own
+  provider, URL, key, model, and effort. The **Profile** switcher puts the
+  picked profile into use at once, so moving between a gateway and Codex
+  retypes nothing. **New profile** opens a blank form: name it, fill it in,
+  and choose **Save profile** (up to 16 profiles). **Save profile** also
+  stores edits to the profile shown; **Delete** removes it and leaves the
+  settings in use alone. Settings from before profiles existed show as
+  **Unsaved settings** until they are given a name. Saved keys stay on the
+  server and are never shown.
 - **Search & maps:** add SearXNG or SerpAPI for web results, plus any optional
   Perplexity, Google Maps, Pirate Weather, or Wolfram credentials. The bundled
   SearXNG includes Brave-backed ResultHunter. Cosmos searches SearXNG first. It

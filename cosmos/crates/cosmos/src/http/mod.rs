@@ -1509,6 +1509,15 @@ mod admin_gate_tests {
         let mut config = crate::integrations::IntegrationsConfig::default();
         config.assistant.base_url = "https://openrouter.ai/api/v1".to_owned();
         config.assistant.api_key = Some("private-assistant-key".to_owned());
+        config.assistant.profiles = vec![
+            config.assistant.as_profile("Router".to_owned()),
+            crate::integrations::AssistantProfile {
+                name: "Other".to_owned(),
+                base_url: "https://other.example.test/v1".to_owned(),
+                api_key: Some("private-other-key".to_owned()),
+                ..config.assistant.as_profile(String::new())
+            },
+        ];
         config.search.serpapi_key = Some("private-search-key".to_owned());
         config.maps.google_maps_key = Some("private-maps-key".to_owned());
         config.speech.azure_key = Some("private-speech-key".to_owned());
@@ -1534,6 +1543,12 @@ mod admin_gate_tests {
         assert_eq!(value["os3"]["status"], "not_configured");
         assert_eq!(value["os3"]["butler_name"], serde_json::Value::Null);
         assert_eq!(value["assistant"]["api_key_configured"], true);
+        assert_eq!(value["assistant"]["profile"], "Router");
+        assert_eq!(value["assistant"]["profiles"][1]["name"], "Other");
+        assert_eq!(
+            value["assistant"]["profiles"][1]["api_key_configured"],
+            true
+        );
         assert_eq!(value["search"]["serpapi_key_configured"], true);
         assert_eq!(value["maps"]["configured"], true);
         assert_eq!(value["speech"]["azure_key_configured"], true);
@@ -1541,6 +1556,7 @@ mod admin_gate_tests {
         let response = value.to_string();
         for secret in [
             "private-assistant-key",
+            "private-other-key",
             "private-search-key",
             "private-maps-key",
             "private-speech-key",
