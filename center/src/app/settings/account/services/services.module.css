@@ -324,7 +324,7 @@
 .integrationGroup[open] > summary::after { content: "−"; }
 .integrationGroup > summary > span:first-child { flex: 1; }
 .integrationGroup > summary:hover { background: rgb(255 255 255 / 4%); }
-.integrationTestActions { display: flex; justify-content: flex-end; padding: 0 24px 20px; }
+.integrationTestActions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 0 24px 20px; }
 .integrationActions[data-dirty="true"] { position: sticky; bottom: 86px; background: var(--luma-colors-penumbra-base); border-top: 1px solid var(--luma-divider); z-index: 2; }
 
 .integrationIntro,

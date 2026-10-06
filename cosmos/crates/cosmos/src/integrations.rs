@@ -23,6 +23,9 @@ const OS3_STATUS_FILE: &str = "os3-status.json";
 const MAX_OS3_COOKIE_BYTES: usize = 16 * 1024;
 /// OS3's display name for the owner's agent, as Center shows it.
 pub const MAX_OS3_BUTLER_NAME_CHARS: usize = 64;
+/// Saved assistant profiles the owner switches between.
+pub const MAX_ASSISTANT_PROFILES: usize = 16;
+pub const MAX_ASSISTANT_PROFILE_NAME_CHARS: usize = 64;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -33,6 +36,9 @@ pub enum AssistantProvider {
     CodexSubscription,
 }
 
+/// The assistant settings in use, plus the profiles the owner saved under
+/// a name so switching between them needs no retyping. The flat fields are
+/// what the assistant reads; a saved profile is a copy of them.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AssistantConfig {
@@ -43,6 +49,32 @@ pub struct AssistantConfig {
     pub reasoning_effort: Option<String>,
     pub fast_mode: bool,
     pub max_tokens: u32,
+    /// Written only once the owner saves a profile, so a release without
+    /// this field still reads the file until then.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<AssistantProfile>,
+}
+
+/// One saved assistant profile: the settings under a name of the owner's
+/// choosing. A Codex profile carries no URL or key; its sign-in is the
+/// Codex app server's own and shared by every Codex profile.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AssistantProfile {
+    pub name: String,
+    pub provider: AssistantProvider,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub fast_mode: bool,
+    pub max_tokens: u32,
+}
+
+impl Default for AssistantProfile {
+    fn default() -> Self {
+        AssistantConfig::default().as_profile(String::new())
+    }
 }
 
 impl Default for AssistantConfig {
@@ -55,6 +87,7 @@ impl Default for AssistantConfig {
             reasoning_effort: None,
             fast_mode: false,
             max_tokens: 512,
+            profiles: Vec::new(),
         }
     }
 }
@@ -67,6 +100,55 @@ impl AssistantConfig {
             }
             AssistantProvider::CodexSubscription => !self.model.is_empty(),
         }
+    }
+
+    /// The settings in use as a profile named `name`. A Codex profile
+    /// keeps no URL or key: they belong to OpenAI-compatible profiles.
+    pub fn as_profile(&self, name: String) -> AssistantProfile {
+        let codex = self.provider == AssistantProvider::CodexSubscription;
+        AssistantProfile {
+            name,
+            provider: self.provider,
+            base_url: if codex {
+                String::new()
+            } else {
+                self.base_url.clone()
+            },
+            api_key: if codex { None } else { self.api_key.clone() },
+            model: self.model.clone(),
+            reasoning_effort: self.reasoning_effort.clone(),
+            fast_mode: self.fast_mode,
+            max_tokens: self.max_tokens,
+        }
+    }
+
+    /// Make `profile`'s settings the ones in use.
+    fn load_profile(&mut self, profile: &AssistantProfile) {
+        self.provider = profile.provider;
+        self.base_url = profile.base_url.clone();
+        self.api_key = profile.api_key.clone();
+        self.model = profile.model.clone();
+        self.reasoning_effort = profile.reasoning_effort.clone();
+        self.fast_mode = profile.fast_mode;
+        self.max_tokens = profile.max_tokens;
+    }
+
+    /// The saved profile whose settings are the ones in use, if any.
+    /// Derived, never stored, so it cannot drift from the settings.
+    pub fn active_profile(&self) -> Option<&str> {
+        let active = self.as_profile(String::new());
+        self.profiles
+            .iter()
+            .find(|profile| {
+                profile.provider == active.provider
+                    && profile.base_url == active.base_url
+                    && profile.api_key == active.api_key
+                    && profile.model == active.model
+                    && profile.reasoning_effort == active.reasoning_effort
+                    && profile.fast_mode == active.fast_mode
+                    && profile.max_tokens == active.max_tokens
+            })
+            .map(|profile| profile.name.as_str())
     }
 }
 
@@ -274,6 +356,9 @@ pub struct IntegrationsUpdate {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AssistantUpdate {
+    /// Start from this saved profile: its settings, key included, become
+    /// the ones in use before the fields below apply.
+    pub load_profile: Option<String>,
     pub provider: Option<AssistantProvider>,
     pub base_url: Option<String>,
     /// Missing preserves the existing secret. An empty value removes it.
@@ -282,6 +367,10 @@ pub struct AssistantUpdate {
     pub reasoning_effort: Option<String>,
     pub fast_mode: Option<bool>,
     pub max_tokens: Option<u32>,
+    /// Save the resulting settings as this profile, added or replaced.
+    pub save_profile: Option<String>,
+    /// Delete this saved profile. The settings in use are unchanged.
+    pub delete_profile: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -402,7 +491,7 @@ impl IntegrationStore {
     ) -> Result<IntegrationsConfig, IntegrationError> {
         let mut current = self.config.write().expect("integration lock poisoned");
         let mut next = current.clone();
-        apply_update(&mut next, update);
+        apply_update(&mut next, update)?;
         normalize(&mut next);
         validate(&next)?;
         self.persist(&next)?;
@@ -579,8 +668,23 @@ pub fn persisted_speech_ready(state_dir: Option<&str>) -> Result<Option<bool>, I
     ))
 }
 
-fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
+fn apply_update(
+    config: &mut IntegrationsConfig,
+    update: IntegrationsUpdate,
+) -> Result<(), IntegrationError> {
     if let Some(update) = update.assistant {
+        if let Some(name) = update.load_profile.as_deref() {
+            let profile = config
+                .assistant
+                .profiles
+                .iter()
+                .find(|profile| profile.name == name)
+                .cloned()
+                .ok_or(IntegrationError::Invalid(
+                    "that saved assistant profile no longer exists",
+                ))?;
+            config.assistant.load_profile(&profile);
+        }
         if let Some(value) = update.provider {
             config.assistant.provider = value;
             if value == AssistantProvider::CodexSubscription
@@ -604,6 +708,24 @@ fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
         }
         if let Some(value) = update.max_tokens {
             config.assistant.max_tokens = value;
+        }
+        if let Some(name) = update.delete_profile.as_deref() {
+            config
+                .assistant
+                .profiles
+                .retain(|profile| profile.name != name);
+        }
+        if let Some(name) = update.save_profile.map(|name| name.trim().to_owned()) {
+            let saved = config.assistant.as_profile(name);
+            match config
+                .assistant
+                .profiles
+                .iter_mut()
+                .find(|profile| profile.name == saved.name)
+            {
+                Some(existing) => *existing = saved,
+                None => config.assistant.profiles.push(saved),
+            }
         }
     }
     if let Some(update) = update.search {
@@ -643,6 +765,7 @@ fn apply_update(config: &mut IntegrationsConfig, update: IntegrationsUpdate) {
         }
         update_secret(&mut config.os3.session_cookie, update.session_cookie);
     }
+    Ok(())
 }
 
 fn update_secret(target: &mut Option<String>, update: Option<String>) {
@@ -664,6 +787,16 @@ fn normalize(config: &mut IntegrationsConfig) {
         .reasoning_effort
         .take()
         .and_then(|value| optional(&value.to_ascii_lowercase()));
+    for profile in &mut config.assistant.profiles {
+        profile.name = profile.name.trim().to_owned();
+        profile.base_url = profile.base_url.trim().trim_end_matches('/').to_owned();
+        profile.model = profile.model.trim().to_owned();
+        profile.reasoning_effort = profile
+            .reasoning_effort
+            .take()
+            .and_then(|value| optional(&value.to_ascii_lowercase()));
+        profile.api_key = profile.api_key.take().and_then(|value| optional(&value));
+    }
     config.speech.azure_voice = config.speech.azure_voice.trim().to_owned();
     // Accept a pasted `Cookie: ...` line as well as the bare header value.
     if let Some(cookie) = config.os3.session_cookie.take() {
@@ -699,40 +832,35 @@ fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
     if config.schema_version != 1 {
         return Err(IntegrationError::Invalid("unsupported schema version"));
     }
-    if config.assistant.model.is_empty() || config.assistant.model.len() > 256 {
-        return Err(IntegrationError::Invalid("assistant model is required"));
-    }
-    if config.assistant.max_tokens > 65_536 {
+    validate_assistant(&config.assistant.as_profile(String::new()))?;
+    if config.assistant.profiles.len() > MAX_ASSISTANT_PROFILES {
         return Err(IntegrationError::Invalid(
-            "assistant token limit is too large",
+            "too many saved assistant profiles",
         ));
     }
-    if let Some(effort) = config.assistant.reasoning_effort.as_deref() {
-        let supported = match config.assistant.provider {
-            AssistantProvider::OpenAiCompatible => {
-                matches!(effort, "minimal" | "low" | "medium" | "high" | "xhigh")
-            }
-            AssistantProvider::CodexSubscription => {
-                matches!(
-                    effort,
-                    "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-                )
-            }
-        };
-        if !supported {
+    for (index, profile) in config.assistant.profiles.iter().enumerate() {
+        if profile.name.is_empty()
+            || profile.name.chars().count() > MAX_ASSISTANT_PROFILE_NAME_CHARS
+            || profile.name.chars().any(char::is_control)
+        {
             return Err(IntegrationError::Invalid(
-                "reasoning effort is not supported by the selected assistant provider",
+                "assistant profile name is invalid",
             ));
         }
-    }
-    if !config.assistant.base_url.is_empty() {
-        validate_url(&config.assistant.base_url, "assistant URL is invalid")?;
+        if config.assistant.profiles[..index]
+            .iter()
+            .any(|earlier| earlier.name == profile.name)
+        {
+            return Err(IntegrationError::Invalid(
+                "assistant profile names must be unique",
+            ));
+        }
+        validate_assistant(profile)?;
     }
     if let Some(url) = config.search.searxng_base_url.as_deref() {
         validate_url(url, "SearxNG URL is invalid")?;
     }
     for secret in [
-        config.assistant.api_key.as_deref(),
         config.search.serpapi_key.as_deref(),
         config.search.perplexity_api_key.as_deref(),
         config.search.wolfram_app_id.as_deref(),
@@ -772,6 +900,45 @@ fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     {
         return Err(IntegrationError::Invalid("Azure Speech voice is invalid"));
+    }
+    Ok(())
+}
+
+/// The checks every assistant profile passes, saved or in use.
+fn validate_assistant(settings: &AssistantProfile) -> Result<(), IntegrationError> {
+    if settings.model.is_empty() || settings.model.len() > 256 {
+        return Err(IntegrationError::Invalid("assistant model is required"));
+    }
+    if settings.max_tokens > 65_536 {
+        return Err(IntegrationError::Invalid(
+            "assistant token limit is too large",
+        ));
+    }
+    if let Some(effort) = settings.reasoning_effort.as_deref() {
+        let supported = match settings.provider {
+            AssistantProvider::OpenAiCompatible => {
+                matches!(effort, "minimal" | "low" | "medium" | "high" | "xhigh")
+            }
+            AssistantProvider::CodexSubscription => {
+                matches!(
+                    effort,
+                    "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                )
+            }
+        };
+        if !supported {
+            return Err(IntegrationError::Invalid(
+                "reasoning effort is not supported by the selected assistant provider",
+            ));
+        }
+    }
+    if !settings.base_url.is_empty() {
+        validate_url(&settings.base_url, "assistant URL is invalid")?;
+    }
+    if let Some(secret) = settings.api_key.as_deref()
+        && (secret.len() > 8192 || secret.contains(['\r', '\n', '\0']))
+    {
+        return Err(IntegrationError::Invalid("credential is invalid"));
     }
     Ok(())
 }
@@ -915,7 +1082,8 @@ mod tests {
                 }),
                 ..IntegrationsUpdate::default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(next.assistant.api_key.as_deref(), Some("existing"));
 
         apply_update(
@@ -927,7 +1095,8 @@ mod tests {
                 }),
                 ..IntegrationsUpdate::default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(next.assistant.api_key, None);
     }
 
@@ -958,7 +1127,8 @@ mod tests {
                 }),
                 ..IntegrationsUpdate::default()
             },
-        );
+        )
+        .unwrap();
         normalize(&mut next);
         validate(&next).unwrap();
         assert_eq!(
@@ -980,7 +1150,8 @@ mod tests {
                 }),
                 ..IntegrationsUpdate::default()
             },
-        );
+        )
+        .unwrap();
         assert!(next.os3.configured(), "omitting the cookie keeps it");
         let enabled = IntegrationStore::memory(next.clone());
         assert_eq!(
@@ -999,7 +1170,8 @@ mod tests {
                 os3: Some(removal),
                 ..IntegrationsUpdate::default()
             },
-        );
+        )
+        .unwrap();
         assert_eq!(next.os3.session_cookie, None);
         assert!(!next.os3.configured());
 
@@ -1007,5 +1179,156 @@ mod tests {
         assert!(validate(&next).is_err());
         next.os3.session_cookie = Some("x".repeat(MAX_OS3_COOKIE_BYTES + 1));
         assert!(validate(&next).is_err());
+    }
+
+    #[test]
+    fn switching_saved_profiles_restores_their_settings_and_keys() {
+        let mut config = IntegrationsConfig::default();
+        config.assistant.base_url = "https://gateway.example.test/v1".to_owned();
+        config.assistant.api_key = Some("gateway-key".to_owned());
+        config.assistant.model = "gateway/default".to_owned();
+        let store = IntegrationStore::memory(config);
+        assert_eq!(store.snapshot().assistant.active_profile(), None);
+
+        // Name the settings in use, then save a Codex profile beside them.
+        let mut next = store.snapshot();
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    save_profile: Some("  Gateway ".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    provider: Some(AssistantProvider::CodexSubscription),
+                    model: Some("gpt-5.6-sol".to_owned()),
+                    reasoning_effort: Some("high".to_owned()),
+                    fast_mode: Some(true),
+                    save_profile: Some("Codex".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        normalize(&mut next);
+        validate(&next).unwrap();
+        assert_eq!(
+            next.assistant.provider,
+            AssistantProvider::CodexSubscription
+        );
+        assert_eq!(next.assistant.active_profile(), Some("Codex"));
+        let codex = next
+            .assistant
+            .profiles
+            .iter()
+            .find(|p| p.name == "Codex")
+            .unwrap();
+        assert!(
+            codex.api_key.is_none() && codex.base_url.is_empty(),
+            "a Codex profile carries no OpenAI-compatible credential"
+        );
+
+        // Switching back restores the URL, the key and the model untyped.
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    load_profile: Some("Gateway".to_owned()),
+                    provider: Some(AssistantProvider::OpenAiCompatible),
+                    base_url: Some("https://gateway.example.test/v1".to_owned()),
+                    model: Some("gateway/default".to_owned()),
+                    save_profile: Some("Gateway".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        normalize(&mut next);
+        validate(&next).unwrap();
+        assert_eq!(next.assistant.api_key.as_deref(), Some("gateway-key"));
+        assert_eq!(next.assistant.model, "gateway/default");
+        assert_eq!(next.assistant.reasoning_effort, None);
+        assert!(!next.assistant.fast_mode);
+        assert_eq!(next.assistant.active_profile(), Some("Gateway"));
+        assert!(next.assistant.configured());
+
+        // Saving under a new name keeps the one it started from.
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    load_profile: Some("Gateway".to_owned()),
+                    model: Some("gateway/fast".to_owned()),
+                    save_profile: Some("Gateway fast".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = next
+            .assistant
+            .profiles
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["Gateway", "Codex", "Gateway fast"]);
+        assert_eq!(next.assistant.active_profile(), Some("Gateway fast"));
+
+        // Deleting a profile leaves the settings in use alone.
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    delete_profile: Some("Gateway fast".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(next.assistant.model, "gateway/fast");
+        assert_eq!(next.assistant.active_profile(), None);
+        assert!(
+            apply_update(
+                &mut next,
+                IntegrationsUpdate {
+                    assistant: Some(AssistantUpdate {
+                        load_profile: Some("Gateway fast".to_owned()),
+                        ..AssistantUpdate::default()
+                    }),
+                    ..IntegrationsUpdate::default()
+                },
+            )
+            .is_err(),
+            "a deleted profile cannot be loaded"
+        );
+
+        // Names are unique and bounded; a saved key is a secret like any other.
+        next.assistant
+            .profiles
+            .push(next.assistant.profiles[0].clone());
+        assert!(validate(&next).is_err());
+        next.assistant.profiles.pop();
+        next.assistant.profiles[0].api_key = Some("bad\nkey".to_owned());
+        assert!(validate(&next).is_err());
+        next.assistant.profiles[0].api_key = Some("gateway-key".to_owned());
+        next.assistant.profiles[0].name = "x".repeat(MAX_ASSISTANT_PROFILE_NAME_CHARS + 1);
+        assert!(validate(&next).is_err());
+
+        // A file saved before any profile existed still loads unchanged.
+        let before = r#"{"schema_version":1,"assistant":{"provider":"openai-compatible","base_url":"https://a.test/v1","api_key":"k","model":"m","reasoning_effort":null,"fast_mode":false,"max_tokens":512}}"#;
+        let stored: IntegrationsConfig = serde_json::from_str(before).unwrap();
+        assert!(stored.assistant.profiles.is_empty());
+        assert!(!serde_json::to_string(&stored).unwrap().contains("profiles"));
     }
 }
