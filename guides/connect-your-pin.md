@@ -417,8 +417,8 @@ release, and your server. A new release or a new server asks for it again.
 > with certificate errors:** the Pin finished Humane's original setup before
 > it ever reached this server, so the server never issued its credential, and
 > the stock setup ceremony cannot run on such a Pin unaided. In
-> **Provisioning**, choose **Connect this Pin to Cosmos**, then **Run its
-> original setup** when it appears. Center re-arms the Pin's original setup
+> **Provisioning**, open **Pin still can't reach your server?** and choose
+> **Run its original setup**. Center re-arms the Pin's original setup
 > ceremony, reconnects it, and opens its setup screen on the Pin. Follow the
 > prompts on the Pin, and finish Guided setup stage 6 with the same four
 > digits when Center asks for them; the Pin keeps the passcode it already

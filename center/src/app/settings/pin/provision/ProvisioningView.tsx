@@ -471,6 +471,38 @@ function ProvisioningContent() {
             ) : null}
           </div>
 
+          {enrollmentIncomplete ? null : (
+            <details className={styles.fallback}>
+              <summary>Pin still can&rsquo;t reach your server?</summary>
+              <div className={styles.fallbackBody}>
+                <p className={styles.intro}>
+                  A Pin that finished Humane&rsquo;s original setup keeps the certificate Humane gave it, and your server
+                  refuses it: the Pin says it is having trouble communicating with the server, and Guided setup stage 6
+                  times out. Run its original setup again so your server issues its own. Center reconnects the Pin and
+                  opens its setup screen; follow it, then finish Guided setup stage 6 with the same four digits. The Pin
+                  keeps its passcode.
+                </p>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={
+                    activationBusy ||
+                    pin.status !== "connected" ||
+                    !usbClient ||
+                    pin.serviceStatus !== "online" ||
+                    pin.identity?.recognizedAiPin === false ||
+                    !enrollment.provisioning_configured ||
+                    !overview.device_edge_ipv4 ||
+                    !overview.device_status_endpoint
+                  }
+                  onClick={() => void reenrollPin()}
+                >
+                  {activationBusy ? "Running its setup…" : "Run its original setup"}
+                </button>
+              </div>
+            </details>
+          )}
+
           <details className={styles.fallback}>
             <summary>Create an activation file instead</summary>
             <div className={styles.fallbackBody}>

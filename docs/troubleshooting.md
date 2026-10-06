@@ -622,8 +622,8 @@ and try the step again.
 
 The Pin finished Humane's original setup, so it still presents Humane's
 DeviceUser certificate and this server never issued its own. In
-**Provisioning**, choose **Connect this Pin to Cosmos**, then **Run its
-original setup** when it appears, follow the
+**Provisioning**, open **Pin still can't reach your server?**, choose **Run
+its original setup**, follow the
 prompts on the Pin's own setup screen, and finish Guided setup stage 6 with
 the same four digits. The Pin keeps its current passcode.
 

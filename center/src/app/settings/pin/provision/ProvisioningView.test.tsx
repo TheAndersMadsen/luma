@@ -219,7 +219,7 @@ describe("ProvisioningView", () => {
     finishReenroll({ state: "active" });
     await screen.findByText("Remote access is ready");
     expect(state.reenroll).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "Run its original setup" })).not.toBeInTheDocument();
+    expect(screen.queryByText("This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -239,6 +239,40 @@ describe("ProvisioningView", () => {
     await waitFor(() => expect(reportedHere).toBe(expected));
   });
 
+  it("offers the original setup as an explicit repair for a Pin that connected normally", async () => {
+    // An activated Pin reports device-status with its activation key whether
+    // or not this server issued its DeviceUser credential, so Center cannot
+    // detect a Pin still presenting Humane's certificate. The owner can.
+    state.pin = usbPin();
+    state.provision.mockResolvedValueOnce({ state: "active" });
+    renderView();
+    await userEvent.click(await screen.findByRole("button", { name: "Connect this Pin to Cosmos" }));
+    await screen.findByText("Remote access is ready");
+    expect(screen.getAllByRole("button", { name: "Run its original setup" })).toHaveLength(1);
+    state.reenroll.mockResolvedValueOnce({ state: "active" });
+    await userEvent.click(screen.getByRole("button", { name: "Run its original setup" }));
+    expect(state.reenroll).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByText("This Pin is connected to Cosmos and paired with your account. Return to Guided setup to finish setup on this Pin."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the explicit repair unavailable until Luma answers over USB", async () => {
+    state.pin = remotePin();
+    renderView();
+    await screen.findByRole("button", { name: "Connect this Pin to Cosmos" });
+    expect(screen.getByRole("button", { name: "Run its original setup" })).toBeDisabled();
+  });
+
+  it("shows one original-setup button when Center detects the missing credential itself", async () => {
+    state.pin = usbPin();
+    state.provision.mockRejectedValueOnce(new EnrollmentIncompleteError(mismatchStatus()));
+    renderView();
+    await userEvent.click(await screen.findByRole("button", { name: "Connect this Pin to Cosmos" }));
+    await screen.findByText("This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.");
+    expect(screen.getAllByRole("button", { name: "Run its original setup" })).toHaveLength(1);
+  });
+
   it("warns when the setup screen did not open after a completed re-enrollment", async () => {
     state.pin = usbPin();
     state.provision.mockRejectedValueOnce(new EnrollmentIncompleteError(mismatchStatus()));
@@ -254,7 +288,7 @@ describe("ProvisioningView", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Connected to Cosmos")).toBeInTheDocument();
     expect(screen.getByText("Remote access is ready")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run its original setup" })).not.toBeInTheDocument();
+    expect(screen.queryByText("This server hasn't issued this Pin its credential yet. Run this Pin's original setup to connect it.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Connect this Pin to Cosmos" })).not.toBeInTheDocument();
   });
 });

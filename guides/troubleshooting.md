@@ -1174,16 +1174,19 @@ Cosmos logs nothing.
 Cause: the Pin still presents the DeviceUser certificate Humane issued it.
 This server never issued its own, because only the Pin's original setup
 ceremony asks for one, and that ceremony does not run again on its own once a
-Pin has finished Humane's setup. Provisioning names the same cause: "This
-server hasn't issued this Pin its credential yet." (**DeviceUser CA ready** on
-that page means the server can issue one, not that the Pin has it.)
+Pin has finished Humane's setup. Center cannot always detect this: the Pin's
+status reports use a different key, so Provisioning can still say **Connected
+to Cosmos** and **Remote access is ready**. When it does detect it,
+Provisioning says "This server hasn't issued this Pin its credential yet."
+(**DeviceUser CA ready** on that page means the server can issue one, not that
+the Pin has it.)
 
-Fix: open **Provisioning**, connect over USB, choose **Connect this Pin to
-Cosmos**, and then **Run its original setup** when it appears. Center
-re-arms the Pin's original setup ceremony, reconnects it, and opens its setup
-screen on the Pin. Follow the prompts on the Pin, and finish Guided setup
-stage 6 with the same four digits when Center asks for them. The Pin keeps the
-passcode it already unlocks with.
+Fix: open **Provisioning** and connect over USB with the Pin unlocked. Open
+**Pin still can't reach your server?** and choose **Run its original setup**.
+Center re-arms the Pin's original setup ceremony, reconnects it, and opens its
+setup screen on the Pin. Follow the prompts on the Pin, and finish Guided
+setup stage 6 with the same four digits when Center asks for them. The Pin
+keeps the passcode it already unlocks with.
 
 </details>
 
