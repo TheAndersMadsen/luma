@@ -33,6 +33,18 @@ const DUC_PROVISIONED_SETTING = "humane.settings.global.DUC_PROVISIONED";
  * stays enabled and exported, so it starts directly. */
 const ONBOARDING_EXPERIENCE_COMPONENT =
   "humane.experience.onboarding/humane.experience.onboarding.OnboardingExperience";
+const ONBOARDING_PACKAGE = "humane.experience.onboarding";
+/**
+ * Stock `ProtoSettings.ALLOW_OOBE_AFTER_PROVISIONED`, a Settings.Global bool
+ * (default false). Stock `OnboardingExperienceContext.createInteractorWithDefinition`
+ * skips straight to `pincodeVerified("")` and `WelcomeNode` (which writes
+ * `DUC_PROVISIONED` back to "1") whenever the `DeviceUserCreds` key and a
+ * keyguard PIN both exist, unless this is set. A Pin that finished Humane's
+ * setup has both, so without it the replay never reaches `PincodeNode`. Stock
+ * reads it nowhere else, and `PincodeNode.onSuccessfulPasscodeLogin` keeps an
+ * existing keyguard PIN.
+ */
+const ALLOW_OOBE_AFTER_PROVISIONED_SETTING = "humane_allow_oobe_after_provisioned";
 
 type BrowserBridgeStatus = {
   configured: boolean;
@@ -623,7 +635,11 @@ export class OnboardingLaunchError extends Error {
  * Shell cannot change component state), and the experience does not need its
  * disabled HOME redirect. Luma's on-device automation
  * (`CosmosOnboardingAutomation`) then drives the stock OPAQUE login with the
- * passcode the wearer re-enters in Guided setup stage 6. Stock
+ * passcode the wearer re-enters in Guided setup stage 6. Before the launch
+ * the replay sets `ALLOW_OOBE_AFTER_PROVISIONED` (see above) and force-stops
+ * the onboarding package, whose `OnboardingCoordinator` singleton may still
+ * hold `PINCODE_VERIFIED` from a skipped run and route straight to
+ * `WelcomeNode`. Stock
  * `WelcomeNode.launchHome` writes the flag back to "1" and re-disables
  * `OnboardingHome` when the ceremony completes.
  */
@@ -660,8 +676,14 @@ export async function reenrollConnectedPin(
     throw new Error(rearmFailure);
   }
   const status = await provisionConnectedPin(session, client, operations, edgeIpv4, deviceStatusEndpoint);
+  const launchFailure = "Center could not open this Pin's setup screen.";
   try {
-    await shell(session, ["am", "start", "-n", ONBOARDING_EXPERIENCE_COMPONENT], "Center could not open this Pin's setup screen.");
+    await shell(session, ["settings", "put", "global", ALLOW_OOBE_AFTER_PROVISIONED_SETTING, "1"], launchFailure);
+    if ((await shell(session, ["settings", "get", "global", ALLOW_OOBE_AFTER_PROVISIONED_SETTING], launchFailure)).trim() !== "1") {
+      throw new Error(launchFailure);
+    }
+    await shell(session, ["am", "force-stop", ONBOARDING_PACKAGE], launchFailure);
+    await shell(session, ["am", "start", "-n", ONBOARDING_EXPERIENCE_COMPONENT], launchFailure);
   } catch {
     throw new OnboardingLaunchError(status);
   }

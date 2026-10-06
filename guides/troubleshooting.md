@@ -1184,9 +1184,13 @@ the Pin has it.)
 Fix: open **Provisioning** and connect over USB with the Pin unlocked. Open
 **Pin still can't reach your server?** and choose **Run its original setup**.
 Center re-arms the Pin's original setup ceremony, reconnects it, and opens its
-setup screen on the Pin. Follow the prompts on the Pin, and finish Guided
-setup stage 6 with the same four digits when Center asks for them. The Pin
-keeps the passcode it already unlocks with.
+setup screen on the Pin. The setup starts from the beginning, as on a new
+Pin: follow its prompts (hold your palm out when it asks) until it asks for
+your passcode, then finish Guided setup stage 6 with the same four digits.
+The Pin keeps the passcode it already unlocks with. If the Pin returns to its
+main screen within a few seconds without asking for anything, update the
+server and Center to 0.3.48 or later and run the repair again: earlier
+releases opened the setup screen without telling it to run again.
 
 </details>
 

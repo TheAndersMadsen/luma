@@ -711,13 +711,17 @@ test("re-enrollment of an active Pin whose flag is already 0 activates without r
  * step that asks: 1 the re-enrollment preflight, 2 the delegated provisioning
  * preflight after deactivation and re-arm, 3 the post-activation verification.
  */
-function reenrollSession(calls, { rollbackComplete = true, readback = null, amStartExitCode = 0, initialFlag = "1" } = {}) {
+function reenrollSession(
+  calls,
+  { rollbackComplete = true, readback = null, amStartExitCode = 0, initialFlag = "1", overrideReadback = null } = {},
+) {
   // The SHA-256 of the DER behind the "AQID" certificate the operations below
   // issue: the post-activation verification compares it against the envelope.
   const fingerprint = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
   const verified = `Result: Bundle[{ok=true, state=active, consistent=true, managed=true, remote_gate_enabled=true, target_matches=true, present=true, identity_usable=true, edge_ipv4=203.0.113.42, fingerprint_sha256=${fingerprint}, root_certificate_sha256=${fingerprint}, api_endpoint=https://api.cosmos.humane.cloud, onboarding_endpoint=https://onboarding.cosmos.humane.cloud, device_status_endpoint=https://center.example/device-status/v1/report}]\n`;
   let phase = 1;
   let flagArmed = initialFlag === "1";
+  let overrideSet = false;
   return {
     async shell(command) {
       if (command.includes("ro.boot.deviceid")) {
@@ -752,6 +756,21 @@ function reenrollSession(calls, { rollbackComplete = true, readback = null, amSt
       if (command.includes("CLEAR")) {
         calls.push("clear");
         return { stdout: "Result: Bundle[{ok=true, state=cleared, rollback_complete=true}]\n", stderr: "", exitCode: 0 };
+      }
+      if (command.includes("humane_allow_oobe_after_provisioned")) {
+        if (command[1] === "put") {
+          assert.deepEqual(command, ["settings", "put", "global", "humane_allow_oobe_after_provisioned", "1"]);
+          calls.push("oobe-put");
+          overrideSet = true;
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        calls.push("oobe-read");
+        return { stdout: `${overrideReadback ?? (overrideSet ? "1" : "null")}\n`, stderr: "", exitCode: 0 };
+      }
+      if (command[0] === "am" && command[1] === "force-stop") {
+        assert.deepEqual(command, ["am", "force-stop", "humane.experience.onboarding"]);
+        calls.push("force-stop");
+        return { stdout: "", stderr: "", exitCode: 0 };
       }
       if (command[0] === "settings" && command[1] === "put") {
         calls.push("flag-put");
@@ -874,6 +893,9 @@ test("re-enrollment deactivates, re-arms the stock ceremony, activates, then lau
     "restart-runtime",
     "iroh-ticket",
     "pair-bridge",
+    "oobe-put",
+    "oobe-read",
+    "force-stop",
     "am-start",
   ]);
 });
@@ -974,6 +996,30 @@ test("a failed ceremony launch reports OnboardingLaunchError after activation su
     "restart-runtime",
     "iroh-ticket",
     "pair-bridge",
+    "oobe-put",
+    "oobe-read",
+    "force-stop",
     "am-start",
   ]);
+});
+
+test("an override that does not read back reports OnboardingLaunchError without launching the skipped flow", async () => {
+  const calls = [];
+  const failure = await reenrollConnectedPin(
+    reenrollSession(calls, { overrideReadback: "null" }),
+    {
+      async updateSettings() { calls.push("iroh-settings"); return { server: {} }; },
+      async getIrohTicket() {
+        calls.push("iroh-ticket");
+        return { ticket: "endpoint-ticket", node_id: PIN_ENDPOINT_ID };
+      },
+    },
+    reenrollOperations(calls),
+    "203.0.113.42",
+    "https://center.example/device-status/v1/report",
+  ).catch((error) => error);
+
+  assert.ok(failure instanceof OnboardingLaunchError);
+  assert.equal(failure.status.state, "active");
+  assert.deepEqual(calls.slice(-3), ["pair-bridge", "oobe-put", "oobe-read"]);
 });

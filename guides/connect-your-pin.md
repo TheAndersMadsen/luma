@@ -419,10 +419,10 @@ release, and your server. A new release or a new server asks for it again.
 > the stock setup ceremony cannot run on such a Pin unaided. In
 > **Provisioning**, open **Pin still can't reach your server?** and choose
 > **Run its original setup**. Center re-arms the Pin's original setup
-> ceremony, reconnects it, and opens its setup screen on the Pin. Follow the
-> prompts on the Pin, and finish Guided setup stage 6 with the same four
-> digits when Center asks for them; the Pin keeps the passcode it already
-> unlocks with.
+> ceremony, reconnects it, and opens its setup screen on the Pin. The setup
+> starts from the beginning, as on a new Pin: follow its prompts until it
+> asks for your passcode, then finish Guided setup stage 6 with the same four
+> digits; the Pin keeps the passcode it already unlocks with.
 
 ## Afterwards
 

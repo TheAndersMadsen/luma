@@ -479,8 +479,8 @@ function ProvisioningContent() {
                   A Pin that finished Humane&rsquo;s original setup keeps the certificate Humane gave it, and your server
                   refuses it: the Pin says it is having trouble communicating with the server, and Guided setup stage 6
                   times out. Run its original setup again so your server issues its own. Center reconnects the Pin and
-                  opens its setup screen; follow it, then finish Guided setup stage 6 with the same four digits. The Pin
-                  keeps its passcode.
+                  opens its setup screen, which starts from the beginning as on a new Pin; follow it until it asks for your
+                  passcode, then finish Guided setup stage 6 with the same four digits. The Pin keeps its passcode.
                 </p>
                 <button
                   type="button"
