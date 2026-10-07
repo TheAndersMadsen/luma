@@ -319,23 +319,23 @@ test("release inputs pin the signed Pin archive and harden every image build", (
     path.join(root, "platform/distribution/pin-release-coordinates.json"),
     "utf8",
   ));
-  // Exact coordinates of the signed Pin bundle, built for Luma 0.3.28 and
-  // republished unchanged since; 0.3.30 is the release that now hosts it. Future
-  // server releases must preserve this verified bundle.
+  // Exact coordinates of the signed Pin bundle published with Luma 0.3.49.
+  // Future server releases must preserve this verified bundle until another
+  // complete signed Pin release replaces it.
   assert.deepEqual(pinCoordinates, {
     "schemaVersion": 3,
-    "version": "2026-09-30.3",
-    "versionCode": 202609303,
+    "version": "2026-10-07.1",
+    "versionCode": 202610071,
     "signedReleaseSource": {
       "repository": "TheAndersMadsen/luma",
-      "tag": "v0.3.30",
-      "archive": "luma-pin-2026-09-30.3.tar.gz",
-      "size": 22815615,
-      "sha256": "f4eed1446fd31502d70b052f881da6481111396bc4573dd5fa84c1c879141ae7",
-      "releaseId": "c7dd62678984a838178f61dc8f1fbf0bf6d5baefaf40937d6717d3275fdc38dc",
+      "tag": "v0.3.49",
+      "archive": "luma-pin-2026-10-07.1.tar.gz",
+      "size": 22816492,
+      "sha256": "d25bd3f9e6d7e6673f1d7d0e1336a099c69af8572c297eac2f28ca5ab0cafbd2",
+      "releaseId": "2fd2b9778cf3cad88b3853ae7a0f6d2ef8541470e8a691f4e31ce5b9dfe0c5ca",
       "signerSha256": "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb",
-      "manifestSha256": "9d258cffca5a7595f36cfaf7c0193c4a3b5afcb9a61072175ba91189374d9a68",
-      "receiptsSha256": "066e4743b5f4b887241555b8e08c127ff96cd7b09cf1fa7bf4dbe181e41da80d"
+      "manifestSha256": "670e222e7ae603eeb4834a054dfcc50105e6dac446fc8cc7651fcc7cdf611628",
+      "receiptsSha256": "60518edbb1206dd05a2ea803ab131b1cf4472e01dc610aaf5ce80fc599e9162d"
     }
   });
 
