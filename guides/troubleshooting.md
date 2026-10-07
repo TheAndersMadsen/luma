@@ -827,6 +827,28 @@ The Pin uploads the waiting video on its next retry.
 
 </details>
 
+<details>
+<summary>A photo stays on <b>pending upload</b>, and the Pin logs <code>KryptoKeyNotUploadedException</code></summary>
+
+First check that **Settings → Privacy & data → Standard data sync** is on. On
+an affected older Pin release, the stock Krypto app can then queue its privacy
+sync at boot without ever running it: its boot receiver initializes WorkManager
+in the app's main process, that process exits, and the later stock
+`SystemJobService` starts without a WorkManager instance. The edge sees repeated
+`RemoveKeys`, but no `GetConfiguration`, `GetSettings`, or `SyncKeys`; a capture
+fails locally before it can upload a key.
+
+Fix: update the server and the Pin apps to a release whose Pin version is
+2026-10-07.2 or later. The Compatibility Layer initializes Krypto's own stock
+WorkManager configuration in the job-service process, then leaves the stock
+sync worker and retry behavior in control. If the three calls do not appear at
+the edge within a minute of the update, power the Pin off and on normally once.
+Do not reset or repair the Pin, delete keys, clear app data, or disable SELinux.
+After the edge reports all three sync calls successfully, take one test photo;
+a previously pending capture can retry by itself.
+
+</details>
+
 ## Updates
 
 <details>

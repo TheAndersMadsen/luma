@@ -18,6 +18,7 @@ object KryptoHooks {
         Log.w(TAG, "Installing krypto hooks...")
 
         CosmosChannelRouting.install(cl)
+        KryptoWorkManagerHooks.install(cl)
 
         Log.w(TAG, "Krypto hooks installed")
     }
