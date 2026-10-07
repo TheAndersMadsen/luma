@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use super::device::{get_global_setting, getprop, DeviceVersionCollector};
+use super::device::{get_global_setting, DeviceVersionCollector};
 use super::{write_private_atomic, ApiState};
 
 pub(super) const MAX_REQUEST_BYTES: usize = 2 * 1024;
@@ -136,32 +136,39 @@ pub(super) async fn confirm_acceptance(
 }
 
 async fn current_identity() -> Result<CurrentIdentity, AcceptanceError> {
-    let serial = canonical_serial(
-        &getprop("ro.serialno")
-            .await
-            .ok_or(AcceptanceError::IdentityUnavailable)?,
-    )
-    .ok_or(AcceptanceError::IdentityUnavailable)?;
+    // INFERRED: the Android launcher resolves the immutable hardware serial,
+    // including Build.getSerial(), before starting this child. Shell getprop
+    // can exit successfully with empty output under the app's SELinux domain.
+    // Never use the acceptance request itself as evidence of device identity.
+    let serial = std::env::var("LUMA_DEVICE_SERIAL")
+        .ok()
+        .and_then(|value| canonical_serial(&value))
+        .ok_or_else(|| identity_unavailable("serial"))?;
     let versions = DeviceVersionCollector::collect().await;
     let release_version = versions
         .exact_runtime_release()
         .map(str::to_owned)
-        .ok_or(AcceptanceError::IdentityUnavailable)?;
+        .ok_or_else(|| identity_unavailable("runtime_release"))?;
     if get_global_setting(REMOTE_MODE_SETTING).await.as_deref() != Some("1") {
-        return Err(AcceptanceError::IdentityUnavailable);
+        return Err(identity_unavailable("remote_mode"));
     }
     let edge_ipv4 = canonical_ipv4(
         &get_global_setting(EDGE_IPV4_SETTING)
             .await
-            .ok_or(AcceptanceError::IdentityUnavailable)?,
+            .ok_or_else(|| identity_unavailable("edge_ipv4"))?,
     )
-    .ok_or(AcceptanceError::IdentityUnavailable)?;
+    .ok_or_else(|| identity_unavailable("edge_ipv4"))?;
 
     Ok(CurrentIdentity {
         device_serial: serial,
         release_version,
         edge_ipv4,
     })
+}
+
+fn identity_unavailable(check: &'static str) -> AcceptanceError {
+    tracing::warn!(check, "setup acceptance identity unavailable");
+    AcceptanceError::IdentityUnavailable
 }
 
 fn response(current: CurrentIdentity, record: Option<AcceptanceRecord>) -> AcceptanceResponse {
@@ -194,6 +201,7 @@ fn canonical_serial(value: &str) -> Option<String> {
     let value = value.trim().to_ascii_uppercase();
     (value.len() <= 128
         && !value.is_empty()
+        && !matches!(value.as_str(), "UNKNOWN" | "NULL")
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
@@ -310,6 +318,18 @@ mod tests {
             edge_ipv4: "203.0.113.9".into(),
             confirmed_at_epoch_ms: 1_788_000_000_000,
         }
+    }
+
+    #[test]
+    fn serial_handoff_rejects_android_sentinels_and_malformed_values() {
+        for value in ["", "unknown", "UNKNOWN", "null", "NULL", "PIN/123", "é123"] {
+            assert!(canonical_serial(value).is_none());
+        }
+        assert!(canonical_serial(&"X".repeat(129)).is_none());
+        assert_eq!(
+            canonical_serial(" pin_123-4 ").as_deref(),
+            Some("PIN_123-4")
+        );
     }
 
     #[test]

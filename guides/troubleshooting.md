@@ -1163,6 +1163,29 @@ the Pin has not received this server's credential yet: follow the next entry.
 </details>
 
 <details>
+<summary>Stage 7 returns <code>pin_identity_unavailable</code>, but voice and activation work</summary>
+
+Stage 7 checks identity inside Device Services, not the ADB shell. A successful
+`adb shell getprop ro.serialno` does not prove that the app can read that property.
+The 2026-09-30.3 Pin runtime uses that property directly; Android can deny it
+without the command returning an error. This is separate from server enrollment.
+
+The corrected runtime receives its serial from the Android launcher, using the
+same resolver as status reporting, including the `Build.getSerial()` fallback.
+It still refuses confirmation when identity is unavailable. Its log names the
+failed check (`serial`, `runtime_release`, `remote_mode`, or `edge_ipv4`) without
+printing identity values. These source changes require a new signed Pin release;
+updating only the server does not replace the installed runtime.
+
+Do not reset the Pin, disable SELinux, repeat enrollment, or delete capture keys
+to address this error. Send the maintainer the installed Pin release, failed
+check and a redacted log around one confirmation attempt. Microphone, speaker
+and gesture confirmation must still be performed on the physical Pin. Capture
+key-upload errors need their own evidence; this serial change does not repair them.
+
+</details>
+
+<details>
 <summary>The Pin is connected but every request fails, and the edge log shows <code>CERTIFICATE_VERIFY_FAILED</code></summary>
 
 Symptoms: the Pin answers "having trouble communicating with the server",

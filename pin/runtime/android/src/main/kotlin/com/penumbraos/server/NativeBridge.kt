@@ -37,6 +37,7 @@ object NativeBridge {
         )
             .directory(File(configPath).parentFile)
             .redirectErrorStream(true)
+        DeviceSerial.exportTo(processBuilder.environment(), DeviceSerial.read())
         val validatedEsimBridgeToken =
             EsimBridgeAuthentication.requireValidToken(esimBridgeToken)
         processBuilder.environment()[EsimBridgeAuthentication.TOKEN_ENVIRONMENT_VARIABLE] =

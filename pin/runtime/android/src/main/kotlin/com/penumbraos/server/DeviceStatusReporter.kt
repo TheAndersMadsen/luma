@@ -169,12 +169,7 @@ internal class DeviceStatusReporter(private val context: Context) {
     private fun unquote(value: String): String =
         value.removePrefix("\"").removeSuffix("\"").takeUnless { it == "<unknown ssid>" }.orEmpty()
 
-    private fun serialNumber(): String {
-        val property = readSystemProperty("ro.serialno")
-            .ifBlank { readSystemProperty("ro.boot.serialno") }
-        if (property.isNotBlank()) return property
-        return runCatching { Build.getSerial() }.getOrDefault("")
-    }
+    private fun serialNumber(): String = DeviceSerial.read().orEmpty()
 
     private fun configuredEndpoint(): String? {
         if (Settings.Global.getString(
