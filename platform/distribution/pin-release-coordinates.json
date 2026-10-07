@@ -1,16 +1,16 @@
 {
   "schemaVersion": 3,
-  "version": "2026-10-07.1",
-  "versionCode": 202610071,
+  "version": "2026-10-07.2",
+  "versionCode": 202610072,
   "signedReleaseSource": {
     "repository": "TheAndersMadsen/luma",
-    "tag": "v0.3.49",
-    "archive": "luma-pin-2026-10-07.1.tar.gz",
-    "size": 22816492,
-    "sha256": "d25bd3f9e6d7e6673f1d7d0e1336a099c69af8572c297eac2f28ca5ab0cafbd2",
-    "releaseId": "2fd2b9778cf3cad88b3853ae7a0f6d2ef8541470e8a691f4e31ce5b9dfe0c5ca",
+    "tag": "v0.3.50",
+    "archive": "luma-pin-2026-10-07.2.tar.gz",
+    "size": 22818114,
+    "sha256": "4b512c78f6518624002ab430eaa46130d0593333bc885b9c84c0be7831d992ff",
+    "releaseId": "8fa9c902f74a0c3c176e7901cecf6e6e26e4ee1a1d58d01cfd5b030cb5ba8ff0",
     "signerSha256": "d8a64e1c3a1afdc340c4b86feaacb88e2d81d66972afbd58e743b7c5b8d1cbdb",
-    "manifestSha256": "670e222e7ae603eeb4834a054dfcc50105e6dac446fc8cc7651fcc7cdf611628",
-    "receiptsSha256": "60518edbb1206dd05a2ea803ab131b1cf4472e01dc610aaf5ce80fc599e9162d"
+    "manifestSha256": "ba640d659a575eda871527da35231850b62efa9303343b8969fbe661135811fe",
+    "receiptsSha256": "32cc65343baa2c498ecf55b66329cf792105d0b4c2b8262e555a9fcf530557c1"
   }
 }
