@@ -28,6 +28,11 @@ search:
   # queries from the production VPS. English still returns Danish pages for a
   # Danish query, while keeping product names and current-events searches
   # relevant.
+  #
+  # This default only applies to searches that carry no language of their
+  # own. Every Cosmos request sets `language` explicitly from
+  # COSMOS_SEARXNG_LANGUAGE (`en` when unset), so this value is what a
+  # hand-typed query against this instance would use, not what the Pin gets.
   default_lang: en
   safe_search: 1
 

@@ -193,6 +193,10 @@ test("core production validation rejects malformed endpoints, database URLs, and
       ["COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "256MiB", /whole number of bytes/],
       ["COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "1048575", /whole number of bytes/],
       ["COSMOS_CAPTURE_MAX_UPLOAD_BYTES", "1073741825", /whole number of bytes/],
+      ["COSMOS_SEARXNG_LANGUAGE", "en_US", /SearXNG language tag/],
+      ["COSMOS_SEARXNG_LANGUAGE", "american", /SearXNG language tag/],
+      ["COSMOS_SEARXNG_LANGUAGE", "all", /SearXNG language tag/],
+      ["COSMOS_SEARXNG_LANGUAGE", "e", /SearXNG language tag/],
     ]) {
       fs.writeFileSync(env.LUMA_ENV_FILE, setValue(valid, name, value));
       const rejected = invoke(env, ["doctor", "production"]);
@@ -219,6 +223,13 @@ test("core production validation rejects malformed endpoints, database URLs, and
     );
     const acceptedUploadLimit = validateProduction(env);
     assert.equal(acceptedUploadLimit.status, 0, acceptedUploadLimit.stderr);
+
+    fs.writeFileSync(
+      env.LUMA_ENV_FILE,
+      setValue(valid, "COSMOS_SEARXNG_LANGUAGE", "en-US"),
+    );
+    const acceptedSearxngLanguage = validateProduction(env);
+    assert.equal(acceptedSearxngLanguage.status, 0, acceptedSearxngLanguage.stderr);
 
     for (const acceptedDatabaseUrl of [
       databaseUrl.replace("@postgres:5432/", "@postgres/"),

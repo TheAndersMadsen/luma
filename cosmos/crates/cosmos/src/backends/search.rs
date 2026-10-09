@@ -19,6 +19,10 @@ use serde::{Deserialize, de::DeserializeOwned};
 use super::{BackendError, http, key, refused};
 
 pub(crate) const SEARXNG_BASE_URL_VAR: &str = "COSMOS_SEARXNG_BASE_URL";
+/// The deployment's search language and market, e.g. `en-US` for United States
+/// news. Empty or unset keeps [`DEFAULT_SEARXNG_LANGUAGE`].
+pub(crate) const SEARXNG_LANGUAGE_VAR: &str = "COSMOS_SEARXNG_LANGUAGE";
+const DEFAULT_SEARXNG_LANGUAGE: &str = "en";
 const SERPAPI_KEY_VAR: &str = "COSMOS_SERPAPI_KEY";
 const SERPAPI_BASE_URL: &str = "https://serpapi.com/search.json";
 /// The broad-web engines `cosmos/search/settings.yml` enables. From a
@@ -342,12 +346,25 @@ fn searxng_url(base_url: &str, query: &str) -> Result<reqwest::Url, BackendError
         // SearXNG's `all` value is not a neutral market for every engine. The
         // production Bing adapter mapped it to unrelated locales, returning
         // Polish/Italian results for both English product names and Danish
-        // questions. `en` preserves correct English ranking and still returns
-        // Danish sources when the query itself is Danish.
-        .append_pair("language", "en")
+        // questions. The default `en` preserves correct English ranking and
+        // still returns Danish sources when the query itself is Danish. A
+        // deployment that wants a market — United States news, say — sets
+        // COSMOS_SEARXNG_LANGUAGE, which decides every request here; this
+        // parameter, not the settings.yml `default_lang`, is what Cosmos sends.
+        .append_pair("language", &searxng_language())
         .append_pair("safesearch", "1")
         .append_pair("pageno", "1");
     Ok(base)
+}
+
+/// The language this deployment's SearXNG requests carry: the configured
+/// [`SEARXNG_LANGUAGE_VAR`] when it is a valid tag, else
+/// [`DEFAULT_SEARXNG_LANGUAGE`]. A malformed value falls back rather than
+/// degrading every search; `./luma config check` rejects it at the source.
+fn searxng_language() -> String {
+    key(SEARXNG_LANGUAGE_VAR)
+        .filter(|value| crate::integrations::valid_searxng_language(value))
+        .unwrap_or_else(|| DEFAULT_SEARXNG_LANGUAGE.to_owned())
 }
 
 async fn bounded_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, BackendError> {

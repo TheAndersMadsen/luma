@@ -156,6 +156,7 @@ impl AssistantConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct SearchConfig {
     pub searxng_base_url: Option<String>,
+    pub searxng_language: Option<String>,
     pub serpapi_key: Option<String>,
     pub perplexity_api_key: Option<String>,
     pub perplexity_model: Option<String>,
@@ -323,6 +324,7 @@ impl IntegrationsConfig {
             .unwrap_or(512);
 
         config.search.searxng_base_url = value_from_environment("COSMOS_SEARXNG_BASE_URL");
+        config.search.searxng_language = value_from_environment("COSMOS_SEARXNG_LANGUAGE");
         config.search.serpapi_key = value_from_environment("COSMOS_SERPAPI_KEY");
         config.search.perplexity_api_key = value_from_environment("COSMOS_PPLX_API_KEY");
         config.search.perplexity_model = value_from_environment("COSMOS_PPLX_MODEL");
@@ -377,6 +379,7 @@ pub struct AssistantUpdate {
 #[serde(default, deny_unknown_fields)]
 pub struct SearchUpdate {
     pub searxng_base_url: Option<String>,
+    pub searxng_language: Option<String>,
     pub serpapi_key: Option<String>,
     pub perplexity_api_key: Option<String>,
     pub perplexity_model: Option<String>,
@@ -597,6 +600,7 @@ impl IntegrationStore {
             "COSMOS_LLM_REASONING_EFFORT" => config.assistant.reasoning_effort.clone(),
             "COSMOS_LLM_MAX_TOKENS" => Some(config.assistant.max_tokens.to_string()),
             "COSMOS_SEARXNG_BASE_URL" => config.search.searxng_base_url.clone(),
+            "COSMOS_SEARXNG_LANGUAGE" => config.search.searxng_language.clone(),
             "COSMOS_SERPAPI_KEY" => config.search.serpapi_key.clone(),
             "COSMOS_PPLX_API_KEY" => config.search.perplexity_api_key.clone(),
             "COSMOS_PPLX_MODEL" => config.search.perplexity_model.clone(),
@@ -730,6 +734,7 @@ fn apply_update(
     }
     if let Some(update) = update.search {
         update_secret(&mut config.search.searxng_base_url, update.searxng_base_url);
+        update_secret(&mut config.search.searxng_language, update.searxng_language);
         update_secret(&mut config.search.serpapi_key, update.serpapi_key);
         update_secret(
             &mut config.search.perplexity_api_key,
@@ -810,6 +815,7 @@ fn normalize(config: &mut IntegrationsConfig) {
     for value in [
         &mut config.assistant.api_key,
         &mut config.search.searxng_base_url,
+        &mut config.search.searxng_language,
         &mut config.search.serpapi_key,
         &mut config.search.perplexity_api_key,
         &mut config.search.perplexity_model,
@@ -859,6 +865,11 @@ fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
     }
     if let Some(url) = config.search.searxng_base_url.as_deref() {
         validate_url(url, "SearxNG URL is invalid")?;
+    }
+    if let Some(language) = config.search.searxng_language.as_deref()
+        && !valid_searxng_language(language)
+    {
+        return Err(IntegrationError::Invalid("SearXNG language is invalid"));
     }
     for secret in [
         config.search.serpapi_key.as_deref(),
@@ -983,6 +994,29 @@ fn os3_cookie_digest(cookie: &str) -> String {
             .chain_update(cookie.as_bytes())
             .finalize()
     )
+}
+
+/// Whether `value` is a language tag SearXNG accepts for the `language`
+/// request parameter and engines understand: a base tag (`en`, `da`) or a
+/// base plus region/script parts (`en-US`, `zh-Hans-CN`). The deliberate
+/// omission of `all` matches the settings.yml warning: engines map it to
+/// arbitrary markets, which is the exact drift this setting exists to correct.
+pub(crate) fn valid_searxng_language(value: &str) -> bool {
+    // `all` is shape-valid but not a language: engines map it to arbitrary
+    // markets, which is the exact drift this setting exists to correct.
+    if value == "all" {
+        return false;
+    }
+    let mut parts = value.split('-');
+    let base = parts.next().unwrap_or_default();
+    let base_ok =
+        (2..=3).contains(&base.len()) && base.bytes().all(|byte| byte.is_ascii_lowercase());
+    if !base_ok {
+        return false;
+    }
+    parts.all(|part| {
+        (2..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
 }
 
 fn optional(value: &str) -> Option<String> {

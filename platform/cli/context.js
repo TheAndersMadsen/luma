@@ -631,6 +631,16 @@ function requireOptionalByteCount(values, name, problems, minimum, maximum) {
   }
 }
 
+// Unset keeps Cosmos's `en` default. `all` is refused on purpose: engines map
+// it to arbitrary markets, which is the drift this setting exists to correct
+// (integrations.rs valid_searxng_language).
+function requireOptionalSearxngLanguage(values, name, problems) {
+  const value = values[name] || '';
+  if (value && (value === 'all' || !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(value))) {
+    problems.push(`${name} must be a SearXNG language tag such as en or en-US`);
+  }
+}
+
 function requireProductionPassword(values, source, name, problems) {
   const value = values[name] || '';
   if (!/^[A-Za-z0-9_-]{32,}$/.test(value) ||
@@ -901,6 +911,7 @@ function validateRuntime({ production = false, envFile = ENV_FILE } = {}) {
   }
 
   requireOptionalByteCount(values, 'COSMOS_CAPTURE_MAX_UPLOAD_BYTES', problems, 1048576, 1073741824);
+  requireOptionalSearxngLanguage(values, 'COSMOS_SEARXNG_LANGUAGE', problems);
   requireValue(values, 'AUTH_SESSION_SECRET', problems, 32);
   requireValue(values, 'COSMOS_SHARE_TOKEN_SECRET', problems, 32);
   requireValue(values, 'COSMOS_EDGE_TOKEN', problems, 32);

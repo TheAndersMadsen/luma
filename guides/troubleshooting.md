@@ -828,6 +828,25 @@ The Pin uploads the waiting video on its next retry.
 </details>
 
 <details>
+<summary>News answers come from the wrong region (India, Southeast Asia).</summary>
+
+Cause: search runs on your server's private SearXNG, and without a region the
+engines pick their own market from the datacenter's point of view. Cosmos asks
+for plain English (`en`), which is any English-speaking region.
+
+Fix: set your market and deploy. Any SearXNG language tag works — `en-US`,
+`en-GB`, `da-DK`:
+
+```sh
+./luma config set COSMOS_SEARXNG_LANGUAGE en-US
+./luma deploy production --confirm
+```
+
+Ask a news question again; the answers should name your region's outlets.
+
+</details>
+
+<details>
 <summary>A photo stays on <b>pending upload</b>, and the Pin logs <code>KryptoKeyNotUploadedException</code></summary>
 
 First check that **Settings → Privacy & data → Standard data sync** is on. On
