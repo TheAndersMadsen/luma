@@ -70,3 +70,10 @@ out/
 # JVM crash logs (hs_err_pid*.log) from a host JDK that failed to start.
 hs_err_pid*.log
 replay_pid*.log
+
+# Local source-control workspaces and Python runtime output.
+.luma-scm.json
+.luma-scm-pending.json
+.scion/
+__pycache__/
+*.pyc

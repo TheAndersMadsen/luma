@@ -454,7 +454,7 @@ test("CI covers documentation and can run manually or gate a release at the same
   assert.match(ci, /group: ci-\$\{\{ github\.workflow \}\}-/u);
   const jobs = [...ci.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gmu)]
     .filter(([, , body]) => body.includes("runs-on:"));
-  assert.equal(jobs.length, 6);
+  assert.equal(jobs.length, 7);
   for (const [, name, body] of jobs) {
     assert.match(body, /timeout-minutes: [1-9][0-9]*/u, name);
   }
@@ -467,7 +467,7 @@ test("the final CI gate rejects every failed, cancelled, or skipped component", 
   const ci = fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
   const job = ci.slice(ci.indexOf("\n  complete:\n"));
   assert.match(job, /if: \$\{\{ always\(\) \}\}/u);
-  assert.match(job, /needs: \[platform, center, cosmos, pin-runtime, pin-builder-linux-amd64\]/u);
+  assert.match(job, /needs: \[platform, center, cosmos, pin-runtime, pin-builder-linux-amd64, source-control\]/u);
   assert.match(job, /CHECK_RESULTS: \$\{\{ toJSON\(needs\) \}\}/u);
   const script = /        run: \|\n((?:          .*\n)+)/u.exec(job)?.[1].replace(/^          /gmu, "");
   assert.ok(script, "the final gate is executable");

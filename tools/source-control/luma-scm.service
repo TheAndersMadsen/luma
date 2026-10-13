@@ -1,0 +1,22 @@
+[Unit]
+Description=Luma source control and GitHub synchronization
+After=default.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/dev/luma-scm
+Environment=PATH=/home/anders/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/usr/bin/mountpoint -q /srv/dev
+ExecStartPre=/usr/bin/mountpoint -q /srv/state
+ExecStart=/usr/bin/python3 /srv/dev/luma-scm/server.py --state /srv/state/luma-scm --port 8100 --github-repo TheAndersMadsen/luma --sync-interval 30
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=210
+UMask=0077
+LimitNOFILE=4096
+MemoryMax=2G
+
+[Install]
+WantedBy=default.target

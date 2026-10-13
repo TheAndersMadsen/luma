@@ -13,6 +13,7 @@ how-to guides walk through one task.
 - [Configure services in Center](services.md)
 - [Run your server](operations.md)
 - [For developers](developers.md)
+- [Source control and Scion agents](source-control.md)
 - [Connect a Pin: Linux USB and ADB checks](connect-a-pin.md)
 - [Troubleshooting](troubleshooting.md)
 - [Questions](faq.md)

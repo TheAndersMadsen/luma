@@ -510,3 +510,9 @@ boot, and `follow` waits for the next one. Ctrl-C stops it.
 The upstream copy under `pin/ghostlock/` stays pristine. Its
 [UPSTREAM.md](../pin/ghostlock/UPSTREAM.md) records the original project's
 identity, the exact vendored commit, and how to refresh it.
+
+## Source control and Scion agents
+
+The optional [source-control service and Scion workflow](source-control.md) runs
+on m1box, publishes normal GitHub PRs, and imports merged changes. Existing Git
+and GitHub contributor workflows continue to work.
