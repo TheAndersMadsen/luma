@@ -66,15 +66,23 @@ the existing GitHub PR. `luma-scm land` then requests its CI-gated merge.
 ```sh
 luma-scm agent start docs-review \
   "Review docs/source-control.md for unclear instructions and improve them. Keep the change small." \
-  --prefix docs/ --prefix AGENTS.md --wait
+  --wait
 luma-scm agent status docs-review
 ```
 
-`--wait` waits for task completion, stops the agent and submits its edits to the
-source-control service. Publication then continues in the background. Add
-`--auto-merge` when starting a task to request CI-gated landing. Use a unique name
-for each task. The model defaults to the working host Codex configuration; an
-explicit `--model` overrides it.
+Each agent works in its own full checkout of main; `--prefix` narrows it, but
+most `./luma` checks need the whole tree. `--wait` waits until the agent reports
+completion, stops it and submits its edits to the source-control service.
+Publication then continues in the background. Add `--auto-merge` to request
+CI-gated landing. A name identifies the job, its work ref `work/NAME` and its
+branch `scion/NAME`, so give each task a new name. To continue an earlier
+agent's unlanded work, start the new job with `--at work/NAME`.
+
+Agents run Claude Code with `claude-opus-5-5`. `--harness codex` or
+`--harness opencode` picks another of the owner's accounts, and
+`LUMA_SCION_HARNESS` changes the default. Codex uses the model in the host's
+`~/.codex/config.toml` and OpenCode the one in
+`~/.config/opencode/opencode.json`; `--model` overrides either.
 
 For a task started without waiting, or after disconnecting:
 
@@ -82,17 +90,32 @@ For a task started without waiting, or after disconnecting:
 luma-scm agent wait docs-review
 luma-scm agent submit docs-review
 luma-scm agent stop docs-review
+luma-scm agent delete docs-review
 ```
 
-Wait/submit are restartable. Submission collects a stopped agent's source from
-its recorded workspace and uses a persistent request ID. The trusted base and
-publication metadata stay on the host outside the agent's mount. The agent gets
-its inference credential through Scion; the host keeps GitHub and source-control
-credentials out of the agent container.
+`wait` returns early when the agent needs a person: it waits for input, is
+blocked, crashed, went offline or exceeded its limits. Inspect it, then submit
+or stop it. Wait and submit are restartable. Submission collects a stopped
+agent's source from its recorded workspace and uses a persistent request ID.
+The trusted base and publication metadata stay on the host outside the agent's
+mount. An agent that changed nothing ends as `no_changes`.
 
-Agent status includes the project directory. To inspect an agent interactively,
-change to that directory and run `scion attach docs-review`; detach with Ctrl-B,
-then D. The Scion dashboard is available through a Mac SSH tunnel:
+The agent's hand-off, `/workspace/HANDOFF.md`, becomes the pull request: its
+first line, a `# ` heading, is the title and the rest the description, above a
+footer naming the job, harness, model and base. `--message` on `start` or
+`submit` sets the title instead. Publication is public, so submission refuses
+a hand-off or changed file that contains decompiler output or a credential and
+marks the job `refused`; fix the workspace and submit again.
+
+`delete` removes the Scion agent, the job's Hub project and its folder,
+including several gigabytes of build state. It refuses unsubmitted work unless
+you pass `--force`. The work ref and the GitHub branch stay. Delete a job once
+its pull request has landed or closed.
+
+To watch an agent, `scion attach docs-review` in the job's project directory
+(`agent status` shows it) opens its terminal; detach with Ctrl-B, then D. The
+Scion dashboard shows every job as a project named `luma-NAME`. It is available
+through a Mac SSH tunnel:
 
 ```sh
 ssh -N -L 18080:127.0.0.1:8080 m1box
@@ -101,7 +124,8 @@ ssh -N -L 18080:127.0.0.1:8080 m1box
 Open `http://localhost:18080` and choose **Continue with GitHub**. The configured
 owner is `TheAndersMadsen`. Keep the tunnel running while using the dashboard;
 the OAuth callback is registered for this exact hostname and port. The dashboard
-operates agents; `luma-scm` operates source history, workspaces and publication.
+operates agents; `luma-scm` operates source history, workspaces and publication,
+so start Luma agents with `luma-scm agent start`.
 
 The dashboard requires GitHub authentication, uses invite-only access, and has
 development auto-login disabled. Anonymous requests to protected APIs receive
@@ -118,8 +142,95 @@ in the browser. A web login and a CLI login are separate sessions. The dashboard
 service starts automatically; inspect it with `systemctl --user status
 scion.service` and restart it after configuration changes with `systemctl --user
 restart scion.service`. OAuth credentials live in
-`/srv/state/scion/dashboard.env` with mode 600. The owner's inference credential
-is stored separately as the Scion user secret `CODEX_AUTH`.
+`/srv/state/scion/dashboard.env` with mode 600.
+
+### Agent environment
+
+Agents start from the `luma` Scion template in `tools/scion/templates/luma/`. It
+points them at the repository's AGENTS.md, describes the container and the
+hand-off, and adds two skills: `luma-checks`, the checks that run in the
+container, and `luma-stock-reference`. A template cannot set an image, mounts
+or limits, so `luma-scm agent start` supplies them:
+
+- The image `luma.invalid/agent-HARNESS:current`: the Scion harness image plus
+  Luma's pinned Bun, pnpm and Rust from
+  `platform/containers/pin-builder/toolchain.json`, protoc and, for Claude, a
+  current Claude Code. The agent runs without sudo. The reserved `.invalid`
+  domain keeps Scion and Docker from ever pulling that name.
+- The job folder `~/.local/state/luma-scm/agents/NAME`. Only its
+  `luma-NAME/workspace` is mounted, at `/workspace`: `source` is the checkout,
+  `state` the agent's `LUMA_DATA_DIR`, `cache` its Cargo, pnpm and Bun state,
+  and `HANDOFF.md` the hand-off. No agent sees another job.
+- The stock reference from `/srv/dev/luma-stock-reference`, read-only at
+  `$LUMA_DATA_DIR/stock-reference`, so `./luma pin doctor` finds it and the
+  evidence-bound tests run against it. When the host has none, agents start
+  without it and follow AGENTS.md.
+- Six CPUs and 12 GiB of memory, and at most four hours per task (the
+  template's `max_duration`).
+
+In the container, `./luma check center`, `check platform` (`--full` after
+`pnpm install --frozen-lockfile --prod=false`) and `check changed --base HEAD`
+run as they do on a laptop. The Cosmos and Pin lanes need Docker, which agents
+never get, so agents run those lanes' Cargo and Bun steps directly. The
+Postgres-backed Cosmos tests and the Pin apps' JVM tests run only in CI, which
+gates every landing.
+
+Agents should use Docker's bridge network: there they reach the internet and,
+through `scion-agent-gateway.service` on the Docker bridge address, the Scion
+Hub, but none of m1box's loopback services. m1box's firewall drops what
+containers send to host ports, so until the owner allows the gateway port
+(`sudo ufw allow in proto tcp from 172.16.0.0/12 to 172.17.0.1 port 8080`,
+then run the installer again) the installer keeps Scion's loopback Hub
+endpoint, which puts agents on the host network.
+
+### Agent host
+
+`tools/scion/install` sets up the agent host and is safe to repeat. Run it on
+m1box from an up-to-date checkout:
+
+```sh
+ssh m1box
+luma-scm checkout /srv/dev/luma-main --at main   # later: cd /srv/dev/luma-main && luma-scm update
+cd /srv/dev/luma-main
+tools/scion/install
+```
+
+It builds the agent images; installs and syncs the `luma` template; runs the Hub
+forwarder for the Docker bridge and points Scion's `server.hub.agent_endpoint`
+at it once a container can reach it; makes `luma` and `claude` Scion's default template and harness and turns
+off new projects' scratchpads, which would live on `/srv/state`; links
+`~/.local/state/luma-scm` to `/data/luma-agents`, where job folders and their
+build state live; and copies `tools/source-control` to `/srv/dev/luma-scm`,
+restarting the service when its server modules changed. Run it again after
+changing the template, the image or the toolchain, and to pick up a newer
+Claude Code. `--harness` builds only the named images.
+
+Docker keeps images on the root file system of m1box, which has little room;
+the installer refuses to pull or build without enough of it. Each agent image
+adds about 1.6 GB to its harness image.
+
+Each harness signs in with one of the owner's accounts through a Scion user
+secret: Claude Code with `CLAUDE_CODE_OAUTH_TOKEN`, Codex with `CODEX_AUTH`
+(its `auth.json`) and OpenCode with `OPENCODE_AUTH` (its `auth.json`). Storing
+or replacing one is an owner step. Claude agents take a token that
+`claude setup-token` issues for this purpose. A copy of an interactive Claude
+login does not work in a container, and refreshing it would sign the owner's
+own Claude Code out. To store the token on m1box without it reaching argv or
+shell history:
+
+```sh
+claude setup-token          # on the Mac; prints the token after the browser sign-in
+ssh m1box
+read -rs TOKEN && (umask 077; printf %s "$TOKEN" > ~/.claude-agent-token) && unset TOKEN
+scion --global hub secret set --type environment --target CLAUDE_CODE_OAUTH_TOKEN \
+  CLAUDE_CODE_OAUTH_TOKEN @$HOME/.claude-agent-token
+shred -u ~/.claude-agent-token
+```
+
+`luma-scm agent start` refuses a harness whose secret is missing. To provide
+or refresh the stock reference, the owner copies it from a machine that has
+one, for example `rsync -a ~/.local/share/luma/stock-reference/
+m1box:/srv/dev/luma-stock-reference/` from the Mac.
 
 ## Service and recovery
 
