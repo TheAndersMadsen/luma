@@ -40,18 +40,19 @@ command in your hand-off, and finish.
 
 Before you finish, write `/workspace/HANDOFF.md`:
 
-    # One-line pull request title in the imperative
+    # Remove the dead .luma-scm-pending.json ignore rule
 
     What changed and why, for a reviewer who has not read your task.
     The stock evidence behind it (class and method), or what is INFERRED.
     Each check you ran and its result, and what only CI covers.
     Owner steps, if any.
 
-The first line becomes the pull request title and the rest its description.
-The host refuses to publish a hand-off or file that contains decompiled stock
-code or a credential.
+The first line is the pull request title: a short imperative sentence about
+the change, as in the example, without a prefix such as "Hand-off:". The rest
+becomes its description. The host refuses to publish a hand-off or file that
+contains decompiled stock code or a credential.
 
-Then report completion:
+Then report completion. This is your last command, and the host waits for it:
 
     sciontool status task_completed "One-line summary"
 

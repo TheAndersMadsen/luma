@@ -59,8 +59,11 @@ real task per supported harness on m1box proves the image and template.
 - Hand-off: the agent's hand-off becomes the PR body above a host-written
   footer naming the job, harness, model and base. It cannot choose the branch,
   base or landing request. A missing hand-off still publishes, with the footer.
-- Lifecycle: a stalled, blocked, errored or input-waiting agent ends a wait
-  with an attention message instead of consuming the timeout. An agent missing
+- Lifecycle: a blocked, errored or input-waiting agent ends a wait with an
+  attention message instead of consuming the timeout. So does one that wrote
+  its hand-off and then went quiet without reporting completion, which
+  harnesses other than Codex leave to the agent; a quiet agent without a
+  hand-off may still be building and keeps the wait going. An agent missing
   from `scion list` is gone, so its source can still be submitted. `stop`
   after a submission keeps the job submitted. An agent that changed nothing
   ends as `no_changes`, not a failed submission. Listing every job reports a

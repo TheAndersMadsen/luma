@@ -55,17 +55,22 @@ elif args[0] == 'start':
     assert not pathlib.Path(flag('--config')).is_relative_to(root)
     task = sys.stdin.read()
     assert '/workspace/source' in task and '/workspace/HANDOFF.md' in task
+    assert 'sciontool status task_completed' in task
     source, activity = workspace / 'source', 'completed'
     if 'WAIT_FOREVER' in task:
         activity = 'working'
     elif 'NEEDS_INPUT' in task:
         activity = 'waiting_for_input'
+    elif 'BUSY_BUILD' in task:
+        activity = 'stalled'
     elif 'NO_CHANGES' not in task:
         (source / 'docs/readme.txt').write_text('Edited by subprocess Scion agent\\n')
         (source / '.luma-scm.json').write_text(json.dumps({'base': 'attacker-base', 'endpoint': 'http://bad.invalid'}))
         (source / 'node_modules/pkg').mkdir(parents=True)
         (source / 'node_modules/pkg/index.js').write_text('build output\\n')
         (workspace / 'HANDOFF.md').write_text('# Clarify the readme\\n\\nRewrote docs/readme.txt.\\n\\nChecks: none needed.\\n')
+    if 'IDLE_HANDOFF' in task:
+        activity = 'stalled'
     if 'STOCK_CODE' in task:
         (source / 'docs/stock.java').write_text('/* loaded ' 'from: classes.dex */\\nclass Switchboard {}\\n')
     if 'CREDENTIAL' in task:
@@ -241,8 +246,14 @@ class AgentsE2E(unittest.TestCase):
                          {'asking': False, 'broken': True, 'waiting': False})
         self.start('../escape', 'No traversal', success=False)
         self.assertTrue(self.run_agent('delete', 'waiting', '--force')['deleted'])
+        idle = self.start('idle-handoff', 'Edit docs IDLE_HANDOFF', '--wait', '--timeout', '20')
+        self.assertIn('went quiet after writing its hand-off', idle['waiting'])
+        busy = self.start('busy-build', 'BUSY_BUILD', '--wait', '--timeout', '1')
+        self.assertIn('timed out', busy['waiting'])
+        self.assertEqual(len(self.store.publications()), 0)
         print(json.dumps({'evidence': 'agent-timeout-attention-stop', 'sourceRetained': True,
-                          'publicationWhileRunning': False, 'brokenJobListed': True}))
+                          'publicationWhileRunning': False, 'brokenJobListed': True,
+                          'quietWithHandoffReported': True, 'quietWithoutHandoffWaited': True}))
 
     def test_publication_guards_and_no_change_agents(self):
         self.start('stock', 'Edit docs STOCK_CODE')
