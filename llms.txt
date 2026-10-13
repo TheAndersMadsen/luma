@@ -25,6 +25,7 @@ interoperability identifiers.
 - [Configure services](docs/services.md): assistant, speech, search, maps, music, OS3
 - [Run your server](docs/operations.md): update, back up, restore, sessions, Traefik
 - [For developers](docs/developers.md): configuration, stock reference, builds, releases
+- [Source control and Scion agents](docs/source-control.md): sparse workspaces, GitHub publication, agent tasks and recovery
 - [Connect a Pin (USB/ADB)](docs/connect-a-pin.md): Linux permissions and ADB checks
 - [Troubleshooting](docs/troubleshooting.md): symptoms, causes, fixes
 

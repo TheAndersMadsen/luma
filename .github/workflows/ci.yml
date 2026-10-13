@@ -332,10 +332,33 @@ jobs:
           path: ${{ runner.temp }}/pin-builder-data/build/pin-builder-cache
           key: pin-builder-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('platform/containers/pin-builder/Dockerfile', 'platform/containers/pin-builder/entrypoint.sh', 'pin/gradle/wrapper/gradle-wrapper.properties', 'pin/device-installer/gradle/wrapper/gradle-wrapper.properties', 'pin/**/*.gradle', 'pin/**/*.gradle.kts', 'pin/**/Cargo.lock') }}
 
+  source-control:
+    name: source-control workflow and recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Exercise source control, GitHub bridge and agent adapter
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/source-control -p 'test*_e2e.py' -v 2>&1 | tee "$RUNNER_TEMP/luma-scm-e2e.log"
+      - name: Keep workflow and recovery evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: source-control-evidence
+          path: ${{ runner.temp }}/luma-scm-e2e.log
+          if-no-files-found: error
+          retention-days: 7
+
   complete:
     name: CI passed
     if: ${{ always() }}
-    needs: [platform, center, cosmos, pin-runtime, pin-builder-linux-amd64]
+    needs: [platform, center, cosmos, pin-runtime, pin-builder-linux-amd64, source-control]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
