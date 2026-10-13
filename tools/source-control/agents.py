@@ -50,9 +50,10 @@ ATTENTION = {'waiting_for_input', 'blocked', 'limits_exceeded', 'crashed', 'offl
 HANDOFF_BYTES = 60_000
 PROMPT = ('You are a Luma agent. Your checkout is /workspace/source: change into it and read its AGENTS.md '
           'before you work. Edit files only there; never commit, push, or change Git configuration or remotes. '
-          'Before you finish, write your hand-off to /workspace/HANDOFF.md and report completion as your '
-          'instructions describe. The host publishes your edits as a GitHub pull request, and Luma CI decides '
-          'whether it lands.\n\nTask:\n')
+          'When you are done, write your hand-off to /workspace/HANDOFF.md as your instructions describe, then '
+          'run `sciontool status task_completed "<one-line summary>"` as your last command; if you cannot '
+          'finish, run `sciontool status blocked "<reason>"` instead. The host publishes your edits as a GitHub '
+          'pull request, and Luma CI decides whether it lands.\n\nTask:\n')
 # Publication is public. Decompiler output (AGENTS.md "Stock reference") and
 # credential material never leave the host.
 # The literals are split so this file never matches its own pattern.
@@ -542,6 +543,10 @@ def wait(args, endpoint, token):
         if runtime.get('phase') in {'error', 'stopped', 'suspended', 'deleted'} or runtime.get('activity') in ATTENTION:
             return dict(job, waiting='Agent needs attention (' + str(runtime.get('activity') or runtime.get('phase')) +
                         '); inspect it with scion look, then submit or stop it')
+        # Only Codex reports completion by itself; an agent that went quiet after
+        # writing its hand-off has most likely finished without saying so.
+        if runtime.get('activity') == 'stalled' and (Path(job['workspace']) / 'HANDOFF.md').exists():
+            return dict(job, waiting='Agent went quiet after writing its hand-off; review it, then run agent submit')
         if time.monotonic() >= deadline:
             return dict(job, waiting='Wait timed out; job continues. Use agent wait or agent submit later')
         time.sleep(min(3, max(0, deadline - time.monotonic())))
