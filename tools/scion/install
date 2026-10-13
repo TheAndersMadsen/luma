@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""Set up the agent host for Luma's Scion agents. Safe to run again.
+
+Run on the agent host (m1box) from a Luma checkout, after `luma-scm update`:
+
+    tools/scion/install
+
+It builds the agent images, installs the `luma` template, puts agents on
+Docker's bridge network, prepares the job directory on bulk storage, and
+deploys the source-control client and service. docs/source-control.md
+"Agent host" explains each step.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+REPO = Path(__file__).resolve().parents[2]
+SCION_HOME = Path.home() / '.scion'
+HARNESSES = ('claude', 'codex', 'opencode')
+IMAGE_INPUTS = ('tools/scion/agent.Dockerfile', 'platform/setup/install-pnpm.mjs',
+                'platform/containers/pin-builder/toolchain.json')
+GATEWAY_UNIT = Path.home() / '.config/systemd/user/scion-agent-gateway.service'
+SERVER_MODULES = ('server.py', 'core.py', 'bridge.py')
+# Space a harness base image, and Luma's toolchain layer with the build's
+# temporary stages, take in Docker's image store.
+PULL_HEADROOM = 6 * 2**30
+BUILD_HEADROOM = 4 * 2**30
+
+
+def report(step, **values):
+    print(json.dumps({'step': step, **values}), flush=True)
+
+
+def run(*command, capture=True, check=True, data=None, cwd=None):
+    result = subprocess.run(command, text=True, input=data, cwd=cwd,
+                            capture_output=capture, check=False)
+    if check and result.returncode:
+        detail = (result.stderr or result.stdout or '').strip().splitlines()[-1:] if capture else []
+        raise SystemExit(' '.join(command[:4]) + ' failed (exit ' + str(result.returncode) + ')' +
+                         (': ' + detail[0] if detail else ''))
+    return result.stdout.strip() if capture else ''
+
+
+def toolchain_images():
+    tools = json.loads((REPO / 'platform/containers/pin-builder/toolchain.json').read_text())['toolchain']
+    return {name: tools[name]['image'] + '@' + tools[name]['imageIndexDigest'] for name in ('rust', 'bun')}
+
+
+def settings():
+    import yaml
+    return yaml.safe_load((SCION_HOME / 'settings.yaml').read_text()) or {}
+
+
+def image_store_free():
+    # Docker's containerd image store keeps layers outside Docker's data root.
+    for path in ('/var/lib/containerd', run('docker', 'info', '--format', '{{.DockerRootDir}}')):
+        if Path(path).exists():
+            return shutil.disk_usage(path).free
+    return 0
+
+
+def require_space(needed, purpose):
+    free = image_store_free()
+    if free < needed:
+        raise SystemExit('Only ' + str(free // 2**30) + ' GiB is free for Docker images; ' + purpose + ' needs ' +
+                         str(needed // 2**30) + ' GiB (docs/source-control.md "Agent host")')
+
+
+def present(image):
+    return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True).returncode == 0
+
+
+def build_images(registry, harnesses):
+    pins = toolchain_images()
+    for harness in harnesses:
+        base = registry.rstrip('/') + '/scion-' + harness + ':latest'
+        if not present(base):
+            require_space(PULL_HEADROOM, 'pulling ' + base)
+        run('docker', 'pull', '--quiet', base)
+        claude = ''
+        if harness == 'claude':
+            # Claude Code's stable channel, so the harness accepts current models.
+            claude = run('docker', 'run', '--rm', '--entrypoint', 'npm', base,
+                         'view', '@anthropic-ai/claude-code@stable', 'version')
+        digest = hashlib.sha256()
+        for name in IMAGE_INPUTS:
+            digest.update((REPO / name).read_bytes())
+        digest.update('\0'.join([run('docker', 'image', 'inspect', '--format', '{{.Id}}', base),
+                                 pins['rust'], pins['bun'], claude]).encode())
+        image = 'luma.invalid/agent-' + harness
+        tag = image + ':' + digest.hexdigest()[:12]
+        built = not present(tag)
+        if built:
+            require_space(BUILD_HEADROOM, 'building the ' + harness + ' agent image')
+            with tempfile.TemporaryDirectory(prefix='luma-agent-image-') as context:
+                for name in IMAGE_INPUTS:
+                    target = Path(context) / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(REPO / name, target)
+                run('docker', 'build', '--quiet', '--file', 'tools/scion/agent.Dockerfile',
+                    '--build-arg', 'HARNESS_IMAGE=' + base, '--build-arg', 'RUST_IMAGE=' + pins['rust'],
+                    '--build-arg', 'BUN_IMAGE=' + pins['bun'], '--build-arg', 'CLAUDE_CODE_VERSION=' + claude,
+                    '--label', 'dk.andersmadsen.luma.agent-base=' + base, '--tag', tag, context)
+        run('docker', 'tag', tag, image + ':current')
+        if built:
+            run('docker', 'builder', 'prune', '--force')
+        report('image', harness=harness, tag=tag, built=built, claude_code=claude or None)
+
+
+def install_template():
+    source = REPO / 'tools/scion/templates/luma'
+    target = SCION_HOME / 'templates/luma'
+    staging = Path(tempfile.mkdtemp(prefix='.luma-template-', dir=target.parent))
+    try:
+        shutil.copytree(source, staging / 'luma')
+        if target.exists():
+            shutil.rmtree(target)
+        os.replace(staging / 'luma', target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    run('scion', '--global', 'templates', 'sync', 'luma', '--non-interactive', cwd=str(SCION_HOME))
+    report('template', path=str(target), hub='synced')
+
+
+def bridge_gateway():
+    return run('docker', 'network', 'inspect', 'bridge', '--format', '{{(index .IPAM.Config 0).Gateway}}')
+
+
+def install_gateway(address):
+    # Scion gives an agent the host network whenever its Hub URL is loopback,
+    # and the host network exposes every loopback service on this machine.
+    # This forwarder lets agents on Docker's bridge reach the loopback Hub.
+    unit = ('[Unit]\nDescription=Scion Hub for agent containers on the Docker bridge\n'
+            'After=scion.service\n\n[Service]\n'
+            'ExecStart=/usr/bin/socat TCP-LISTEN:8080,bind=' + address + ',fork,reuseaddr TCP:127.0.0.1:8080\n'
+            'Restart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n')
+    changed = not GATEWAY_UNIT.exists() or GATEWAY_UNIT.read_text() != unit
+    if changed:
+        GATEWAY_UNIT.parent.mkdir(parents=True, exist_ok=True)
+        GATEWAY_UNIT.write_text(unit)
+        run('systemctl', '--user', 'daemon-reload')
+    run('systemctl', '--user', 'enable', '--now', GATEWAY_UNIT.name)
+    if changed:
+        run('systemctl', '--user', 'restart', GATEWAY_UNIT.name)
+    report('gateway', listen=address + ':8080', changed=changed)
+
+
+def gateway_reachable(address):
+    # m1box's firewall drops what containers send to host ports unless the
+    # owner allows it, so test the path an agent would take.
+    images = run('docker', 'images', '--format', '{{.Repository}}:{{.Tag}}', '--filter', 'reference=luma.invalid/agent-*:current')
+    if not images:
+        return False
+    probe = subprocess.run(['docker', 'run', '--rm', '--network', 'bridge', '--entrypoint', 'curl', images.split()[0],
+                            '-fs', '-m', '5', '-o', '/dev/null', 'http://' + address + ':8080/healthz'],
+                           capture_output=True)
+    return probe.returncode == 0
+
+
+def configure_scion(address):
+    import yaml
+    path = SCION_HOME / 'settings.yaml'
+    current = settings()
+    wanted = json.loads(json.dumps(current))
+    # Agents get Docker's bridge network only once they can reach the Hub
+    # there; until then Scion's loopback endpoint keeps host networking.
+    bridged = gateway_reachable(address)
+    hub = wanted.setdefault('server', {}).setdefault('hub', {})
+    hub['agent_endpoint'] = 'http://' + (address if bridged else '127.0.0.1') + ':8080'
+    report('agent-network', mode='bridge' if bridged else 'host',
+           owner_step=None if bridged else 'sudo ufw allow in proto tcp from 172.16.0.0/12 to ' + address +
+           ' port 8080, then run tools/scion/install again')
+    wanted['default_template'] = 'luma'
+    wanted['default_harness_config'] = 'claude'
+    # A project's default scratchpad lives under ~/.scion on /srv/state, the
+    # volume T3 also uses; agents keep their files in /workspace instead.
+    wanted.setdefault('project_defaults', {})['default_scratchpad'] = False
+    if wanted == current:
+        report('scion-settings', changed=False)
+        return
+    backup = path.with_name('settings.yaml.before-luma-install-' + time.strftime('%Y%m%dT%H%M%S'))
+    shutil.copy2(path, backup)
+    staged = path.with_name('.settings.yaml.luma-install')
+    staged.write_text(yaml.safe_dump(wanted, sort_keys=False))
+    staged.chmod(0o600)
+    os.replace(staged, path)
+    run('scion', 'config', 'validate', '--global')
+    run('systemctl', '--user', 'restart', 'scion.service')
+    for _ in range(60):
+        if subprocess.run(['curl', '-fs', '-o', '/dev/null', 'http://127.0.0.1:8080/healthz'],
+                          stderr=subprocess.DEVNULL).returncode == 0:
+            break
+        time.sleep(1)
+    else:
+        raise SystemExit('Scion did not come back after the settings change; the previous settings are in ' + str(backup))
+    report('scion-settings', changed=True, backup=str(backup))
+
+
+def prepare_root(root):
+    # Job folders, each with its own Scion project, live on bulk storage:
+    # an agent's build state is several gigabytes.
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (root / 'agents').mkdir(mode=0o700, exist_ok=True)
+    state = Path.home() / '.local/state/luma-scm'
+    if state.is_symlink() and state.resolve() == root.resolve():
+        pass
+    elif state.is_symlink() and not any((state / 'agents').glob('*/job.json')):
+        state.unlink()
+        state.symlink_to(root)
+    elif not state.exists():
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.symlink_to(root)
+    else:
+        raise SystemExit(str(state) + ' holds agent jobs elsewhere; submit and delete them, then run install again')
+    report('agent-root', root=str(root), jobs=str(root / 'agents'))
+
+
+def deploy_service(target):
+    source = REPO / 'tools/source-control'
+    changed = []
+    for path in sorted(source.iterdir()):
+        if path.is_file() and not path.name.startswith('.'):
+            destination = target / path.name
+            if not destination.exists() or destination.read_bytes() != path.read_bytes():
+                shutil.copy2(path, destination)
+                changed.append(path.name)
+    restarted = bool(set(changed) & set(SERVER_MODULES))
+    if restarted:
+        run('systemctl', '--user', 'restart', 'luma-scm.service')
+    report('source-control', path=str(target), updated=changed, restarted=restarted)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--root', default='/data/luma-agents', help='Bulk storage for agent jobs and the shared project.')
+    parser.add_argument('--service-dir', default='/srv/dev/luma-scm', help='Where the source-control service runs from.')
+    parser.add_argument('--stock-reference', default='/srv/dev/luma-stock-reference')
+    parser.add_argument('--harness', action='append', choices=HARNESSES,
+                        help='Build the agent image for this harness only; repeatable. Default: all.')
+    args = parser.parse_args()
+    if sys.platform != 'linux':
+        raise SystemExit('Run this on the Linux agent host.')
+    for tool in ('docker', 'scion', 'socat', 'systemctl', 'curl'):
+        if not shutil.which(tool):
+            raise SystemExit('Required executable is unavailable: ' + tool)
+    registry = settings().get('image_registry')
+    if not registry:
+        raise SystemExit('Scion has no image_registry in ' + str(SCION_HOME / 'settings.yaml'))
+    build_images(registry, args.harness or HARNESSES)
+    install_template()
+    address = bridge_gateway()
+    install_gateway(address)
+    configure_scion(address)
+    prepare_root(Path(args.root))
+    deploy_service(Path(args.service_dir))
+    stock = Path(args.stock_reference)
+    present = (stock / 'decompiled').is_dir() and (stock / 'manifest.json').is_file()
+    report('stock-reference', path=str(stock), present=present,
+           note=None if present else 'agents start without it; copy ~/.local/share/luma/stock-reference here')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,8 @@
+# Luma's Scion agent template. tools/scion/install installs it on the agent
+# host; `luma-scm agent start` supplies the image, mounts and limits, which a
+# template cannot set (docs/source-control.md "Agent environment").
+schema_version: "1"
+agent_instructions: agents.md
+system_prompt: system-prompt.md
+default_harness_config: claude
+max_duration: 4h

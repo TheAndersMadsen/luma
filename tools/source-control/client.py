@@ -776,7 +776,12 @@ def main(argv=None):
                 root = find_workspace(args.workspace)
             except ClientError:
                 pass
-        endpoint = args.endpoint or (metadata(root)['endpoint'] if root else DEFAULT_ENDPOINT)
+        endpoint = args.endpoint or DEFAULT_ENDPOINT
+        # A workspace's recorded endpoint is data. A file planted in an agent
+        # checkout must not decide where the owner token is sent.
+        if root and not args.endpoint and metadata(root)['endpoint'].rstrip('/') != endpoint.rstrip('/'):
+            raise ClientError('This workspace records the endpoint ' + metadata(root)['endpoint'] +
+                              '; pass --endpoint to use it.')
         token = Path(args.token_file).expanduser().read_text().strip()
         if not token:
             raise ClientError('The API token file is empty.')
