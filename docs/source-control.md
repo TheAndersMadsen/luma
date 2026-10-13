@@ -58,6 +58,9 @@ and binary conflicts are reported for resolution. Committed changes outside a
 sparse selection are preserved. Untracked obstructions and escaping symlinks are
 never overwritten. `.gitignore` rules apply to untracked files.
 
+After an update merges main into unlanded work, run `luma-scm publish` to update
+the existing GitHub PR. `luma-scm land` then requests its CI-gated merge.
+
 ## Run an agent
 
 ```sh
