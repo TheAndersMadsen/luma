@@ -64,6 +64,8 @@ type IntegrationsView = {
     /** The saved profile whose settings are in use, if any. */
     profile: string | null;
     profiles: AssistantProfileView[];
+    /** The wearer's custom instructions; empty when none. They belong to no profile. */
+    instructions: string;
   };
   search: {
     configured: boolean;
@@ -112,6 +114,8 @@ type IntegrationDraft = {
   reasoningEffort: string;
   fastMode: boolean;
   maxTokens: string;
+  /** The wearer's custom instructions. Kept across profile switches. */
+  instructions: string;
   searxngBaseUrl: string;
   perplexityModel: string;
   azureRegion: string;
@@ -211,6 +215,8 @@ const REQUIRED_SERVICES = SERVICES.filter((service) => !service.optional);
 const NEW_PROFILE = "\u0000new";
 /** Cosmos keeps at most this many saved profiles. */
 const MAX_PROFILES = 16;
+/** Cosmos's `MAX_ASSISTANT_INSTRUCTIONS_CHARS`. */
+const MAX_INSTRUCTIONS_CHARACTERS = 1_000;
 
 const EMPTY_SECRETS: SecretDraft = {
   assistantApiKey: null,
@@ -315,6 +321,7 @@ function draftFrom(view: IntegrationsView): IntegrationDraft {
     reasoningEffort: view.assistant.reasoning_effort ?? "",
     fastMode: view.assistant.fast_mode,
     maxTokens: String(view.assistant.max_tokens),
+    instructions: view.assistant.instructions,
     searxngBaseUrl: view.search.searxng_base_url ?? "",
     perplexityModel: view.search.perplexity_model ?? "",
     azureRegion: view.speech.azure_region ?? "",
@@ -565,7 +572,12 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
     const profileName = draft.profileName.trim();
     // A new profile is an incomplete draft until it has a name: saving another
     // section must not put its blank form into use.
-    const assistant = draft.newProfile && profileName === "" ? undefined : {
+    // Custom instructions belong to the wearer, not to the profile being edited,
+    // so an edit to them is sent even while a new profile is an unnamed draft.
+    const instructionsChanged = draft.instructions !== view?.assistant.instructions;
+    const assistant = draft.newProfile && profileName === ""
+      ? instructionsChanged ? { instructions: draft.instructions } : undefined
+      : {
       // The saved profile supplies its key; the fields below are what the owner sees.
       ...(draft.profileSource === null ? {} : { load_profile: draft.profileSource }),
       provider: draft.provider,
@@ -574,6 +586,7 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
       reasoning_effort: draft.reasoningEffort,
       fast_mode: draft.fastMode,
       max_tokens: Number(draft.maxTokens),
+      instructions: draft.instructions,
       // A new profile never inherits the key in use: it gets the typed one or none.
       ...(draft.newProfile
         ? { api_key: secrets.assistantApiKey ?? "" }
@@ -1105,6 +1118,21 @@ export function CosmosServicesCard({ operator }: { operator: boolean }) {
             <div className={styles.integrationField}>
               <label htmlFor="max-tokens"><strong>Maximum response tokens</strong><small>Limit for each model response.</small></label>
               <input id="max-tokens" className={styles.integrationInput} type="number" min="64" max="8192" value={draft.maxTokens} onChange={(event) => setDraft({ ...draft, maxTokens: event.target.value })} />
+            </div>
+            <div className={styles.integrationField}>
+              <label htmlFor="assistant-instructions">
+                <strong>Custom instructions</strong>
+                <small>Optional. How you like answers, such as &ldquo;Use metric units&rdquo; or &ldquo;Keep answers short.&rdquo; They apply to every profile and can&rsquo;t change what the assistant is allowed to do. Saved with Save changes.</small>
+              </label>
+              <textarea
+                id="assistant-instructions"
+                className={styles.integrationInput}
+                rows={3}
+                maxLength={MAX_INSTRUCTIONS_CHARACTERS}
+                value={draft.instructions}
+                onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
+              />
+              <small>{draft.instructions.length} / {MAX_INSTRUCTIONS_CHARACTERS}</small>
             </div>
             <div className={styles.integrationTestActions}>
               {testControl(

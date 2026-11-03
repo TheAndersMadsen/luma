@@ -45,6 +45,13 @@ arguments voids that confirmation. The action tools of an MCP server need the
 same confirmation (see MCP servers). Reversible playback and volume controls do
 not get the extra confirmation step.
 
+The owner's custom instructions (**Settings → Assistant & voice**) are the one
+piece of owner text in the system prompt. They come last, after the safety and
+orchestration rules and the tool set's guidance, inside a
+`<wearer_preferences>` block that says they shape only tone, length, and units.
+Confirmation and keyguard checks stay in code, so no instruction can confirm an
+action. Empty instructions leave the prompt unchanged.
+
 ## Location and diagnostics
 
 Both assistant transports check the account's location preference before

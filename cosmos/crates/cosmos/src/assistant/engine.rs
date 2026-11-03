@@ -728,7 +728,7 @@ impl Engine {
 
         // Reconstruct the conversation the model reasons over from the state the
         // device replayed (cosmos's legacy path is stateless per call).
-        let mut messages = build_history(&req);
+        let mut messages = build_history(&req, &self.tools.instructions);
         // The vision gesture reaches the model as a policy line rather than as
         // pixels: `build_history` used to read only the text fields and drop
         // both `vision_requested` and `image_data`. Pushed here, not in
@@ -1814,12 +1814,13 @@ const VISION_ACTION: &str = "UnderstandScene";
 /// replayed: prior turns (`device_context.turns`), `previous_answers`, and this
 /// turn's utterance. cosmos's legacy server is stateless per call and
 /// reconstructs conversation state exactly this way.
-fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
+fn build_history(req: &pb::SynapseUnderstandingRequest, instructions: &str) -> Vec<ChatMessage> {
     // The same pointer that selects the tool subset selects the prompt: cosmos's
     // server resolved `tool_set_version` to BOTH. Giving a capability child the
     // narrow tool list without its narrow guidance is half the topology.
     let mut messages = vec![ChatMessage::system(catalog::system_prompt_for(
         resolved_tool_set(req).set,
+        instructions,
     ))];
     if let Some(situation) = situation_line(req) {
         messages.push(ChatMessage::device_context(&situation));

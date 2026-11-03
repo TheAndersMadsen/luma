@@ -27,6 +27,9 @@ struct AssistantIntegrationView {
     /// The saved profile whose settings are in use, if any.
     profile: Option<String>,
     profiles: Vec<AssistantProfileView>,
+    /// The wearer's custom instructions, empty when none. Not a secret: the
+    /// owner wrote them and reads them back to edit.
+    instructions: String,
 }
 
 /// A saved assistant profile as Center lists it: its settings, and whether
@@ -385,6 +388,7 @@ pub(super) async fn integrations_view(
             codex,
             profile,
             profiles,
+            instructions: config.assistant.instructions,
         },
         search: SearchIntegrationView {
             configured: config.search.searxng_base_url.is_some()
