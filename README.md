@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="docs/assets/readme/hero.svg" width="100%" alt="An Ai Pin sends a beam of light past an eclipsed moon to a small cluster of servers: your own cloud.">
   <h1>Luma</h1>
   <p><strong>Your Ai Pin. Yours again.</strong></p>
   <p>
@@ -36,15 +37,9 @@ rebuilds that cloud as software you run yourself. Your Pin talks to **Cosmos**,
 the cloud on your server, and you manage everything in **Center**, your own
 humane.center in the browser.
 
-```mermaid
-flowchart LR
-    Pin["Your Ai Pin<br/>voice, photos, music"] --> Cosmos
-    You["You, in a browser"] --> Center
-    subgraph Server["Your server"]
-        Center["Center<br/>your humane.center"] --> Cosmos["Cosmos<br/>the Pin's cloud"]
-    end
-    Cosmos -->|your own keys| Providers["AI, speech, maps,<br/>and music providers"]
-```
+<p align="center">
+  <img src="docs/assets/readme/how-it-works.svg" width="100%" alt="Your Ai Pin talks to Cosmos, the Pin's cloud on your server. You use Center, your humane.center, in a browser, and Center reads everything from Cosmos. Cosmos calls AI, speech, maps, and music providers with your own keys; the Pin holds none.">
+</p>
 
 | On the Pin | In Center |
 | --- | --- |
@@ -241,12 +236,9 @@ Pin is refused, even after you remove the pairing.
 Center installs Luma on the Pin from your browser, over a USB cable. Your Wi-Fi
 password and the apps travel over that cable and never pass through the server.
 
-```mermaid
-flowchart LR
-    Pin["Stock Ai Pin<br/>service contacts"] --> Interposer["USB interposer"]
-    Interposer --> Cable["USB-C data cable"]
-    Cable --> Browser["Desktop Chrome or Edge<br/>Center over HTTPS"]
-```
+<p align="center">
+  <img src="docs/assets/readme/pin-setup.svg" width="100%" alt="A stock Ai Pin sits on the USB interposer, which connects through a USB-C data cable to desktop Chrome or Edge showing Center. Guided setup then completes its seven stages in order.">
+</p>
 
 The [Connect your Pin guide](guides/connect-your-pin.md) walks through every
 screen. The short version follows.
