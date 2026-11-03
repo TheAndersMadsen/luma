@@ -669,7 +669,7 @@ impl BidiSession {
         // foreground clock. Personalization may degrade, the turn may not hang.
         // A locked Pin gets none, as on the legacy engine: stock refuses the
         // notes read on the keyguard (`ManageMemoryAction`).
-        let mut messages = build_history(&req);
+        let mut messages = build_history(&req, &self.tools.instructions);
         if !request_locked
             && let Ok(Some(memory)) =
                 tokio::time::timeout(run.context_timeout(), wearer_memory(&self.tools)).await
@@ -1696,12 +1696,13 @@ fn resolve_catalog(
 
 /// Rebuild the chat transcript from the state the device replayed in the initial
 /// request: prior turns, `previous_answers`, and this run's utterance.
-fn build_history(req: &pb::SynapseUnderstandingRequest) -> Vec<ChatMessage> {
+fn build_history(req: &pb::SynapseUnderstandingRequest, instructions: &str) -> Vec<ChatMessage> {
     // Same pointer, same reason as `resolve_catalog`: the resolved set carries its
     // own spoken-style guidance, and serving its tools without its guidance would
     // give a capability the narrow tool list but none of the narrow behaviour.
     let mut messages = vec![ChatMessage::system(catalog::system_prompt_for(
         super::engine::resolved_tool_set(req).set,
+        instructions,
     ))];
     if let Some(situation) = situation_line(req) {
         messages.push(ChatMessage::device_context(&situation));

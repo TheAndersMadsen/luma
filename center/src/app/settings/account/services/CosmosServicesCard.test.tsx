@@ -82,7 +82,12 @@ const CODEX: AssistantProfile = {
 
 function integrationsView(
   os3: Os3View,
-  patch?: { serpapiConfigured?: boolean; profile?: string | null; profiles?: AssistantProfile[] },
+  patch?: {
+    serpapiConfigured?: boolean;
+    profile?: string | null;
+    profiles?: AssistantProfile[];
+    instructions?: string;
+  },
 ) {
   const active = patch?.profiles?.find((profile) => profile.name === patch.profile);
   const view = {
@@ -98,6 +103,7 @@ function integrationsView(
       codex: { available: false, connected: false, plan: null, email: null },
       profile: patch?.profile ?? null,
       profiles: patch?.profiles ?? [],
+      instructions: patch?.instructions ?? "",
     },
     search: {
       configured: false,
@@ -395,6 +401,60 @@ describe("CosmosServicesCard", () => {
     expect(writes[3]).toEqual({ assistant: { delete_profile: "Local" } });
     expect(screen.getByLabelText(/^Profile(?! name)/)).toHaveValue("");
     expect(screen.getByLabelText(/^Profile name/)).toHaveValue("");
+  });
+
+  it("keeps custom instructions for the wearer across profiles and saves them with Save changes", async () => {
+    const writes: Array<{ assistant?: Record<string, unknown> }> = [];
+    let profile: string | null = "Gateway";
+    let instructions = "Use metric units.";
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { assistant?: Record<string, unknown> };
+        writes.push(body);
+        if (body.assistant?.load_profile) profile = String(body.assistant.load_profile);
+        if (typeof body.assistant?.instructions === "string") instructions = body.assistant.instructions;
+      }
+      return respond(integrationsView(OS3_OFF, { profile, profiles: [GATEWAY, CODEX], instructions }));
+    }));
+    const user = userEvent.setup();
+    render(<CosmosServicesCard operator />);
+
+    await user.click(await screen.findByText("Assistant", { selector: "summary strong" }));
+    const field = screen.getByLabelText(/^Custom instructions/);
+    expect(field).toHaveValue("Use metric units.");
+    expect(field).toHaveAttribute("maxLength", "1000");
+
+    // Switching profiles sends only the switch and leaves the instructions alone.
+    await user.selectOptions(screen.getByLabelText(/^Profile(?! name)/), "Codex");
+    await screen.findByText("Now using Codex. Your next request will use it.");
+    expect(writes).toEqual([{ assistant: { load_profile: "Codex" } }]);
+    expect(screen.getByLabelText(/^Custom instructions/)).toHaveValue("Use metric units.");
+
+    // An edit is sent with Save changes.
+    await user.clear(screen.getByLabelText(/^Custom instructions/));
+    await user.type(screen.getByLabelText(/^Custom instructions/), "Keep answers short.");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes[1]!.assistant).toMatchObject({ instructions: "Keep answers short." });
+    expect(await screen.findByLabelText(/^Custom instructions/)).toHaveValue("Keep answers short.");
+  });
+
+  it("saves custom instructions even while a new profile is still unnamed", async () => {
+    const writes: Array<{ assistant?: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") writes.push(JSON.parse(String(init.body)));
+      return respond(integrationsView(OS3_OFF, { profile: "Gateway", profiles: [GATEWAY] }));
+    }));
+    const user = userEvent.setup();
+    render(<CosmosServicesCard operator />);
+
+    await user.click(await screen.findByText("Assistant", { selector: "summary strong" }));
+    await user.click(screen.getByRole("button", { name: "New profile" }));
+    await user.type(screen.getByLabelText(/^Custom instructions/), "Use a casual tone.");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    // The blank profile is not put into use; only the instructions are sent.
+    expect(writes[0]!.assistant).toEqual({ instructions: "Use a casual tone." });
   });
 
   it("names each secret field so a screen reader announces it", async () => {

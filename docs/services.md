@@ -46,6 +46,12 @@ you leave a page with an unsaved draft.
   thinking budget inside the response limit. Cosmos therefore does not force
   a tool call for such a model, and it raises the request's limit so the
   thinking budget fits and your response limit stays free for the answer.
+  **Custom instructions** (optional, up to 1,000 characters) tell the
+  assistant how you like answers, such as "Use metric units" or "Keep answers
+  short." They are yours rather than a profile's, so switching profiles keeps
+  them, and **Save changes** stores them. Cosmos adds them after its own rules
+  on every request; they can shape tone, length, and units, but they cannot
+  change which tools run, confirm an action, or override the safety rules.
 - **Search & maps:** add SearXNG or SerpAPI for web results, plus any optional
   Perplexity, Google Maps, Pirate Weather, or Wolfram credentials. The bundled
   SearXNG includes Brave-backed ResultHunter. Cosmos searches SearXNG first. It

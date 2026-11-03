@@ -574,3 +574,56 @@ async fn privacy_location_refusal_keeps_explicit_os3_forecast_priority() {
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[tokio::test]
+async fn custom_instructions_reach_the_model_on_both_transports_and_only_their_run() {
+    let store = MemoryStore::shared();
+    let request = || pb::SynapseUnderstandingRequest {
+        utterance: "Tell me a short joke.".to_owned(),
+        ..Default::default()
+    };
+    let context = |instructions: &str| ToolContext {
+        principal: Some(WEARER.to_owned()),
+        store: Some(store.clone()),
+        instructions: instructions.to_owned(),
+        ..Default::default()
+    };
+    for instructions in ["Use metric units.", ""] {
+        // Legacy transport: the engine bound to this request's context.
+        let legacy = Arc::new(RecordingModel::default());
+        let engine = crate::assistant::engine::Engine::new(legacy.clone())
+            .for_request(Entitlement::Active, context(instructions));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        engine.run(request(), tx).await;
+        while rx.recv().await.is_some() {}
+
+        // Bidi transport.
+        let bidi = Arc::new(RecordingModel::default());
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let out = BidiSession::spawn_with(
+            bidi.clone(),
+            Entitlement::Active,
+            context(instructions),
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        );
+        tx.send(Ok(pb::StreamingUnderstandRequest {
+            content: Some(
+                pb::streaming_understand_request::Content::UnderstandingRequest(request()),
+            ),
+        }))
+        .await
+        .expect("bidi request");
+        drop(tx);
+        out.collect::<Vec<_>>().await;
+
+        for (transport, model) in [("legacy", legacy), ("bidi", bidi)] {
+            let calls = model.calls.lock().expect("fixture model calls");
+            let (prompt, _) = calls.first().expect("one model step");
+            assert_eq!(
+                prompt.contains("<wearer_preferences>\nUse metric units.\n</wearer_preferences>"),
+                !instructions.is_empty(),
+                "{transport} with {instructions:?}"
+            );
+        }
+    }
+}

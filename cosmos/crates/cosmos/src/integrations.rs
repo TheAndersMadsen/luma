@@ -26,6 +26,9 @@ pub const MAX_OS3_BUTLER_NAME_CHARS: usize = 64;
 /// Saved assistant profiles the owner switches between.
 pub const MAX_ASSISTANT_PROFILES: usize = 16;
 pub const MAX_ASSISTANT_PROFILE_NAME_CHARS: usize = 64;
+/// Long enough for a few sentences of preferences; every model step pays for
+/// them in input tokens and latency.
+pub const MAX_ASSISTANT_INSTRUCTIONS_CHARS: usize = 1_000;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -53,6 +56,13 @@ pub struct AssistantConfig {
     /// this field still reads the file until then.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub profiles: Vec<AssistantProfile>,
+    /// The wearer's own answer preferences ("use metric units"), added to
+    /// every assistant turn. They describe the person, not the model, so they
+    /// stay when the owner switches profiles and no profile copies them.
+    /// Written only once set, like `profiles`. INFERRED: stock has no
+    /// equivalent; the request is issue #13.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub instructions: String,
 }
 
 /// One saved assistant profile: the settings under a name of the owner's
@@ -88,6 +98,7 @@ impl Default for AssistantConfig {
             fast_mode: false,
             max_tokens: 512,
             profiles: Vec::new(),
+            instructions: String::new(),
         }
     }
 }
@@ -373,6 +384,8 @@ pub struct AssistantUpdate {
     pub save_profile: Option<String>,
     /// Delete this saved profile. The settings in use are unchanged.
     pub delete_profile: Option<String>,
+    /// Missing keeps the custom instructions. Empty or blank clears them.
+    pub instructions: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -713,6 +726,9 @@ fn apply_update(
         if let Some(value) = update.max_tokens {
             config.assistant.max_tokens = value;
         }
+        if let Some(value) = update.instructions {
+            config.assistant.instructions = value;
+        }
         if let Some(name) = update.delete_profile.as_deref() {
             config
                 .assistant
@@ -787,6 +803,7 @@ fn normalize(config: &mut IntegrationsConfig) {
         .trim_end_matches('/')
         .to_owned();
     config.assistant.model = config.assistant.model.trim().to_owned();
+    config.assistant.instructions = config.assistant.instructions.trim().to_owned();
     config.assistant.reasoning_effort = config
         .assistant
         .reasoning_effort
@@ -839,6 +856,21 @@ fn validate(config: &IntegrationsConfig) -> Result<(), IntegrationError> {
         return Err(IntegrationError::Invalid("unsupported schema version"));
     }
     validate_assistant(&config.assistant.as_profile(String::new()))?;
+    if config.assistant.instructions.chars().count() > MAX_ASSISTANT_INSTRUCTIONS_CHARS {
+        return Err(IntegrationError::Invalid(
+            "custom instructions are too long",
+        ));
+    }
+    if config
+        .assistant
+        .instructions
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(IntegrationError::Invalid(
+            "custom instructions must be plain text",
+        ));
+    }
     if config.assistant.profiles.len() > MAX_ASSISTANT_PROFILES {
         return Err(IntegrationError::Invalid(
             "too many saved assistant profiles",
@@ -1213,6 +1245,130 @@ mod tests {
         assert!(validate(&next).is_err());
         next.os3.session_cookie = Some("x".repeat(MAX_OS3_COOKIE_BYTES + 1));
         assert!(validate(&next).is_err());
+    }
+
+    fn instructions_update(value: &str) -> IntegrationsUpdate {
+        IntegrationsUpdate {
+            assistant: Some(AssistantUpdate {
+                instructions: Some(value.to_owned()),
+                ..AssistantUpdate::default()
+            }),
+            ..IntegrationsUpdate::default()
+        }
+    }
+
+    #[test]
+    fn custom_instructions_are_set_trimmed_kept_and_cleared() {
+        let store = IntegrationStore::memory(IntegrationsConfig::default());
+        let mut next = store.snapshot();
+        apply_update(
+            &mut next,
+            instructions_update("  Use metric units.\nKeep it short.  "),
+        )
+        .unwrap();
+        normalize(&mut next);
+        validate(&next).unwrap();
+        assert_eq!(
+            next.assistant.instructions,
+            "Use metric units.\nKeep it short."
+        );
+
+        // Another assistant edit that does not name them keeps them.
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    model: Some("other/model".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            next.assistant.instructions,
+            "Use metric units.\nKeep it short."
+        );
+
+        apply_update(&mut next, instructions_update("   ")).unwrap();
+        normalize(&mut next);
+        assert_eq!(next.assistant.instructions, "");
+    }
+
+    #[test]
+    fn custom_instructions_belong_to_the_wearer_not_a_profile() {
+        let mut config = IntegrationsConfig::default();
+        config.assistant.base_url = "https://gateway.example.test/v1".to_owned();
+        config.assistant.api_key = Some("gateway-key".to_owned());
+        let store = IntegrationStore::memory(config);
+        let mut next = store.snapshot();
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    instructions: Some("Use metric units.".to_owned()),
+                    save_profile: Some("Gateway".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    provider: Some(AssistantProvider::CodexSubscription),
+                    save_profile: Some("Codex".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        apply_update(
+            &mut next,
+            IntegrationsUpdate {
+                assistant: Some(AssistantUpdate {
+                    load_profile: Some("Gateway".to_owned()),
+                    ..AssistantUpdate::default()
+                }),
+                ..IntegrationsUpdate::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(next.assistant.instructions, "Use metric units.");
+        // A saved profile does not carry them, so the stored file stays
+        // readable by profile code that never knew the field.
+        let stored = serde_json::to_value(&next.assistant.profiles).unwrap();
+        assert!(!stored.to_string().contains("instructions"));
+    }
+
+    #[test]
+    fn custom_instructions_are_bounded_plain_text() {
+        let mut config = IntegrationsConfig::default();
+        config.assistant.instructions = "a".repeat(MAX_ASSISTANT_INSTRUCTIONS_CHARS);
+        validate(&config).unwrap();
+        config.assistant.instructions = "a".repeat(MAX_ASSISTANT_INSTRUCTIONS_CHARS + 1);
+        assert!(validate(&config).is_err());
+        config.assistant.instructions = "Line one\nLine two\twith a tab".to_owned();
+        validate(&config).unwrap();
+        for control in ["bell\u{7}", "escape\u{1b}[0m", "nul\u{0}", "return\r"] {
+            config.assistant.instructions = control.to_owned();
+            assert!(validate(&config).is_err(), "{control:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_without_custom_instructions_still_loads_and_saves_without_them() {
+        let before = r#"{"schema_version":1,"assistant":{"provider":"openai-compatible","base_url":"https://a.test/v1","api_key":"k","model":"m","reasoning_effort":null,"fast_mode":false,"max_tokens":512}}"#;
+        let stored: IntegrationsConfig = serde_json::from_str(before).unwrap();
+        assert_eq!(stored.assistant.instructions, "");
+        assert!(
+            !serde_json::to_string(&stored)
+                .unwrap()
+                .contains("instructions")
+        );
     }
 
     #[test]

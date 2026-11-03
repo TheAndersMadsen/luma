@@ -1127,7 +1127,13 @@ impl AiBusMain {
         let mut model_messages: Vec<ChatMessage> = Vec::with_capacity(chat.messages.len() + 1);
         if !chat.messages.iter().any(|m| m.role == "system") {
             model_messages.push(ChatMessage::system(
-                crate::assistant::catalog::system_prompt_for(resolved.set),
+                crate::assistant::catalog::system_prompt_for(
+                    resolved.set,
+                    &crate::integrations::active()
+                        .snapshot()
+                        .assistant
+                        .instructions,
+                ),
             ));
         }
         model_messages.extend(chat.messages.iter().map(|msg| ChatMessage {
@@ -1237,6 +1243,10 @@ impl AiBusMain {
         crate::assistant::catalog::ToolContext {
             principal: crate::auth::principal(request)
                 .map(|p| p.expose_for_authorization().to_owned()),
+            instructions: crate::integrations::active()
+                .snapshot()
+                .assistant
+                .instructions,
             answer_engine_available: crate::integrations::value("COSMOS_PPLX_API_KEY").is_some(),
             store: Some(self.store.clone()),
             keys: Some(self.keys.clone()),
@@ -3502,6 +3512,7 @@ mod tests {
             Entitlement::Active,
             catalog::ToolContext {
                 principal: Some("device-test-pin-01".to_owned()),
+                instructions: String::new(),
                 answer_engine_available: false,
                 store: Some(store),
                 key_directory: None,
