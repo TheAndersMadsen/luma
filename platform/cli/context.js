@@ -235,12 +235,21 @@ function secureDirectory(directory) {
   fs.chmodSync(directory, 0o700);
 }
 
-function exposeDockerDesktopCliPlugins(dockerConfig) {
+// The sandboxed DOCKER_CONFIG hides the CLI plugins Docker looks for under the
+// user's own config, so `docker build` would fall back to the legacy builder.
+// Link the first buildx and compose found: Docker Desktop's, then the user's
+// own (colima and Homebrew setups put them there), then Homebrew's.
+function exposeDockerCliPlugins(dockerConfig) {
   if (process.platform !== 'darwin' || !fs.existsSync(dockerConfig)) return;
-  const pluginRoot = '/Applications/Docker.app/Contents/Resources/cli-plugins';
+  const pluginRoots = [
+    '/Applications/Docker.app/Contents/Resources/cli-plugins',
+    path.join(LOGIN_HOME, '.docker', 'cli-plugins'),
+    '/opt/homebrew/lib/docker/cli-plugins',
+    '/usr/local/lib/docker/cli-plugins',
+  ];
   const available = ['docker-buildx', 'docker-compose']
-    .map((name) => [name, path.join(pluginRoot, name)])
-    .filter(([, source]) => isExecutableFile(source));
+    .map((name) => [name, pluginRoots.map((root) => path.join(root, name)).find(isExecutableFile)])
+    .filter(([, source]) => source);
   if (available.length === 0) return;
   const plugins = path.join(dockerConfig, 'cli-plugins');
   secureDirectory(plugins);
@@ -1055,7 +1064,7 @@ function safeOptionalEnvironment(name, predicate = () => true) {
 // exist yet.
 function operatorEnvironment(values, { lumaDockerConfig = true } = {}) {
   requireExternalDirectory(BUILD_DIR, 'LUMA_BUILD_DIR');
-  if (lumaDockerConfig) exposeDockerDesktopCliPlugins(BUILD_DIR);
+  if (lumaDockerConfig) exposeDockerCliPlugins(BUILD_DIR);
   const user = (() => {
     try { return os.userInfo().username; } catch { return 'luma'; }
   })();
@@ -1207,7 +1216,7 @@ function testProcessEnvironment(environment = process.env, values = {}) {
   const cargoHome = directory('cargo-home');
   const gradleHome = directory('gradle-home');
   const dockerConfig = directory('docker-config');
-  exposeDockerDesktopCliPlugins(dockerConfig);
+  exposeDockerCliPlugins(dockerConfig);
   for (const [tool, toolHome, entries] of [
     ['Cargo configuration', cargoHome, ['config', 'config.toml']],
     ['Gradle initialization', gradleHome, ['init.gradle', 'init.gradle.kts', 'init.d']],
