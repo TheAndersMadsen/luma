@@ -40,6 +40,12 @@ you leave a page with an unsaved draft.
   settings in use alone. Settings from before profiles existed show as
   **Unsaved settings** until they are given a name. Saved keys stay on the
   server and are never shown.
+  A Claude model with a reasoning effort (for example
+  `anthropic/claude-sonnet-5.5` on OpenRouter) thinks before it answers.
+  Anthropic then refuses a forced tool call, and OpenRouter counts the
+  thinking budget inside the response limit. Cosmos therefore does not force
+  a tool call for such a model, and it raises the request's limit so the
+  thinking budget fits and your response limit stays free for the answer.
 - **Search & maps:** add SearXNG or SerpAPI for web results, plus any optional
   Perplexity, Google Maps, Pirate Weather, or Wolfram credentials. The bundled
   SearXNG includes Brave-backed ResultHunter. Cosmos searches SearXNG first. It

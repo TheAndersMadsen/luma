@@ -1633,6 +1633,70 @@ fn wire_tools(tools: &[ToolDef]) -> Vec<WireTool<'_>> {
         .collect()
 }
 
+/// The `tool_choice` and `max_tokens` one chat-completions step sends.
+#[derive(Debug, PartialEq, Eq)]
+struct RequestControls {
+    tool_choice: Option<&'static str>,
+    max_tokens: Option<u32>,
+}
+
+/// Fit the step's forced tool choice and output bound to the model.
+///
+/// Claude with thinking enabled (an OpenRouter `reasoning.effort` on an
+/// `anthropic/claude-*` model) refuses two things Cosmos otherwise sends, and
+/// each refusal is an HTTP 400 that fails the whole step:
+///
+/// - Forced tool use: Anthropic allows only `auto` or `none` as `tool_choice`
+///   with extended thinking, and OpenRouter maps `required` to `any`. Explicit
+///   playback then goes unforced on Claude; the music guards after the step
+///   still apply.
+/// - An output bound at or below the thinking budget. OpenRouter derives the
+///   budget as `max(min(max_tokens * ratio, 128000), 1024)` (ratio 0.1 minimal,
+///   0.2 low, 0.5 medium, 0.8 high, 0.95 above) and requires `max_tokens` to be
+///   strictly higher (openrouter.ai/docs/use-cases/reasoning-tokens). The
+///   default bound of 512 is always below the 1024 floor. The bound is raised
+///   so the configured answer length still fits after the budget.
+///
+/// A wearer report on 0.3.51 (anthropic/claude-sonnet-5.5 over OpenRouter:
+/// "model step failed ... llm refused with HTTP 400" on "play music", while
+/// deterministic weather answered) matches both. INFERRED: that this was the
+/// refusal in that report, and that a direct Anthropic-compatible endpoint
+/// derives its budget the same way.
+fn request_controls(
+    model: &str,
+    reasoning_effort: Option<&str>,
+    max_tokens: Option<u32>,
+    force_tool: bool,
+) -> RequestControls {
+    let claude_thinking =
+        reasoning_effort.is_some() && model.to_ascii_lowercase().contains("claude");
+    if !claude_thinking {
+        return RequestControls {
+            tool_choice: force_tool.then_some("required"),
+            max_tokens,
+        };
+    }
+    let ratio_percent: u64 = match reasoning_effort {
+        Some("minimal") => 10,
+        Some("low") => 20,
+        Some("medium") => 50,
+        Some("high") => 80,
+        _ => 95,
+    };
+    let max_tokens = max_tokens.map(|answer| {
+        let answer = u64::from(answer);
+        // Room above the 1024 floor, and room above a budget that scales with
+        // the bound itself: max_tokens * (1 - ratio) >= answer.
+        let above_floor = answer + 1024;
+        let above_ratio = (answer * 100).div_ceil(100 - ratio_percent);
+        u32::try_from(above_floor.max(above_ratio)).unwrap_or(u32::MAX)
+    });
+    RequestControls {
+        tool_choice: None,
+        max_tokens,
+    }
+}
+
 // --- wire types for the OpenAI chat-completions API ---
 #[derive(Serialize)]
 struct ChatReq<'a> {
@@ -1879,12 +1943,18 @@ impl ChatModel for OpenAiChatModel {
         tools: &[ToolDef],
     ) -> Result<ChatResponse, LlmError> {
         let msgs = wire_messages(messages);
+        let controls = request_controls(
+            &self.model,
+            self.reasoning_effort.as_deref(),
+            self.max_tokens,
+            explicit_playback_requires_tool(messages, tools),
+        );
         let body = ChatReq {
             model: &self.model,
             messages: msgs,
             tools: wire_tools(tools),
-            tool_choice: explicit_playback_requires_tool(messages, tools).then_some("required"),
-            max_tokens: self.max_tokens,
+            tool_choice: controls.tool_choice,
+            max_tokens: controls.max_tokens,
             reasoning: self
                 .reasoning_effort
                 .as_deref()
@@ -2086,5 +2156,94 @@ mod os3_cancel_intent_tests {
                 "not an exact cancellation: {text:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod request_controls_tests {
+    use super::request_controls;
+
+    /// OpenRouter's documented Claude thinking budget for `effort` at a
+    /// `max_tokens` ceiling: max(min(max_tokens * ratio, 128000), 1024).
+    fn openrouter_budget(effort: &str, max_tokens: u32) -> u32 {
+        let ratio = match effort {
+            "minimal" => 0.1,
+            "low" => 0.2,
+            "medium" => 0.5,
+            "high" => 0.8,
+            _ => 0.95,
+        };
+        ((f64::from(max_tokens) * ratio).min(128_000.0) as u32).max(1024)
+    }
+
+    #[test]
+    fn claude_with_thinking_is_never_forced_to_call_a_tool() {
+        for model in [
+            "anthropic/claude-sonnet-5.5",
+            "claude-opus-5-5",
+            "Anthropic/Claude-3.7",
+        ] {
+            let controls = request_controls(model, Some("low"), Some(512), true);
+            assert_eq!(controls.tool_choice, None, "{model}");
+        }
+    }
+
+    #[test]
+    fn playback_stays_forced_wherever_the_provider_allows_it() {
+        assert_eq!(
+            request_controls("openai/gpt-5.1", Some("low"), Some(512), true).tool_choice,
+            Some("required")
+        );
+        assert_eq!(
+            request_controls("anthropic/claude-sonnet-5.5", None, Some(512), true).tool_choice,
+            Some("required")
+        );
+        assert_eq!(
+            request_controls("anthropic/claude-sonnet-5.5", Some("low"), Some(512), false)
+                .tool_choice,
+            None
+        );
+    }
+
+    #[test]
+    fn claude_thinking_leaves_the_configured_answer_room_above_its_budget() {
+        for effort in ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] {
+            for answer in [1, 200, 512, 4096] {
+                let max_tokens = request_controls(
+                    "anthropic/claude-sonnet-5.5",
+                    Some(effort),
+                    Some(answer),
+                    false,
+                )
+                .max_tokens
+                .expect("a bounded request stays bounded");
+                let budget = openrouter_budget(effort, max_tokens);
+                assert!(
+                    max_tokens > budget,
+                    "{effort}/{answer}: {max_tokens} <= {budget}"
+                );
+                assert!(
+                    max_tokens - budget >= answer,
+                    "{effort}/{answer}: room {}",
+                    max_tokens - budget
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn other_requests_keep_their_bound_exactly() {
+        assert_eq!(
+            request_controls("openai/gpt-5.1", Some("high"), Some(512), false).max_tokens,
+            Some(512)
+        );
+        assert_eq!(
+            request_controls("anthropic/claude-sonnet-5.5", None, Some(512), false).max_tokens,
+            Some(512)
+        );
+        assert_eq!(
+            request_controls("anthropic/claude-sonnet-5.5", Some("high"), None, false).max_tokens,
+            None
+        );
     }
 }
