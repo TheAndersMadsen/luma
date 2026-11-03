@@ -23,9 +23,10 @@ afterEach(() => vi.clearAllMocks());
 
 const BASE = "http://center.test/api/settings/services/music/search";
 
-function request(query: string, origin: string | null): Request {
+function request(query: string, origin: string | null, fetchSite?: string): Request {
   const headers: Record<string, string> = {};
   if (origin) headers.origin = origin;
+  if (fetchSite) headers["sec-fetch-site"] = fetchSite;
   return new Request(`${BASE}?${query}`, { headers });
 }
 
@@ -36,6 +37,25 @@ describe("GET /api/settings/services/music/search", () => {
       expect(response.status, origin ?? "no origin").toBe(403);
     }
     expect(seam.gatewayQuery).not.toHaveBeenCalled();
+  });
+
+  it("refuses a sibling hostname or another site that names itself only in Sec-Fetch-Site", async () => {
+    for (const fetchSite of ["same-site", "cross-site", "none"]) {
+      const response = await GET(request("q=daft+punk&provider=youtube_music", null, fetchSite));
+      expect(response.status, fetchSite).toBe(403);
+    }
+    const contradicted = await GET(request("q=daft+punk&provider=youtube_music", "https://evil.test", "same-origin"));
+    expect(contradicted.status).toBe(403);
+    expect(seam.gatewayQuery).not.toHaveBeenCalled();
+  });
+
+  it("answers Center's own fetch, which a browser sends without an Origin header", async () => {
+    // The Fetch standard omits Origin on a same-origin GET; the browser marks
+    // it with Sec-Fetch-Site instead. This is the request Find a song makes.
+    seam.gatewayQuery.mockResolvedValueOnce({ tracks: [] });
+    const response = await GET(request("q=daft+punk&provider=youtube_music", null, "same-origin"));
+    expect(response.status).toBe(200);
+    expect(seam.gatewayQuery).toHaveBeenCalledTimes(1);
   });
 
   it("answers a same-origin search over the wearer's linked provider", async () => {

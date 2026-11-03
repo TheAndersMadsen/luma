@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420" role="img" aria-labelledby="title desc">
+  <title id="title">Luma</title>
+  <desc id="desc">An Ai Pin sends a beam of light past an eclipsed moon to a small cluster of servers: your own cloud.</desc>
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="45%" r="75%">
+      <stop offset="0" stop-color="#121414"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+    <radialGradient id="moon" cx="38%" cy="30%" r="80%">
+      <stop offset="0" stop-color="#2a2c2c"/>
+      <stop offset=".55" stop-color="#101111"/>
+      <stop offset="1" stop-color="#050505"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f5f5f5" stop-opacity=".9"/>
+      <stop offset=".45" stop-color="#a9abab" stop-opacity=".35"/>
+      <stop offset=".7" stop-color="#000" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2e3131"/>
+      <stop offset="1" stop-color="#0f0f0f"/>
+    </linearGradient>
+    <linearGradient id="cube-top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3d4141"/>
+      <stop offset="1" stop-color="#1f2121"/>
+    </linearGradient>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1200" height="420">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <clipPath id="frame"><rect width="1200" height="420" rx="24"/></clipPath>
+    <!-- One server node, drawn as an isometric cube with three status lights. -->
+    <g id="node">
+      <path d="M0 -22 L26 -9 L0 4 L-26 -9 Z" fill="url(#cube-top)"/>
+      <path d="M-26 -9 L0 4 L0 34 L-26 21 Z" fill="#161717"/>
+      <path d="M26 -9 L0 4 L0 34 L26 21 Z" fill="#0f0f0f"/>
+      <path d="M0 -22 L26 -9 L0 4 L-26 -9 Z" fill="none" stroke="#505355" stroke-width=".8"/>
+    </g>
+  </defs>
+
+  <style>
+    @keyframes draw { from { stroke-dashoffset: 600; } to { stroke-dashoffset: 0; } }
+    @keyframes travel { 0% { transform: translateX(0); opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { transform: translateX(560px); opacity: 0; } }
+    @keyframes breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+    @keyframes twinkle { 0%, 100% { opacity: .15; } 50% { opacity: .8; } }
+    @keyframes ring { 0% { transform: scale(1); opacity: .9; } 100% { transform: scale(7.5); opacity: 0; } }
+    @keyframes led { 0%, 70%, 100% { opacity: .25; } 80% { opacity: 1; } }
+    .beam { stroke-dasharray: 600; animation: draw 1.6s cubic-bezier(.2,.7,.2,1) both; }
+    .packet { animation: travel 2.8s linear infinite; }
+    .packet.b { animation-delay: .93s; }
+    .packet.c { animation-delay: 1.86s; }
+    .breathe { animation: breathe 3.2s ease-in-out infinite; }
+    .star { animation: twinkle 4s ease-in-out infinite; }
+    .star:nth-child(2n) { animation-delay: 1.3s; }
+    .star:nth-child(3n) { animation-delay: 2.6s; }
+    .ring { transform-box: fill-box; transform-origin: center; animation: ring 2.8s ease-out infinite; }
+    .ring.late { animation-delay: 1.4s; }
+    .led { animation: led 2.4s linear infinite; }
+    .led.d1 { animation-delay: .3s; } .led.d2 { animation-delay: .6s; } .led.d3 { animation-delay: .9s; } .led.d4 { animation-delay: 1.2s; }
+    @media (prefers-reduced-motion: reduce) {
+      .beam, .packet, .breathe, .star, .ring, .led { animation: none; }
+      .packet, .ring { opacity: 0; }
+    }
+  </style>
+
+  <g clip-path="url(#frame)">
+    <rect width="1200" height="420" fill="url(#sky)"/>
+
+    <g fill="#e2e2e0">
+      <circle class="star" cx="88" cy="62" r="1.2"/>
+      <circle class="star" cx="62" cy="384" r="1"/>
+      <circle class="star" cx="402" cy="44" r="1.4"/>
+      <circle class="star" cx="1032" cy="70" r="1.1"/>
+      <circle class="star" cx="1128" cy="300" r="1.3"/>
+      <circle class="star" cx="842" cy="380" r="1"/>
+      <circle class="star" cx="760" cy="36" r="1.2"/>
+      <circle class="star" cx="1160" cy="150" r=".9"/>
+      <circle class="star" cx="40" cy="250" r="1"/>
+    </g>
+
+    <!-- The eclipse: a dark moon with a lit upper-left rim. -->
+    <g transform="translate(600 250)">
+      <circle r="196" fill="none" stroke="url(#rim)" stroke-width="10" filter="url(#soft)" class="breathe"/>
+      <circle r="190" fill="url(#moon)"/>
+      <circle r="190" fill="none" stroke="url(#rim)" stroke-width="1.6"/>
+    </g>
+
+    <!-- The beam from the Pin to your server. -->
+    <g filter="url(#glow)">
+      <line class="beam" x1="300" y1="232" x2="884" y2="232" stroke="#00ffe0" stroke-width="2.4" stroke-linecap="round"/>
+    </g>
+    <g fill="#d2fff8" filter="url(#glow)">
+      <circle class="packet" cx="310" cy="232" r="3.2"/>
+      <circle class="packet b" cx="310" cy="232" r="3.2"/>
+      <circle class="packet c" cx="310" cy="232" r="3.2"/>
+    </g>
+
+    <!-- An abstract wearable: a rounded square with a lens and a light. -->
+    <g transform="translate(150 158)">
+      <rect x="6" y="10" width="150" height="150" rx="38" fill="#000" opacity=".6" filter="url(#soft)"/>
+      <rect width="150" height="150" rx="38" fill="url(#pin)" stroke="#3d4141" stroke-width="1.5"/>
+      <rect x="14" y="58" width="122" height="80" rx="24" fill="#161717" stroke="#2e3131"/>
+      <circle cx="116" cy="32" r="13" fill="#0f0f0f" stroke="#505355" stroke-width="2"/>
+      <circle cx="116" cy="32" r="5" fill="#1f2121"/>
+      <circle cx="138" cy="32" r="2.6" fill="#00ffe0" class="breathe" filter="url(#glow)"/>
+      <circle cx="150" cy="74" r="6" vector-effect="non-scaling-stroke" fill="none" stroke="#00ffe0" stroke-width="1.5" class="ring"/>
+      <circle cx="150" cy="74" r="6" vector-effect="non-scaling-stroke" fill="none" stroke="#00ffe0" stroke-width="1.5" class="ring late"/>
+      <circle cx="150" cy="74" r="4" fill="#00ffe0" filter="url(#glow)"/>
+    </g>
+
+    <!-- Your server: a hub and four nodes. -->
+    <g stroke="#00ffe0" stroke-width="1" opacity=".45">
+      <line x1="908" y1="232" x2="1000" y2="232"/>
+      <line x1="1000" y1="232" x2="1000" y2="132"/>
+      <line x1="1000" y1="232" x2="1000" y2="332"/>
+      <line x1="1000" y1="232" x2="1100" y2="232"/>
+      <line x1="908" y1="232" x2="1000" y2="132"/>
+      <line x1="1000" y1="132" x2="1100" y2="232"/>
+      <line x1="1100" y1="232" x2="1000" y2="332"/>
+      <line x1="1000" y1="332" x2="908" y2="232"/>
+    </g>
+    <use href="#node" x="908" y="226"/>
+    <use href="#node" x="1000" y="124"/>
+    <use href="#node" x="1100" y="226"/>
+    <use href="#node" x="1000" y="326"/>
+    <g transform="translate(1000 232) scale(1.6)">
+      <use href="#node"/>
+    </g>
+    <g fill="#00ffe0" filter="url(#glow)">
+      <circle class="led" cx="895" cy="238" r="1.8"/>
+      <circle class="led d1" cx="987" cy="136" r="1.8"/>
+      <circle class="led d2" cx="1087" cy="238" r="1.8"/>
+      <circle class="led d3" cx="987" cy="338" r="1.8"/>
+      <circle class="led d4" cx="980" cy="244" r="2.4"/>
+      <circle class="led d2" cx="980" cy="254" r="2.4"/>
+      <circle class="led" cx="980" cy="264" r="2.4"/>
+      <circle cx="884" cy="232" r="4"/>
+    </g>
+
+    <g font-family="Inter, -apple-system, 'Segoe UI', system-ui, sans-serif" fill="#a9abab" font-size="15" letter-spacing="2.5">
+      <text x="225" y="352" text-anchor="middle">YOUR AI PIN</text>
+      <text x="1000" y="392" text-anchor="middle">YOUR SERVER</text>
+    </g>
+  </g>
+</svg>

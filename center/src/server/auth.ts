@@ -207,7 +207,12 @@ export function operatorGateOutcome(
 /** Browser mutation requests must come from the same public origin. */
 export function isSameOriginRequest(request: Request): boolean {
   const suppliedOrigin = request.headers.get("origin");
-  if (!suppliedOrigin) return false;
+  // The Fetch standard omits Origin on a same-origin GET or HEAD, so Center's
+  // own reads (Settings → Music "Find a song") arrive without one. The browser
+  // still marks them with Sec-Fetch-Site, a header no page can set. Only an
+  // exact "same-origin" passes: "same-site" is a sibling hostname routed
+  // through Luma's Traefik, the case this check exists for.
+  if (!suppliedOrigin) return request.headers.get("sec-fetch-site") === "same-origin";
   const expectedOrigin = originFromHeaders(request.headers) ?? new URL(request.url).origin;
   try {
     return new URL(suppliedOrigin).origin === expectedOrigin;
