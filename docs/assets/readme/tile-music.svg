@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-labelledby="title desc">
+  <title id="title">Your music, by voice</title>
+  <desc id="desc">Four equaliser bars moving to a beat.</desc>
+  <style>
+    .b { transform-box: fill-box; transform-origin: center bottom; animation: eq 1.3s ease-in-out infinite; }
+    .b1 { animation-duration: 1.1s; animation-delay: .2s; } .b2 { animation-duration: 1.5s; animation-delay: .5s; } .b3 { animation-duration: 1.2s; animation-delay: .1s; }
+    @keyframes eq { 0%, 100% { transform: scaleY(.45); } 50% { transform: scaleY(1); } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  </style>
+  <rect width="96" height="96" rx="24" fill="#0a0b0b" stroke="#1f2121"/>
+  <g fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <rect class="b b0" x="29" y="46" width="6" height="24" rx="3" fill="#00ffe0" stroke="none"/>
+    <rect class="b b1" x="41" y="30" width="6" height="40" rx="3" fill="#00ffe0" stroke="none"/>
+    <rect class="b b2" x="53" y="40" width="6" height="30" rx="3" fill="#00ffe0" stroke="none"/>
+    <rect class="b b3" x="65" y="24" width="6" height="46" rx="3" fill="#00ffe0" stroke="none"/>
+  </g>
+</svg>

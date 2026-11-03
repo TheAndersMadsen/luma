@@ -25,6 +25,10 @@ shell finds and what to do next, run:
 
 ### Update Luma
 
+<p align="center">
+  <img src="assets/readme/update-loop.svg" width="100%" alt="The maintainer signs each release; the GitHub release holds five files, the signed checksums, and public images. Your server asks its update source every hour and, with automatic updates on, installs at night in six steps: download, verify signature, back up, set up, deploy, verify. A nightly update that fails after set-up restores the backup and runs the previous release again.">
+</p>
+
 Your server looks after its own updates. Every hour it asks its **update
 source** which release is newest. The update source is a Luma Center: the one
 whose installer you used, or, for a server installed from the release files,

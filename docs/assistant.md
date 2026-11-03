@@ -13,6 +13,10 @@ finish it:
 | A1 | One semantic task, direct answer, clarification, or one server lookup | Exact model provenance, step count, and terminal state are recorded |
 | A2 | A compound request with multiple tool operations | The bounded run upgrades from A1 only after more than one tool call |
 
+<p align="center">
+  <img src="assets/readme/assistant-run.svg" width="100%" alt="Each request gets one run with an absolute 70-second deadline. A router in code sends fixed phrasings and already-grounded steps down the direct route with no model call. Everything else takes the model loop: a model step of at most 20 seconds, a server tool whose result is untrusted data, then another model step. The answer leaves before the deadline.">
+</p>
+
 ## Deadlines
 
 Each call from the Pin gets one 70-second absolute deadline. It covers context

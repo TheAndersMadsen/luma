@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 390" width="1000" height="390" role="img" aria-labelledby="title desc">
+  <title id="title">Your server keeps itself current</title>
+  <desc id="desc">The maintainer's machine builds each release and signs it with cosign. The GitHub release holds five files, the signed SHA256SUMS, and public container images, so no account or token is needed. Every hour your server asks its update source, a Luma Center's /api/version, for the newest release. With automatic updates on it installs one between 03:00 and 05:00 in six steps: download, verify the signature with the key of the release you run, back up, set up with your saved values, deploy, and verify. Then Center shows the new version. If a nightly update fails after set-up, the server restores the backup and runs the previous release again.</desc>
+  <defs>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1000" height="390"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1f2121"/><stop offset="1" stop-color="#131414"/></linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#004d43"/><stop offset="1" stop-color="#0f1514"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#727679"/></marker>
+  </defs>
+  <style>
+    text { font-family: Inter, -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .t { fill: #f5f5f5; font-size: 15px; font-weight: 600; }
+    .s { fill: #a9abab; font-size: 12px; }
+    .n { fill: #a9abab; font-size: 11.5px; }
+    .k { fill: #727679; font-size: 11px; letter-spacing: 2px; }
+    .l { fill: #00ffe0; font-size: 11px; letter-spacing: .4px; }
+    .m { fill: #727679; font-size: 10.5px; }
+    .wire { fill: none; stroke: #005e59; stroke-width: 2; }
+    .thin { fill: none; stroke: #3d4141; stroke-width: 1.5; stroke-dasharray: 3 5; }
+    .flow { fill: none; stroke: #00ffe0; stroke-width: 2; stroke-dasharray: 4 14; animation: flow 1.1s linear infinite; }
+    .dot { fill: #d2fff8; animation: move 3s cubic-bezier(.45,0,.55,1) infinite; }
+    .pulse { animation: pulse 3s ease-in-out infinite; }
+    @keyframes flow { to { stroke-dashoffset: -18; } }
+    @keyframes move { 0% { offset-distance: 0%; opacity: 0; } 10% { opacity: 1; } 88% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+    @keyframes pulse { 0%, 100% { stroke-opacity: .35; } 50% { stroke-opacity: 1; } }
+    .hand { transform-box: view-box; transform-origin: 0 0; }
+    .hour { animation: spin 60s linear infinite; }
+    .minute { animation: spin 12s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .roll { fill: none; stroke: #727679; stroke-width: 1.5; stroke-dasharray: 5 6; animation: roll 1.6s linear infinite; }
+    @keyframes roll { to { stroke-dashoffset: 22; } }
+    .stg0 { animation: stg0 14.0s linear infinite; }
+    @keyframes stg0 { 0%, 5.9% { fill: #1f2121; stroke: #3d4141; } 6%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk0 { animation: chk0 14.0s linear infinite; }
+    @keyframes chk0 { 0%, 5.9% { opacity: 0; } 6%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    .bar0 { animation: bar0 14.0s linear infinite; }
+    @keyframes bar0 { 0%, 6% { stroke-dashoffset: 100; } 18%, 95% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 100; } }
+    .stg1 { animation: stg1 14.0s linear infinite; }
+    @keyframes stg1 { 0%, 17.9% { fill: #1f2121; stroke: #3d4141; } 18%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk1 { animation: chk1 14.0s linear infinite; }
+    @keyframes chk1 { 0%, 17.9% { opacity: 0; } 18%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    .bar1 { animation: bar1 14.0s linear infinite; }
+    @keyframes bar1 { 0%, 18% { stroke-dashoffset: 100; } 30%, 95% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 100; } }
+    .stg2 { animation: stg2 14.0s linear infinite; }
+    @keyframes stg2 { 0%, 29.9% { fill: #1f2121; stroke: #3d4141; } 30%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk2 { animation: chk2 14.0s linear infinite; }
+    @keyframes chk2 { 0%, 29.9% { opacity: 0; } 30%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    .bar2 { animation: bar2 14.0s linear infinite; }
+    @keyframes bar2 { 0%, 30% { stroke-dashoffset: 100; } 42%, 95% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 100; } }
+    .stg3 { animation: stg3 14.0s linear infinite; }
+    @keyframes stg3 { 0%, 41.9% { fill: #1f2121; stroke: #3d4141; } 42%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk3 { animation: chk3 14.0s linear infinite; }
+    @keyframes chk3 { 0%, 41.9% { opacity: 0; } 42%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    .bar3 { animation: bar3 14.0s linear infinite; }
+    @keyframes bar3 { 0%, 42% { stroke-dashoffset: 100; } 54%, 95% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 100; } }
+    .stg4 { animation: stg4 14.0s linear infinite; }
+    @keyframes stg4 { 0%, 53.9% { fill: #1f2121; stroke: #3d4141; } 54%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk4 { animation: chk4 14.0s linear infinite; }
+    @keyframes chk4 { 0%, 53.9% { opacity: 0; } 54%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    .bar4 { animation: bar4 14.0s linear infinite; }
+    @keyframes bar4 { 0%, 54% { stroke-dashoffset: 100; } 66%, 95% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 100; } }
+    .stg5 { animation: stg5 14.0s linear infinite; }
+    @keyframes stg5 { 0%, 65.9% { fill: #1f2121; stroke: #3d4141; } 66%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk5 { animation: chk5 14.0s linear infinite; }
+    @keyframes chk5 { 0%, 65.9% { opacity: 0; } 66%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    .bar5 { animation: bar5 14.0s linear infinite; }
+    @keyframes bar5 { 0%, 66% { stroke-dashoffset: 100; } 78%, 95% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 100; } }
+    .stg6 { animation: stg6 14.0s linear infinite; }
+    @keyframes stg6 { 0%, 77.9% { fill: #1f2121; stroke: #3d4141; } 78%, 95% { fill: #00ffe0; stroke: #00ffe0; } 100% { fill: #1f2121; stroke: #3d4141; } }
+    .chk6 { animation: chk6 14.0s linear infinite; }
+    @keyframes chk6 { 0%, 77.9% { opacity: 0; } 78%, 95% { opacity: 1; } 100% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      .flow, .pulse, .hl, .stg, .chk, .bar, .drain, .hand, .led, .req, .rsp, .roll { animation: none !important; }
+      .dot, .req, .rsp { display: none; }
+    }
+  </style>
+  <rect width="1000" height="390" rx="22" fill="#0a0b0b"/>
+  <text x="40" y="40" class="k">YOUR SERVER KEEPS ITSELF CURRENT</text>
+  <text x="960" y="40" class="k" text-anchor="end">NO ACCOUNT OR TOKEN NEEDED</text>
+  <path class="wire" d="M280 92 H330"/>
+  <path class="wire" d="M630 92 H680"/>
+  <g filter="url(#glow)" opacity=".8">
+    <path class="flow" d="M280 92 H330"/>
+    <path class="flow" d="M630 92 H680"/>
+  </g>
+  <path class="thin" d="M480 122 C480 190 100 160 100 224" marker-end="url(#arrow)"/>
+  <rect x="40" y="62" width="240" height="60" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="56" y="89" class="t">Maintainer's machine</text>
+  <text x="56" y="107" class="s">builds and signs each release</text>
+  <rect x="330" y="62" width="300" height="60" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="346" y="89" class="t">GitHub release</text>
+  <text x="346" y="107" class="s">5 files, signed SHA256SUMS, public images</text>
+  <rect x="680" y="62" width="280" height="60" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="696" y="89" class="t">Your update source</text>
+  <text x="696" y="107" class="s">a Luma Center's /api/version</text>
+  <text x="305" y="84" class="l" text-anchor="middle">cosign</text>
+  <text x="655" y="84" class="l" text-anchor="middle">newest?</text>
+  <text x="290" y="168" class="m" text-anchor="middle">downloaded by your server</text>
+  <g transform="translate(560 162)">
+    <circle r="14" fill="#131414" stroke="#3d4141"/>
+    <line class="hand hour" x1="0" y1="0" x2="0" y2="-7" stroke="#f5f5f5" stroke-width="2" stroke-linecap="round"/>
+    <line class="hand minute" x1="0" y1="0" x2="0" y2="-11" stroke="#00ffe0" stroke-width="1.5" stroke-linecap="round"/>
+    <circle r="1.5" fill="#f5f5f5"/>
+  </g>
+  <text x="584" y="158" class="n">asked every hour by your server</text>
+  <text x="584" y="174" class="n">installed between 03:00 and 05:00 with automatic updates on</text>
+  <line x1="112" y1="248" x2="228" y2="248" stroke="#3d4141" stroke-width="2"/>
+  <line class="bar0" x1="112" y1="248" x2="228" y2="248" stroke="#00ffe0" stroke-width="2" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0" filter="url(#glow)"/>
+  <line x1="252" y1="248" x2="368" y2="248" stroke="#3d4141" stroke-width="2"/>
+  <line class="bar1" x1="252" y1="248" x2="368" y2="248" stroke="#00ffe0" stroke-width="2" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0" filter="url(#glow)"/>
+  <line x1="392" y1="248" x2="508" y2="248" stroke="#3d4141" stroke-width="2"/>
+  <line class="bar2" x1="392" y1="248" x2="508" y2="248" stroke="#00ffe0" stroke-width="2" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0" filter="url(#glow)"/>
+  <line x1="532" y1="248" x2="648" y2="248" stroke="#3d4141" stroke-width="2"/>
+  <line class="bar3" x1="532" y1="248" x2="648" y2="248" stroke="#00ffe0" stroke-width="2" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0" filter="url(#glow)"/>
+  <line x1="672" y1="248" x2="788" y2="248" stroke="#3d4141" stroke-width="2"/>
+  <line class="bar4" x1="672" y1="248" x2="788" y2="248" stroke="#00ffe0" stroke-width="2" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0" filter="url(#glow)"/>
+  <line x1="812" y1="248" x2="928" y2="248" stroke="#3d4141" stroke-width="2"/>
+  <line class="bar5" x1="812" y1="248" x2="928" y2="248" stroke="#00ffe0" stroke-width="2" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0" filter="url(#glow)"/>
+  <circle class="stg0" cx="100" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk0" d="M95.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="100" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Download</text>
+  <text x="100" y="296" class="m" text-anchor="middle">5 files, from GitHub</text>
+  <circle class="stg1" cx="240" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk1" d="M235.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="240" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Verify signature</text>
+  <text x="240" y="296" class="m" text-anchor="middle">the maintainer's key</text>
+  <circle class="stg2" cx="380" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk2" d="M375.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="380" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Back up</text>
+  <text x="380" y="296" class="m" text-anchor="middle">nothing is lost</text>
+  <circle class="stg3" cx="520" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk3" d="M515.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="520" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Set up</text>
+  <text x="520" y="296" class="m" text-anchor="middle">your saved values</text>
+  <circle class="stg4" cx="660" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk4" d="M655.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="660" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Deploy</text>
+  <text x="660" y="296" class="m" text-anchor="middle">the new release</text>
+  <circle class="stg5" cx="800" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk5" d="M795.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="800" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Verify</text>
+  <text x="800" y="296" class="m" text-anchor="middle">a live check</text>
+  <circle class="stg6" cx="940" cy="248" r="11" fill="#00ffe0" stroke="#00ffe0" stroke-width="1.5"/>
+  <path class="chk6" d="M935.5 248 l3.2 3.4 l6 -6.6" fill="none" stroke="#0a0b0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="940" y="280" class="n" text-anchor="middle" fill="#f5f5f5" font-weight="600">Live</text>
+  <text x="940" y="296" class="m" text-anchor="middle">Center shows it</text>
+  <path class="roll" d="M800 308 C800 356 380 356 380 310" marker-end="url(#arrow)"/>
+  <text x="590.0" y="376" class="n" text-anchor="middle">If a nightly update fails after set-up, the backup goes back and the previous release runs again.</text>
+  <g filter="url(#glow)">
+    <circle class="dot" r="3.5" style="offset-path: path('M280 92 H330'); animation-duration: 2.4s; animation-delay: 0s"/>
+    <circle class="dot" r="3.5" style="offset-path: path('M630 92 H680'); animation-duration: 2.4s; animation-delay: 1.2s"/>
+    <circle class="dot" r="4" style="offset-path: path('M480 122 C480 190 100 160 100 224'); animation-duration: 3.6s; animation-delay: 0.4s"/>
+  </g>
+</svg>

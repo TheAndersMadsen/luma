@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420" role="img" aria-labelledby="title desc">
-  <title id="title">Luma</title>
-  <desc id="desc">An Ai Pin sends a beam of light past an eclipsed moon to a small cluster of servers: your own cloud.</desc>
+  <title id="title">Luma. Your Ai Pin. Yours again.</title>
+  <desc id="desc">An Ai Pin sends a beam of light behind an eclipsed moon to a small cluster of servers: your own cloud. The moon carries the Luma wordmark and the line "Your Ai Pin. Yours again."</desc>
   <defs>
     <radialGradient id="sky" cx="50%" cy="45%" r="75%">
       <stop offset="0" stop-color="#121414"/>
@@ -24,15 +24,22 @@
       <stop offset="0" stop-color="#3d4141"/>
       <stop offset="1" stop-color="#1f2121"/>
     </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#c9cbcb"/>
+    </linearGradient>
     <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1200" height="420">
       <feGaussianBlur stdDeviation="4" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="halo" filterUnits="userSpaceOnUse" x="0" y="0" width="1200" height="420">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur stdDeviation="6"/>
     </filter>
     <clipPath id="frame"><rect width="1200" height="420" rx="24"/></clipPath>
-    <!-- One server node, drawn as an isometric cube with three status lights. -->
     <g id="node">
       <path d="M0 -22 L26 -9 L0 4 L-26 -9 Z" fill="url(#cube-top)"/>
       <path d="M-26 -9 L0 4 L0 34 L-26 21 Z" fill="#161717"/>
@@ -42,12 +49,14 @@
   </defs>
 
   <style>
+    text { font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Inter, "Segoe UI", system-ui, sans-serif; }
     @keyframes draw { from { stroke-dashoffset: 600; } to { stroke-dashoffset: 0; } }
     @keyframes travel { 0% { transform: translateX(0); opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { transform: translateX(560px); opacity: 0; } }
     @keyframes breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
     @keyframes twinkle { 0%, 100% { opacity: .15; } 50% { opacity: .8; } }
     @keyframes ring { 0% { transform: scale(1); opacity: .9; } 100% { transform: scale(7.5); opacity: 0; } }
     @keyframes led { 0%, 70%, 100% { opacity: .25; } 80% { opacity: 1; } }
+    @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     .beam { stroke-dasharray: 600; animation: draw 1.6s cubic-bezier(.2,.7,.2,1) both; }
     .packet { animation: travel 2.8s linear infinite; }
     .packet.b { animation-delay: .93s; }
@@ -60,8 +69,13 @@
     .ring.late { animation-delay: 1.4s; }
     .led { animation: led 2.4s linear infinite; }
     .led.d1 { animation-delay: .3s; } .led.d2 { animation-delay: .6s; } .led.d3 { animation-delay: .9s; } .led.d4 { animation-delay: 1.2s; }
+    .rise { animation: rise 1.4s cubic-bezier(.2,.7,.2,1) both; }
+    .rise.late { animation-delay: .35s; }
+    .wordmark { font-size: 98px; font-weight: 700; letter-spacing: -4px; fill: url(#ink); }
+    .tagline { font-size: 21px; font-weight: 500; letter-spacing: .2px; fill: #c9cbcb; }
+    .label { font-size: 15px; letter-spacing: 2.5px; fill: #a9abab; }
     @media (prefers-reduced-motion: reduce) {
-      .beam, .packet, .breathe, .star, .ring, .led { animation: none; }
+      .beam, .packet, .breathe, .star, .ring, .led, .rise { animation: none; }
       .packet, .ring { opacity: 0; }
     }
   </style>
@@ -81,14 +95,7 @@
       <circle class="star" cx="40" cy="250" r="1"/>
     </g>
 
-    <!-- The eclipse: a dark moon with a lit upper-left rim. -->
-    <g transform="translate(600 250)">
-      <circle r="196" fill="none" stroke="url(#rim)" stroke-width="10" filter="url(#soft)" class="breathe"/>
-      <circle r="190" fill="url(#moon)"/>
-      <circle r="190" fill="none" stroke="url(#rim)" stroke-width="1.6"/>
-    </g>
-
-    <!-- The beam from the Pin to your server. -->
+    <!-- The beam from the Pin to your server passes behind the moon. -->
     <g filter="url(#glow)">
       <line class="beam" x1="300" y1="232" x2="884" y2="232" stroke="#00ffe0" stroke-width="2.4" stroke-linecap="round"/>
     </g>
@@ -97,6 +104,19 @@
       <circle class="packet b" cx="310" cy="232" r="3.2"/>
       <circle class="packet c" cx="310" cy="232" r="3.2"/>
     </g>
+
+    <!-- The eclipse: a dark moon with a lit upper-left rim. -->
+    <g transform="translate(600 250)">
+      <circle r="196" fill="none" stroke="url(#rim)" stroke-width="10" filter="url(#soft)" class="breathe"/>
+      <circle r="190" fill="url(#moon)"/>
+      <circle r="190" fill="none" stroke="url(#rim)" stroke-width="1.6"/>
+    </g>
+
+    <!-- The wordmark sits on the dark face of the moon. -->
+    <g filter="url(#halo)">
+      <text class="wordmark rise" x="600" y="262" text-anchor="middle">Luma</text>
+    </g>
+    <text class="tagline rise late" x="600" y="312" text-anchor="middle">Your Ai Pin. Yours again.</text>
 
     <!-- An abstract wearable: a rounded square with a lens and a light. -->
     <g transform="translate(150 158)">
@@ -140,9 +160,7 @@
       <circle cx="884" cy="232" r="4"/>
     </g>
 
-    <g font-family="Inter, -apple-system, 'Segoe UI', system-ui, sans-serif" fill="#a9abab" font-size="15" letter-spacing="2.5">
-      <text x="225" y="352" text-anchor="middle">YOUR AI PIN</text>
-      <text x="1000" y="392" text-anchor="middle">YOUR SERVER</text>
-    </g>
+    <text class="label" x="225" y="352" text-anchor="middle">YOUR AI PIN</text>
+    <text class="label" x="1000" y="392" text-anchor="middle">YOUR SERVER</text>
   </g>
 </svg>

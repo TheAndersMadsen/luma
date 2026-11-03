@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-labelledby="title desc">
+  <title id="title">What Luma installs on the Pin</title>
+  <desc id="desc">The stock apps and the stock assistant runtime stay on the Pin unchanged. Luma adds five apps: the Compatibility Loader configures the stock apps in memory at boot; the Compatibility Layer routes their cloud calls only to your activated Cosmos, over TLS with the Pin's own certificate; Device Services does the on-device work and talks to Center over USB or the encrypted Iroh link; Device Installer installs and updates Luma over USB; the Setup Helper is used by the first install only and then removed.</desc>
+  <defs>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1000" height="400"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1f2121"/><stop offset="1" stop-color="#131414"/></linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#004d43"/><stop offset="1" stop-color="#0f1514"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#727679"/></marker>
+  </defs>
+  <style>
+    text { font-family: Inter, -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .t { fill: #f5f5f5; font-size: 15px; font-weight: 600; }
+    .s { fill: #a9abab; font-size: 12px; }
+    .n { fill: #a9abab; font-size: 11.5px; }
+    .k { fill: #727679; font-size: 11px; letter-spacing: 2px; }
+    .l { fill: #00ffe0; font-size: 11px; letter-spacing: .4px; }
+    .m { fill: #727679; font-size: 10.5px; }
+    .wire { fill: none; stroke: #005e59; stroke-width: 2; }
+    .thin { fill: none; stroke: #3d4141; stroke-width: 1.5; stroke-dasharray: 3 5; }
+    .flow { fill: none; stroke: #00ffe0; stroke-width: 2; stroke-dasharray: 4 14; animation: flow 1.1s linear infinite; }
+    .dot { fill: #d2fff8; animation: move 3s cubic-bezier(.45,0,.55,1) infinite; }
+    .pulse { animation: pulse 3s ease-in-out infinite; }
+    @keyframes flow { to { stroke-dashoffset: -18; } }
+    @keyframes move { 0% { offset-distance: 0%; opacity: 0; } 10% { opacity: 1; } 88% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+    @keyframes pulse { 0%, 100% { stroke-opacity: .35; } 50% { stroke-opacity: 1; } }
+    .req { fill: #d2fff8; animation: move 4.2s cubic-bezier(.45,0,.55,1) infinite; }
+    .rsp { fill: #00ffe0; animation: move 3.6s cubic-bezier(.45,0,.55,1) infinite; animation-delay: 2.4s; }
+    .hl { animation: hl 6.6s linear infinite; }
+    @keyframes hl { 0%, 28% { stroke: #3d4141; } 32%, 60% { stroke: #00ffe0; } 64%, 100% { stroke: #3d4141; } }
+    @media (prefers-reduced-motion: reduce) {
+      .flow, .pulse, .hl, .stg, .chk, .bar, .drain, .hand, .led, .req, .rsp, .roll { animation: none !important; }
+      .dot, .req, .rsp { display: none; }
+    }
+  </style>
+  <rect width="1000" height="400" rx="22" fill="#0a0b0b"/>
+  <text x="40" y="40" class="k">STOCK, UNCHANGED ON DISK</text>
+  <text x="370" y="40" class="k">LUMA'S FIVE APPS</text>
+  <text x="740" y="40" class="k">OUTSIDE THE PIN</text>
+  <path class="wire" d="M165 128 V152"/>
+  <path class="wire" d="M290 184 C330 184 330 154 370 154"/>
+  <path class="wire" d="M660 154 C700 154 700 145 740 145"/>
+  <path class="wire" d="M660 222 C700 222 700 258 740 258"/>
+  <path class="wire" d="M660 290 H740"/>
+  <g filter="url(#glow)" opacity=".8">
+    <path class="flow" d="M165 128 V152"/>
+    <path class="flow" d="M290 184 C330 184 330 154 370 154"/>
+    <path class="flow" d="M660 154 C700 154 700 145 740 145"/>
+    <path class="flow" d="M660 222 C700 222 700 258 740 258"/>
+    <path class="flow" d="M660 290 H740"/>
+  </g>
+  <path class="wire" d="M370 166 C336 166 336 222 370 222"/>
+  <path class="thin" d="M370 90 C330 90 330 96 290 96" marker-end="url(#arrow)"/>
+  <rect x="40" y="64" width="250" height="64" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="56" y="93" class="t">Stock apps</text>
+  <text x="56" y="111" class="s">Ai Mic, Camera, Notes, Music…</text>
+  <rect x="40" y="152" width="250" height="64" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="56" y="181" class="t">Stock assistant runtime</text>
+  <text x="56" y="199" class="s">the original AiBus calls</text>
+  <rect x="370" y="64" width="290" height="52" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="88" class="t">Compatibility Loader</text>
+  <text x="386" y="106" class="s">configures the stock apps in memory at boot</text>
+  <rect x="370" y="128" width="290" height="52" rx="14" fill="url(#card)" stroke="#3d4141" class="hl"/>
+  <text x="386" y="152" class="t">Compatibility Layer</text>
+  <text x="386" y="170" class="s">routes their cloud calls to your Cosmos only</text>
+  <rect x="370" y="192" width="290" height="52" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="216" class="t">Device Services</text>
+  <text x="386" y="234" class="s">captures, settings, playback, native actions</text>
+  <rect x="370" y="256" width="290" height="52" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="280" class="t">Device Installer</text>
+  <text x="386" y="298" class="s">installs and updates Luma over USB</text>
+  <rect x="370" y="320" width="290" height="44" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="340" class="t">Setup Helper</text>
+  <text x="386" y="358" class="s">first install only, then removed</text>
+  <rect x="740" y="110" width="220" height="70" rx="14" fill="url(#core)" stroke="#00ffe0"/>
+  <text x="756" y="141" class="t">Your Cosmos</text>
+  <text x="756" y="159" class="s">TLS, the Pin's own certificate</text>
+  <rect x="740" y="236" width="220" height="70" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="756" y="267" class="t">Center in your browser</text>
+  <text x="756" y="285" class="s">USB cable, or the Iroh link</text>
+  <text x="330" y="80" class="m" text-anchor="middle">at boot</text>
+  <text x="700" y="128" class="l" text-anchor="middle">only after activation</text>
+  <text x="366" y="238" class="m" text-anchor="end">local link</text>
+  <text x="700" y="248" class="l" text-anchor="middle">USB or Iroh, encrypted</text>
+  <text x="700" y="306" class="l" text-anchor="middle">over USB</text>
+  <text x="40" y="384" class="n">The Compatibility Layer talks only to your activated Cosmos. Before activation, or with your server away, it stops instead of calling another cloud.</text>
+  <g filter="url(#glow)">
+    <circle class="req" r="4" style="offset-path: path('M165 100 V184 H290 C330 184 330 154 370 154 H660 C700 154 700 145 740 145'); animation-duration: 4.2s; animation-delay: 0s"/>
+    <circle class="rsp" r="3.5" style="offset-path: path('M740 145 C700 145 700 154 660 154 H370 V166 C336 166 336 222 370 222 H515'); animation-duration: 3.6s; animation-delay: 2.4s"/>
+    <circle class="dot" r="3" style="offset-path: path('M740 258 C700 258 700 222 660 222 H515'); animation-duration: 3s; animation-delay: 0.8s"/>
+    <circle class="dot" r="3" style="offset-path: path('M515 222 H660 C700 222 700 258 740 258'); animation-duration: 3s; animation-delay: 2.3s"/>
+  </g>
+</svg>
