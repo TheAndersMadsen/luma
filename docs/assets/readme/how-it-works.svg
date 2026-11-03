@@ -72,6 +72,7 @@
   </g>
 
   <text x="375" y="96" class="l" text-anchor="middle">voice · photos · notes</text>
+  <text x="375" y="128" class="l" text-anchor="middle" opacity=".8">TLS, the Pin's own certificate</text>
   <text x="275" y="240" class="l" text-anchor="middle">HTTPS</text>
   <text x="612" y="236" class="l">your sign-in</text>
   <text x="742" y="88" class="l" text-anchor="middle">your keys</text>
@@ -98,7 +99,7 @@
   <text x="342" y="266" class="s">your humane.center</text>
 
   <!-- Providers -->
-  <text x="796" y="50" class="k">PROVIDERS</text>
+  <text x="796" y="50" class="k">YOUR PROVIDERS</text>
   <g>
     <rect x="796" y="92" width="170" height="36" rx="10" fill="url(#card)" stroke="#3d4141"/>
     <text x="814" y="115" class="s">AI model</text>

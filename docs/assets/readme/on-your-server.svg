@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-labelledby="title desc">
+  <title id="title">What runs on your server</title>
+  <desc id="desc">Traefik owns ports 80 and 443 and sorts traffic by name. Your browser's HTTPS requests go to Center and to Keycloak for sign-in; Center reads everything from Cosmos. The Pin's calls to the stock cloud names pass through unopened to the device edge, Envoy, which requires the Pin's certificate and forwards gRPC to Cosmos. Cosmos is one image running seven workloads, ai-bus, account, contacts, feature-flags, notable-events, provisioning, and connectivity, on one PostgreSQL database. Optional features add SearXNG, the Spotify adapter, the Iroh bridge, and Prometheus with Grafana, which stay on localhost.</desc>
+  <defs>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1000" height="400"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1f2121"/><stop offset="1" stop-color="#131414"/></linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#004d43"/><stop offset="1" stop-color="#0f1514"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#727679"/></marker>
+  </defs>
+  <style>
+    text { font-family: Inter, -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .t { fill: #f5f5f5; font-size: 15px; font-weight: 600; }
+    .s { fill: #a9abab; font-size: 12px; }
+    .n { fill: #a9abab; font-size: 11.5px; }
+    .k { fill: #727679; font-size: 11px; letter-spacing: 2px; }
+    .l { fill: #00ffe0; font-size: 11px; letter-spacing: .4px; }
+    .m { fill: #727679; font-size: 10.5px; }
+    .wire { fill: none; stroke: #005e59; stroke-width: 2; }
+    .thin { fill: none; stroke: #3d4141; stroke-width: 1.5; stroke-dasharray: 3 5; }
+    .flow { fill: none; stroke: #00ffe0; stroke-width: 2; stroke-dasharray: 4 14; animation: flow 1.1s linear infinite; }
+    .dot { fill: #d2fff8; animation: move 3s cubic-bezier(.45,0,.55,1) infinite; }
+    .pulse { animation: pulse 3s ease-in-out infinite; }
+    @keyframes flow { to { stroke-dashoffset: -18; } }
+    @keyframes move { 0% { offset-distance: 0%; opacity: 0; } 10% { opacity: 1; } 88% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+    @keyframes pulse { 0%, 100% { stroke-opacity: .35; } 50% { stroke-opacity: 1; } }
+    .led { animation: led 4.9s linear infinite; }
+    @keyframes led { 0%, 100% { stroke: #3d4141; } 6% { stroke: #00ffe0; } 14% { stroke: #3d4141; } }
+    .led0 { animation-delay: 0.0s; }
+    .led1 { animation-delay: 0.7s; }
+    .led2 { animation-delay: 1.4s; }
+    .led3 { animation-delay: 2.1s; }
+    .led4 { animation-delay: 2.8s; }
+    .led5 { animation-delay: 3.5s; }
+    .led6 { animation-delay: 4.2s; }
+    .db { animation: pulse 4s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .flow, .pulse, .hl, .stg, .chk, .bar, .drain, .hand, .led, .req, .rsp, .roll { animation: none !important; }
+      .dot, .req, .rsp { display: none; }
+    }
+  </style>
+  <rect width="1000" height="400" rx="22" fill="#0a0b0b"/>
+  <text x="40" y="40" class="k">ON YOUR SERVER</text>
+  <text x="960" y="40" class="k" text-anchor="end">15 CONTAINERS WITH THE DEFAULTS, 17 WITH EVERY FEATURE</text>
+  <path class="wire" d="M200 102 H250"/>
+  <path class="wire" d="M310 90 H370"/>
+  <path class="wire" d="M520 90 H570"/>
+  <path class="wire" d="M200 314 H250"/>
+  <path class="wire" d="M310 314 H370"/>
+  <path class="wire" d="M520 314 H570"/>
+  <g filter="url(#glow)" opacity=".8">
+    <path class="flow" d="M200 102 H250"/>
+    <path class="flow" d="M310 90 H370"/>
+    <path class="flow" d="M520 90 H570"/>
+    <path class="flow" d="M200 314 H250"/>
+    <path class="flow" d="M310 314 H370"/>
+    <path class="flow" d="M520 314 H570"/>
+  </g>
+  <path class="wire" d="M445 118 V134"/>
+  <rect x="40" y="70" width="160" height="64" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="56" y="99" class="t">Your browser</text>
+  <text x="56" y="117" class="s">https://center.example…</text>
+  <rect x="40" y="282" width="160" height="64" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="56" y="311" class="t">Your Pin</text>
+  <text x="56" y="329" class="s">the stock cloud names</text>
+  <rect x="250" y="56" width="60" height="300" rx="14" fill="url(#card)" stroke="#005e59"/>
+  <text transform="translate(284 206) rotate(-90)" text-anchor="middle" class="k">TRAEFIK · PORTS 80 AND 443</text>
+  <rect x="370" y="62" width="150" height="56" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="88" class="t">Center</text>
+  <text x="386" y="106" class="s">your humane.center</text>
+  <rect x="370" y="134" width="150" height="56" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="160" class="t">Keycloak</text>
+  <text x="386" y="178" class="s">sign-in, /realms/humane</text>
+  <rect x="370" y="286" width="150" height="56" rx="14" fill="url(#card)" stroke="#3d4141"/>
+  <text x="386" y="312" class="t">Device edge</text>
+  <text x="386" y="330" class="s">Envoy, Pin certificate</text>
+  <rect x="570" y="54" width="250" height="306" rx="16" fill="#0f0f0f" stroke="#3d4141" stroke-dasharray="6 6"/>
+  <text x="584" y="78" class="k">COSMOS · ONE IMAGE</text>
+  <rect x="584" y="92" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led0"/>
+  <text x="638.0" y="111.0" class="n" text-anchor="middle">ai-bus</text>
+  <rect x="702" y="92" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led1"/>
+  <text x="756.0" y="111.0" class="n" text-anchor="middle">account</text>
+  <rect x="584" y="130" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led2"/>
+  <text x="638.0" y="149.0" class="n" text-anchor="middle">contacts</text>
+  <rect x="702" y="130" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led3"/>
+  <text x="756.0" y="149.0" class="n" text-anchor="middle">feature-flags</text>
+  <rect x="584" y="168" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led4"/>
+  <text x="638.0" y="187.0" class="n" text-anchor="middle">notable-events</text>
+  <rect x="702" y="168" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led5"/>
+  <text x="756.0" y="187.0" class="n" text-anchor="middle">provisioning</text>
+  <rect x="584" y="206" width="108" height="30" rx="9" fill="url(#card)" stroke="#3d4141" class="led led6"/>
+  <text x="638.0" y="225.0" class="n" text-anchor="middle">connectivity</text>
+  <path class="db" d="M660 262 v38 a60 10 0 0 0 120 0 v-38" fill="url(#card)" stroke="#00ffe0" stroke-width="1.5"/>
+  <ellipse class="db" cx="720" cy="262" rx="60" ry="10" fill="#1f2121" stroke="#00ffe0" stroke-width="1.5"/>
+  <text x="720" y="288" class="t" text-anchor="middle">PostgreSQL</text>
+  <text x="720" y="304" class="m" text-anchor="middle">one database, all your data</text>
+  <text x="584" y="348" class="k">THE PIN'S CLOUD, THE ASSISTANT, ALL STORAGE</text>
+  <text x="850" y="78" class="k">OPTIONAL</text>
+  <rect x="850" y="92" width="110" height="30" rx="9" fill="url(#card)" stroke="#3d4141"/>
+  <text x="905.0" y="111.0" class="n" text-anchor="middle">SearXNG</text>
+  <rect x="850" y="130" width="110" height="30" rx="9" fill="url(#card)" stroke="#3d4141"/>
+  <text x="905.0" y="149.0" class="n" text-anchor="middle">Spotify adapter</text>
+  <rect x="850" y="168" width="110" height="30" rx="9" fill="url(#card)" stroke="#3d4141"/>
+  <text x="905.0" y="187.0" class="n" text-anchor="middle">Iroh bridge</text>
+  <rect x="850" y="206" width="110" height="30" rx="9" fill="url(#card)" stroke="#3d4141"/>
+  <text x="905.0" y="225.0" class="n" text-anchor="middle">Prometheus</text>
+  <rect x="850" y="244" width="110" height="30" rx="9" fill="url(#card)" stroke="#3d4141"/>
+  <text x="905.0" y="263.0" class="n" text-anchor="middle">Grafana</text>
+  <text x="850" y="296" class="m">metrics stay on localhost</text>
+  <text x="225" y="94" class="l" text-anchor="middle">HTTPS</text>
+  <text x="225" y="306" class="l" text-anchor="middle">TLS</text>
+  <text x="340" y="306" class="l" text-anchor="middle">unopened</text>
+  <text x="545" y="306" class="l" text-anchor="middle">gRPC</text>
+  <text x="40" y="384" class="n">Traefik sorts by name: your domain goes to Center and sign-in, the Pin's stock cloud names pass unopened to the device edge.</text>
+  <g filter="url(#glow)">
+    <circle class="dot" r="4" style="offset-path: path('M200 102 H280 V90 H600'); animation-duration: 3.2s; animation-delay: 0s"/>
+    <circle class="dot" r="3" style="offset-path: path('M200 102 H280 V90 H600'); animation-duration: 3.2s; animation-delay: 1.6s"/>
+    <circle class="dot" r="4" style="offset-path: path('M200 314 H600'); animation-duration: 3.2s; animation-delay: 0.8s"/>
+    <circle class="dot" r="3" style="offset-path: path('M200 314 H600'); animation-duration: 3.2s; animation-delay: 2.4s"/>
+  </g>
+</svg>

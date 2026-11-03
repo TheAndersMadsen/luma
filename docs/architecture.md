@@ -68,6 +68,10 @@ current Pin's state.
 
 ### On your server
 
+<p align="center">
+  <img src="assets/readme/on-your-server.svg" width="100%" alt="Traefik owns ports 80 and 443 and sorts traffic by name. Your browser's HTTPS requests reach Center and Keycloak; the Pin's calls to the stock cloud names pass unopened to the Envoy device edge, which requires the Pin's certificate and forwards gRPC to Cosmos. Cosmos runs seven workloads on one PostgreSQL database. Optional features add SearXNG, the Spotify adapter, the Iroh bridge, and Prometheus with Grafana.">
+</p>
+
 Traefik owns public ports 80 and 443 and sorts traffic by name:
 
 | Traffic | Goes to |
@@ -86,6 +90,10 @@ edge (`pin`), and Prometheus with Grafana on `127.0.0.1:13001` by default
 
 
 ## How a stock Pin talks to Luma
+
+<p align="center">
+  <img src="assets/readme/on-the-pin.svg" width="100%" alt="The stock apps and the stock assistant runtime stay on the Pin unchanged. Luma adds five apps: the Compatibility Loader configures the stock apps in memory at boot, the Compatibility Layer routes their cloud calls only to your activated Cosmos, Device Services does the on-device work and talks to Center over USB or Iroh, Device Installer installs and updates Luma over USB, and the Setup Helper is used by the first install only.">
+</p>
 
 Luma's checked-in stock-compatibility contracts show why the device needs a
 compatibility layer. The stock apps are signed together and call exact Android
