@@ -427,7 +427,10 @@ the supported default scopes, then reconnect TIDAL in Center.
 
 #### Where music runs and what is stored
 
-Spotify plays natively on the Pin. Center runs the YouTube Music and TIDAL
+Spotify plays natively on the Pin. Its catalog searches, library, and playlist
+lookups call Spotify's Web API from the Pin with the login5 token of the paired
+session, the token Spotify Connect itself uses there; when one fails, the Pin
+runtime logs the Web API status code. Center runs the YouTube Music and TIDAL
 catalog and playback logic. Cosmos keeps the linked YouTube Music, TIDAL, and
 Apple Music accounts (sealed) and the provider the Pin plays from. Center keeps
 none of them, and the Pin receives none. YouTube player requests and the audio

@@ -65,11 +65,6 @@ const PLAYER_LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const PLAYER_DROP_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(30);
 const SPOTIFY_API: &str = "https://api.spotify.com/v1";
-const SEARCH_SCOPE: &str = "user-read-private";
-const LIBRARY_READ_SCOPE: &str = "user-library-read";
-const LIBRARY_WRITE_SCOPE: &str = "user-library-modify";
-const PLAYLIST_READ_SCOPE: &str = "playlist-read-private,playlist-read-collaborative";
-const TOP_ITEMS_SCOPE: &str = "user-top-read";
 const MAX_TRACK_CACHE: usize = 256;
 const MAX_PLAYBACK_BUFFERS: usize = 3;
 const API_PAGE_SIZE: usize = 50;
@@ -1793,11 +1788,7 @@ impl SpotifyService {
         }
         self.require_enabled().await?;
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(LIBRARY_WRITE_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let response = self
             .send_api(
                 self.inner
@@ -2865,11 +2856,7 @@ impl SpotifyService {
             return Err(SpotifyError::InvalidRequest("invalid search query"));
         }
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(SEARCH_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let mut tracks = Vec::with_capacity(limit);
         let mut offset = 0usize;
         while tracks.len() < limit {
@@ -2915,11 +2902,7 @@ impl SpotifyService {
 
     async fn saved_tracks(&self, limit: usize) -> Result<Vec<SpotifyTrack>, SpotifyError> {
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(LIBRARY_READ_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let mut tracks = Vec::with_capacity(limit);
         let mut offset = 0usize;
         while tracks.len() < limit {
@@ -2985,11 +2968,7 @@ impl SpotifyService {
             return Err(SpotifyError::InvalidRequest("invalid artist name"));
         }
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(SEARCH_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let search = self
             .api_json(
                 self.inner
@@ -3023,11 +3002,7 @@ impl SpotifyService {
 
     async fn top_tracks(&self, limit: usize) -> Result<Vec<SpotifyTrack>, SpotifyError> {
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(TOP_ITEMS_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let mut tracks = Vec::with_capacity(limit);
         let mut offset = 0usize;
         while tracks.len() < limit {
@@ -3077,11 +3052,7 @@ impl SpotifyService {
             return Err(SpotifyError::InvalidRequest("invalid playlist name"));
         }
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(PLAYLIST_READ_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let playlist_id = match parse_playlist_reference(name) {
             Some(id) => id,
             None => {
@@ -3241,11 +3212,7 @@ impl SpotifyService {
             return Err(SpotifyError::InvalidRequest("invalid album name"));
         }
         let session = self.session().await?;
-        let token = session
-            .token_provider()
-            .get_token(SEARCH_SCOPE)
-            .await
-            .map_err(|_| SpotifyError::Unavailable)?;
+        let token = web_api_token(&session).await?;
         let query = match artist_name.map(str::trim).filter(|name| !name.is_empty()) {
             Some(artist) => format!("album:{album_name} artist:{artist}"),
             None => format!("album:{album_name}"),
@@ -3756,12 +3723,34 @@ fn build_search_query(request: &SpotifyQueryRequest) -> String {
     }
 }
 
+/// The Bearer for Spotify Web API calls (search, library, top tracks, playlists).
+///
+/// It comes from login5, the same token librespot itself uses for the dealer and
+/// spclient, so a Pin that shows up in Spotify Connect can also search. The
+/// legacy Mercury keymaster path (`token_provider().get_token(scope)`) asks with
+/// the session client ID, which librespot 0.8 sets to Spotify's Android client
+/// ID on the Pin (`SessionConfig::default_for_os("android")`). librespot warns
+/// that "not all combinations of scopes and client ID are allowed" there
+/// (`librespot_core::token::TokenProvider::get_token`). A wearer report on
+/// 0.3.51 shows the result: Connect listed the Pin and the status read
+/// Connected, yet every catalog query answered `Unavailable` (HTTP 503).
+/// INFERRED: that keymaster was the failing step, and that `api.spotify.com/v1`
+/// accepts the Android login5 token for these endpoints; neither is proven on a
+/// Pin yet.
+async fn web_api_token(session: &Session) -> Result<librespot_core::token::Token, SpotifyError> {
+    session.login5().auth_token().await.map_err(|error| {
+        warn!("Spotify Web API token unavailable: {:?}", error.kind);
+        SpotifyError::Unavailable
+    })
+}
+
 fn classify_response(status: reqwest::StatusCode) -> Result<(), SpotifyError> {
     if status.is_success() {
         Ok(())
     } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         Err(SpotifyError::RateLimited)
     } else {
+        warn!("Spotify Web API answered HTTP {}", status.as_u16());
         Err(SpotifyError::Unavailable)
     }
 }
