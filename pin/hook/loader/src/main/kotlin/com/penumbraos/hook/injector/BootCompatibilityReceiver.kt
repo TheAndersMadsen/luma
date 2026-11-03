@@ -30,6 +30,37 @@ internal fun shouldWakeStandaloneDockShell(packageName: String, trigger: String)
     packageName == STANDALONE_DOCK_SHELL_PACKAGE &&
         trigger == Intent.ACTION_LOCKED_BOOT_COMPLETED
 
+/** The Memfault apps that upload. Luma's installer turns each of them off. */
+internal val MEMFAULT_UPLOADER_PACKAGES: List<String> = listOf(
+    TierASymbols.Packages.BORT,
+    TierASymbols.Packages.BORT_OTA,
+    TierASymbols.Packages.MEMFAULT_USAGE_REPORTER,
+    TierASymbols.Packages.METRIC_REPORTER,
+)
+
+internal enum class UploaderState { ENABLED, DISABLED, ABSENT, UNKNOWN }
+
+/**
+ * The value for both Memfault native-daemon gates
+ * (`persist.system.memfault.bort.enabled`, `.structured.enabled`).
+ *
+ * "1" keeps memfault-structured-logd, which registers the
+ * `memfault_structured` binder service, running. Stock wlc-service asks for
+ * that service when the camera disables wireless charging before a capture
+ * (`disableTxWithTimeout`, humane.experience.photography); with the logger
+ * stopped each lookup waits about five seconds, and two of them held every
+ * photo for ten (wearer logcat on 0.3.51). The logger only writes locally, so
+ * it may run once every uploader that could send its entries is off. Any
+ * uploader that may run, or that cannot be read, keeps the gates at "0".
+ * INFERRED: that "1" is the stock value of both gates; the wearer's 1.4 s
+ * capture before the first reboot with them at "0" suggests it.
+ */
+internal fun memfaultDaemonGate(uploaders: Map<String, UploaderState>): String =
+    if (MEMFAULT_UPLOADER_PACKAGES.all {
+            uploaders[it] == UploaderState.DISABLED || uploaders[it] == UploaderState.ABSENT
+        }
+    ) "1" else "0"
+
 internal data class ConfiguredTargetPlan(
     val applyCompatibility: Boolean,
     val restart: Boolean,
@@ -172,7 +203,7 @@ class BootCompatibilityReceiver : BroadcastReceiver() {
             trigger = action,
         )
 
-        disableMemfaultDaemons()
+        applyMemfaultDaemonGate(context)
 
         Log.w(TAG, "Boot compatibility complete")
     }
@@ -218,25 +249,36 @@ class BootCompatibilityReceiver : BroadcastReceiver() {
         }
     }
 
-    /**
-     * Stop Memfault native daemons by setting their property gates to "0".
-     *
-     * memfault-structured-logd is gated by:
-     *   persist.system.memfault.bort.enabled=1 AND persist.system.memfault.structured.enabled=1
-     * Setting either to "0" triggers init to stop the service.
-     */
-    private fun disableMemfaultDaemons() {
-        val props = mapOf(
-            "persist.system.memfault.bort.enabled" to "0",
-            "persist.system.memfault.structured.enabled" to "0",
+    // The loader runs as android.uid.system, which sees every package, so a
+    // missing package is absent rather than hidden from this caller.
+    private fun uploaderState(context: Context, packageName: String): UploaderState = try {
+        val info = context.packageManager.getApplicationInfo(
+            packageName,
+            PackageManager.MATCH_DISABLED_COMPONENTS,
         )
+        if (info.enabled) UploaderState.ENABLED else UploaderState.DISABLED
+    } catch (_: PackageManager.NameNotFoundException) {
+        UploaderState.ABSENT
+    } catch (t: Throwable) {
+        Log.w(TAG, "Could not read $packageName state: ${t.message}")
+        UploaderState.UNKNOWN
+    }
 
+    /** Set both Memfault native-daemon gates as [memfaultDaemonGate] decides. */
+    private fun applyMemfaultDaemonGate(context: Context) {
+        val value = memfaultDaemonGate(
+            MEMFAULT_UPLOADER_PACKAGES.associateWith { uploaderState(context, it) },
+        )
         try {
             val sysPropClass = Class.forName("android.os.SystemProperties")
+            val getMethod = sysPropClass.getDeclaredMethod("get", String::class.java)
             val setMethod = sysPropClass.getDeclaredMethod("set", String::class.java, String::class.java)
-
-            for ((key, value) in props) {
+            for (key in listOf(
+                "persist.system.memfault.bort.enabled",
+                "persist.system.memfault.structured.enabled",
+            )) {
                 try {
+                    if (getMethod.invoke(null, key) == value) continue
                     setMethod.invoke(null, key, value)
                     Log.w(TAG, "Set $key=$value")
                 } catch (t: Throwable) {
@@ -244,7 +286,7 @@ class BootCompatibilityReceiver : BroadcastReceiver() {
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to access SystemProperties for memfault daemon disable", t)
+            Log.w(TAG, "Failed to access SystemProperties for the Memfault daemon gates", t)
         }
     }
 
