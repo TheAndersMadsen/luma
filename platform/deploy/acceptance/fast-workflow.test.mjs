@@ -913,7 +913,12 @@ test("the Pin check keeps Gradle and Cargo output out of the checkout", () => {
     const code = checkUnit.split("\n").filter((line) => !line.trimStart().startsWith("#")).join("\n");
     assert.match(code, /\bprepare_workspace\b/u);
     assert.match(code, /cd "\$\{WORK_ROOT\}"\n/u);
-    assert.doesNotMatch(code, /SOURCE_ROOT/u);
+    // The read-only checkout is ${SOURCE_ROOT}. The Aliuhook bootstrap's own
+    // LUMA_PIN_SOURCE_ROOT names the worktree it fills, not the checkout.
+    assert.doesNotMatch(code, /\$\{?SOURCE_ROOT\b/u);
+    // The hook module's Aliuhook comes from the checksum-pinned mirror, as in
+    // the build lanes, not from maven.aliucord.com alone.
+    assert.match(code, /LUMA_PIN_SOURCE_ROOT="\$\{WORK_ROOT\}" bash "\$\{BOOTSTRAP_ALIUHOOK\}"\n/u);
     assert.doesNotMatch(code, /\bcargo\b/u, "the host runs the Pin's Cargo tests");
     const gradle = code.match(/\.\/(?:device-installer\/)?gradlew\b(?:[^\n\\]|\\\n)*/gu);
     assert.equal(gradle.length, 2);

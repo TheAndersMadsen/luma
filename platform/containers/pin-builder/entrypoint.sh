@@ -703,6 +703,10 @@ check_unit() {
   # `./luma stock decompile` writes; `./luma pin check` mounts it read-only
   # there when it exists.
   export LUMA_DATA_DIR=/luma-data
+  # The hook module needs Aliuhook. Like the build lanes, take it from the
+  # checksum-pinned GitHub mirror so the check does not depend on
+  # maven.aliucord.com, which has been unreachable (HTTP 521).
+  LUMA_PIN_SOURCE_ROOT="${WORK_ROOT}" bash "${BOOTSTRAP_ALIUHOOK}"
   (
     cd "${WORK_ROOT}"
     ./gradlew --no-daemon \
