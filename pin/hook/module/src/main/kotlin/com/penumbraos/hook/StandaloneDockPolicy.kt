@@ -113,6 +113,50 @@ internal object StandaloneDockPreflight {
     }
 }
 
+/**
+ * Decides which runner failures may be followed by one more guarded
+ * execution in the same kernel boot. Fail closed: only an explicit allowlist
+ * retries, so a code this policy has never seen settles the boot.
+ *
+ * Retryable are failures that leave another execution safe and useful:
+ * transient read-only steps (the kernel was never touched), power or battery
+ * refusals, and a race the payload lost cleanly on its own with the boot
+ * unchanged. Deterministic mismatches, lifecycle state, an execution that had
+ * to be killed, and a reboot observed mid-attempt all settle the boot; a
+ * reboot during the exploit itself is still escalated by the crash latch to a
+ * feature disable on the next boot.
+ */
+internal object StandaloneDockRetryPolicy {
+    const val MAX_EXECUTIONS_PER_BOOT = 2
+    const val RETRY_COOLDOWN_SECONDS = 900L
+
+    private val transientFailures = setOf(
+        "battery_read",
+        "bugreport_capture",
+        "bugreport_result",
+        "bugreport_path",
+        "command",
+        "crash_latch_arm",
+        "kaslr",
+        "work_directory",
+    )
+    private val lostRaceFailures = setOf(
+        "exploit_exit",
+        "exploit_proof",
+        "root_verification",
+        "selinux_result",
+    )
+    private val transientPreflightParts = setOf("battery", "power")
+    private const val PREFLIGHT_PREFIX = "preflight_"
+
+    fun retryableFailure(code: String): Boolean {
+        if (code in transientFailures || code in lostRaceFailures) return true
+        if (!code.startsWith(PREFLIGHT_PREFIX)) return false
+        val parts = code.removePrefix(PREFLIGHT_PREFIX).split("_")
+        return parts.isNotEmpty() && parts.all { it in transientPreflightParts }
+    }
+}
+
 internal object StandaloneDockExploit {
     fun environment(
         profile: StandaloneDockProfile,

@@ -80,6 +80,34 @@ object StandaloneDockMain {
             return
         }
 
+        // One guarded execution is not one guaranteed execution: the kernel
+        // race can be lost cleanly, and the read-only steps before it can
+        // fail transiently. [StandaloneDockRetryPolicy] decides which
+        // failures earn exactly one more execution in this boot; everything
+        // else settles here, and a reboot during an attempt is still turned
+        // into a feature disable by the crash latch on the next boot.
+        var settled: String? = null
+        for (execution in 1..StandaloneDockRetryPolicy.MAX_EXECUTIONS_PER_BOOT) {
+            if (execution > 1) {
+                writeStatus("waiting:retry_cooldown")
+                Thread.sleep(StandaloneDockRetryPolicy.RETRY_COOLDOWN_SECONDS * 1000)
+                if (verifyRoot()) return
+                if (!featureEnabled()) throw StandaloneDockFailure("disabled")
+            }
+            settled = try {
+                performAttempt(apk, payload, crashLatch, execution)
+                return
+            } catch (failure: StandaloneDockFailure) {
+                failure.code
+            } catch (_: StandaloneDockKaslrException) {
+                "kaslr"
+            }
+            if (!StandaloneDockRetryPolicy.retryableFailure(settled)) break
+        }
+        throw StandaloneDockFailure(settled ?: "internal")
+    }
+
+    private fun performAttempt(apk: File, payload: File, crashLatch: File, execution: Int) {
         when (StandaloneDockCrashLatch.inspect(crashLatch, captureBootBinding().bootId)) {
             StandaloneDockCrashLatchState.CLEAR -> Unit
             StandaloneDockCrashLatchState.CURRENT_BOOT -> {
@@ -103,7 +131,7 @@ object StandaloneDockMain {
         if (!featureEnabled()) throw StandaloneDockFailure("disabled")
 
         val initialBinding = captureBootBinding()
-        if (!StandaloneDockAttemptClaim.acquire(File(CLAIM_ROOT), initialBinding.bootId)) {
+        if (!StandaloneDockAttemptClaim.acquire(File(CLAIM_ROOT), initialBinding.bootId, execution)) {
             throw StandaloneDockFailure("boot_already_settled")
         }
         val bootComponent = StandaloneDockAttemptClaim.bootComponent(initialBinding.bootId)
