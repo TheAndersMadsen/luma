@@ -470,7 +470,15 @@ each boot, the runner checks:
 Rooting can take a while to finish. Before the kernel step, Luma also checks
 that the runner can use the exact performance CPU this firmware profile needs.
 The runner claims that boot atomically. It works out the current KASLR address
-from a fresh local bugreport and makes at most one guarded attempt.
+from a fresh local bugreport and makes at most two guarded executions per boot.
+A transient read-only failure (a bugreport or KASLR step that failed, or a
+power or battery refusal) and a cleanly lost kernel race each earn one retry
+after a 15-minute cooldown, with the power, battery, and firmware gates
+checked again first. Deterministic mismatches, an execution that had to be
+killed, and any failure the retry policy does not recognise settle the boot
+instead, and a reboot during an attempt still turns **Root access** off on the
+next boot. The retry slot belongs to the on-device runner alone; the
+docked-computer commands below still consume at most one attempt per boot.
 
 Root access ends at the next reboot. While the flag stays on, Luma roots the
 Pin again on the next boot. Turning the flag off stops attempts on later boots.
@@ -480,10 +488,10 @@ boot that follows. This keeps it out of an unattended restart loop.
 
 The source-checkout commands still work for a temporary session while a
 computer is connected. The vendored helper allows one attempt per boot.
-Luma's wrapper uses the same boot claim as the standalone runner, so the two
-paths cannot each use up an attempt in the same boot. `follow --confirm`
-checks each fresh boot and restores the temporary session only while the Pin
-stays on USB.
+Luma's wrapper uses the same boot claim as the standalone runner's first
+execution, so the two paths cannot each use up an attempt in the same boot.
+`follow --confirm` checks each fresh boot and restores the temporary session
+only while the Pin stays on USB.
 
 | Command | What it does |
 | --- | --- |
