@@ -49,14 +49,14 @@ RUN set -eux; \
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
     printf '%s\n' \
       'Types: deb' \
-      'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+      'URIs: http://snapshot-cloudflare.debian.org/archive/debian/20260803T000000Z' \
       'Suites: bookworm bookworm-updates' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       '' \
       'Types: deb' \
-      'URIs: http://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
+      'URIs: http://snapshot-cloudflare.debian.org/archive/debian-security/20260803T000000Z' \
       'Suites: bookworm-security' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
@@ -204,14 +204,14 @@ RUN set -eux; \
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
     printf '%s\n' \
       'Types: deb' \
-      'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+      'URIs: http://snapshot-cloudflare.debian.org/archive/debian/20260803T000000Z' \
       'Suites: bookworm bookworm-updates' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       '' \
       'Types: deb' \
-      'URIs: http://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
+      'URIs: http://snapshot-cloudflare.debian.org/archive/debian-security/20260803T000000Z' \
       'Suites: bookworm-security' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
