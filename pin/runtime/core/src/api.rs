@@ -45,7 +45,9 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
-use crate::config::{normalize_iroh_remote_center_allowed_peers, validate_admin_token, Config};
+use crate::config::{
+    normalize_iroh_remote_center_allowed_peers, validate_admin_token, Config, TemperatureUnit,
+};
 use crate::db::Database;
 use crate::esim::EsimBridge;
 use crate::fitness::FitnessStore;
@@ -290,6 +292,15 @@ struct SettingsResponse {
     server: ServerSettingsResponse,
     contacts: ContactsSettingsResponse,
     dev: DevSettingsResponse,
+    units: UnitSettingsResponse,
+}
+
+/// Device-local display units. Stock System Navigation always showed
+/// `WeatherResponse.getTemperatureFahrenheit()`; choosing Celsius is a Luma
+/// extension that the Compatibility Layer applies at that card (INFERRED).
+#[derive(Serialize)]
+struct UnitSettingsResponse {
+    temperature_unit: TemperatureUnit,
 }
 
 #[derive(Serialize)]
@@ -377,6 +388,9 @@ fn settings_response_with_restart(config: &Config, restart_required: bool) -> Se
                 .injected_package_recovery_hook_injector_sha256
                 .clone(),
         },
+        units: UnitSettingsResponse {
+            temperature_unit: config.weather.temperature_unit,
+        },
     }
 }
 
@@ -409,6 +423,7 @@ struct UpdateSettingsRequest {
     openstreetmap: Option<serde_json::Value>,
     contacts: Option<UpdateContactsSettings>,
     dev: Option<UpdateDevSettings>,
+    units: Option<UpdateUnitSettings>,
     /// Storage is read-only. Presence in the request is rejected.
     storage: Option<serde_json::Value>,
 }
@@ -417,6 +432,27 @@ struct UpdateSettingsRequest {
 #[serde(deny_unknown_fields)]
 struct UpdateLlmSettings {
     vision_consent_acknowledged: Option<bool>,
+}
+
+/// The one weather setting the Pin owns: how its weather card shows the
+/// temperature. The provider and its key stay in Cosmos, so `weather` is still
+/// refused.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateUnitSettings {
+    temperature_unit: Option<TemperatureUnit>,
+}
+
+fn apply_unit_settings(config: &mut Config, units: Option<&UpdateUnitSettings>) {
+    if let Some(unit) = units.and_then(|units| units.temperature_unit) {
+        config.weather.temperature_unit = unit;
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn changed_temperature_unit(original: &Config, updated: &Config) -> Option<TemperatureUnit> {
+    (original.weather.temperature_unit != updated.weather.temperature_unit)
+        .then_some(updated.weather.temperature_unit)
 }
 
 #[derive(Deserialize)]
@@ -624,13 +660,16 @@ async fn update_settings(
         }
     }
 
+    apply_unit_settings(&mut config, body.units.as_ref());
+
     if let Err(error) = config.dev.validate() {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
     if let Err(error) = config.open_food_facts.validate() {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
-    let restart_required = settings_restart_required(
+    #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
+    let mut restart_required = settings_restart_required(
         &config,
         &original_config,
         state.active_lan_dashboard_enabled,
@@ -654,6 +693,17 @@ async fn update_settings(
     {
         let mut live_config = state.shared_config.write().await;
         *live_config = config.clone();
+    }
+
+    // The weather card reads the stock setting the boot sync writes. Write it
+    // now too, so the card changes without a restart; if that fails, the
+    // persisted unit still applies at the next start.
+    #[cfg(target_os = "android")]
+    if let Some(unit) = changed_temperature_unit(&original_config, &config) {
+        if let Err(error) = sync_weather_temperature_unit_to_device(unit).await {
+            warn!(error = %error, "weather unit saved; it applies after restart");
+            restart_required = true;
+        }
     }
 
     info!("Pin-local settings updated");
@@ -1539,6 +1589,58 @@ mod tests {
             serde_json::to_value(settings_response(&loaded)).unwrap()["llm"]
                 ["vision_consent_acknowledged"],
             true,
+        );
+    }
+
+    /// The weather card's unit is the one weather setting the Pin owns.
+    /// Ways it could fail: the request is refused as a Cosmos-owned weather
+    /// change; an unknown unit or an extra key is accepted; the PirateWeather
+    /// key becomes writable through it; the value is not persisted or not
+    /// reported back; an unchanged unit still rewrites the stock setting.
+    #[test]
+    fn temperature_unit_is_pin_local_persisted_and_reported() {
+        let update: UpdateSettingsRequest =
+            serde_json::from_str(r#"{"units":{"temperature_unit":"fahrenheit"}}"#).unwrap();
+        assert!(!contains_cosmos_owned_settings(&update));
+        assert_eq!(
+            update
+                .units
+                .as_ref()
+                .and_then(|units| units.temperature_unit),
+            Some(TemperatureUnit::Fahrenheit)
+        );
+        for rejected in [
+            r#"{"units":{"temperature_unit":"kelvin"}}"#,
+            r#"{"units":{"temperature_unit":"fahrenheit","pirate_weather_api_key":"k"}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<UpdateSettingsRequest>(rejected).is_err(),
+                "{rejected}"
+            );
+        }
+        let provider: UpdateSettingsRequest =
+            serde_json::from_str(r#"{"weather":{"temperature_unit":"fahrenheit"}}"#).unwrap();
+        assert!(contains_cosmos_owned_settings(&provider));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = Config::load(&dir.path().join("missing.toml")).unwrap();
+        assert_eq!(original.weather.temperature_unit, TemperatureUnit::Celsius);
+        let mut updated = original.clone();
+        apply_unit_settings(&mut updated, update.units.as_ref());
+        assert_eq!(
+            changed_temperature_unit(&original, &updated),
+            Some(TemperatureUnit::Fahrenheit)
+        );
+        assert_eq!(changed_temperature_unit(&updated, &updated), None);
+        assert!(!settings_restart_required(&updated, &original, false));
+
+        persist_config(&path, &updated).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.weather.temperature_unit, TemperatureUnit::Fahrenheit);
+        assert_eq!(
+            serde_json::to_value(settings_response(&loaded)).unwrap()["units"]["temperature_unit"],
+            "fahrenheit",
         );
     }
 

@@ -67,6 +67,18 @@ activation happen over USB from Center.
 </details>
 
 
+<details>
+<summary><strong>Why does my Pin ask for the passcode again?</strong></summary>
+
+The Pin locks itself, as it always did, and Luma does not change when. It
+locks when it comes off your body, and also after the time set on the Pin in
+**Settings → passcode → require after**: **15 minutes**, **30 minutes**,
+**60 minutes**, or **detach only**. **Detach only** is the default; the stock
+Settings app stores it as a 12-hour timeout. **Allow swap** in the same menu gives you 6 seconds
+to swap the battery booster without entering the passcode again.
+
+</details>
+
 ## Can an AI coding assistant install it for me?
 
 Yes. If you use Claude Code, Codex, or a similar tool, give it the prompt below.

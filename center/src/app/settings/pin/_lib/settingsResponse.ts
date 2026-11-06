@@ -1,4 +1,4 @@
-import type { Settings, UpdateSettingsRequest } from "@/lib/pin-device";
+import type { Settings, TemperatureUnit, UpdateSettingsRequest } from "@/lib/pin-device";
 
 type LocalServerSettings = Pick<
   Settings["server"],
@@ -9,17 +9,32 @@ export interface NormalizedSettings {
   restart_required?: boolean;
   server: LocalServerSettings;
   dev?: Settings["dev"];
+  units?: { temperature_unit: TemperatureUnit };
 }
 
 export interface SettingsCapabilities {
   adminTokenAuth: boolean;
   lanDashboard: boolean;
+  /** The Pin reports, and so accepts, its weather card's temperature unit. */
+  temperatureUnit: boolean;
 }
 
 export const NO_OPTIONAL_SETTINGS_CAPABILITIES: SettingsCapabilities = {
   adminTokenAuth: false,
   lanDashboard: false,
+  temperatureUnit: false,
 };
+
+function temperatureUnit(source: Record<string, unknown>, path: string): TemperatureUnit {
+  const value = source.temperature_unit;
+  if (value !== "celsius" && value !== "fahrenheit") {
+    throw new InvalidSettingsResponseError(
+      `${path}.temperature_unit`,
+      '"celsius" or "fahrenheit"',
+    );
+  }
+  return value;
+}
 
 export class InvalidSettingsResponseError extends Error {
   constructor(path: string, expected: string) {
@@ -68,7 +83,8 @@ function optionalString(
 
 /**
  * Keep Center's device boundary deliberately small: the Pin server's own
- * settings (the Server pane) and the diagnostics install gate. Provider
+ * settings (the Server pane), its weather card's temperature unit, and the
+ * diagnostics install gate. Provider
  * configuration and assistant behaviour belong to Cosmos, and who may call the
  * Pin is each contact's Trusted setting, so anything else the Pin reports is
  * dropped here and never written back.
@@ -80,6 +96,7 @@ export function normalizeSettingsResponse(input: unknown): {
   const root = record(input, "settings");
   const server = record(root.server, "settings.server");
   const dev = optionalRecord(root, "dev");
+  const units = optionalRecord(root, "units");
   const adminTokenAuth = optionalBoolean(server, "admin_token_auth", "settings.server") === true;
   const lanDashboard = Object.hasOwn(server, "lan_dashboard_enabled");
 
@@ -106,8 +123,11 @@ export function normalizeSettingsResponse(input: unknown): {
             },
           }
         : {}),
+      ...(units
+        ? { units: { temperature_unit: temperatureUnit(units, "settings.units") } }
+        : {}),
     },
-    capabilities: { adminTokenAuth, lanDashboard },
+    capabilities: { adminTokenAuth, lanDashboard, temperatureUnit: units !== undefined },
   };
 }
 
@@ -134,6 +154,10 @@ export function filterSettingsRequestByCapabilities(
 
   if (request.dev?.apk_install_enabled !== undefined) {
     filtered.dev = { apk_install_enabled: request.dev.apk_install_enabled };
+  }
+
+  if (capabilities.temperatureUnit && request.units?.temperature_unit !== undefined) {
+    filtered.units = { temperature_unit: request.units.temperature_unit };
   }
 
   return filtered;

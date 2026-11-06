@@ -240,6 +240,14 @@ notes are in **More details**. The Root access warning stays visible. If an
 older locked setting needs recovery, **Restore safe default** stays visible
 until you save it.
 
+**Settings → Advanced → Connection settings** also holds the **Temperature
+unit**, Fahrenheit or Celsius, that the weather card on the Pin shows. It is
+saved on the Pin, so change it with the Pin connected over USB; it applies at
+once. The stock card always showed Fahrenheit, and Luma's own default is
+Celsius. The assistant's spoken weather answers name both units unless your
+custom instructions (**Settings → Assistant & voice**) pick one, such as "Use
+Fahrenheit".
+
 Captures, contacts, and assistant history come from Cosmos. The old Pin pages
 for them open **Captures**, **Settings → Contacts**, and **My Data** instead.
 Each contact's **Trusted** setting decides who may call the Pin. Center holds

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
-import type { UpdateSettingsRequest } from "@/lib/pin-device";
+import type { TemperatureUnit, UpdateSettingsRequest } from "@/lib/pin-device";
 import { StatusMessage } from "@/components/Status";
 import styles from "../_lib/panes.module.css";
 import {
@@ -45,10 +45,12 @@ export default function PinServerPane() {
   const { settings, capabilities } = controller;
 
   const displayNameId = useId();
+  const temperatureUnitId = useId();
 
   const [displayName, setDisplayName] = useState("");
   const [adminToken, setAdminToken] = useState("");
   const [lanDashboardEnabled, setLanDashboardEnabled] = useState(false);
+  const [temperatureUnit, setTemperatureUnit] = useState<TemperatureUnit | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // Re-seed the form whenever the device's own document changes identity,
@@ -61,6 +63,7 @@ export default function PinServerPane() {
     setDisplayName(settings.server.display_name ?? "");
     setAdminToken("");
     setLanDashboardEnabled(settings.server.lan_dashboard_enabled ?? false);
+    setTemperatureUnit(settings.units?.temperature_unit ?? null);
     setValidationError(null);
   }, [settings]);
 
@@ -81,13 +84,24 @@ export default function PinServerPane() {
       server.lan_dashboard_enabled = lanDashboardEnabled;
     }
 
-    return Object.keys(server).length > 0 ? { server } : null;
+    const next: UpdateSettingsRequest = {};
+    if (Object.keys(server).length > 0) next.server = server;
+    if (
+      capabilities.temperatureUnit &&
+      temperatureUnit !== null &&
+      temperatureUnit !== settings.units?.temperature_unit
+    ) {
+      next.units = { temperature_unit: temperatureUnit };
+    }
+    return Object.keys(next).length > 0 ? next : null;
   }, [
     adminToken,
     capabilities.lanDashboard,
+    capabilities.temperatureUnit,
     displayName,
     lanDashboardEnabled,
     settings,
+    temperatureUnit,
   ]);
 
   async function handleSave() {
@@ -146,7 +160,7 @@ export default function PinServerPane() {
 
       {controller.restartRequired ? (
         <StatusMessage tone="warning">
-          Saved. Restart the Pin to apply the Wi-Fi dashboard listener change.
+          Saved. Restart the Pin to apply this change.
         </StatusMessage>
       ) : null}
 
@@ -170,6 +184,32 @@ export default function PinServerPane() {
               placeholder="My Ai Pin"
             />
           </FormRow>
+        </PaneSection>
+
+        <PaneSection title="Weather" testId="pin-server-weather">
+          {capabilities.temperatureUnit && temperatureUnit !== null ? (
+            <FormRow
+              label="Temperature unit"
+              htmlFor={temperatureUnitId}
+              help="How the weather card on the Pin shows the temperature. To hear spoken answers in the same unit, add it to your custom instructions in Assistant & voice."
+            >
+              <select
+                id={temperatureUnitId}
+                className={styles.input}
+                value={temperatureUnit}
+                onChange={(event) => setTemperatureUnit(event.target.value as TemperatureUnit)}
+              >
+                <option value="fahrenheit">Fahrenheit (°F)</option>
+                <option value="celsius">Celsius (°C)</option>
+              </select>
+            </FormRow>
+          ) : (
+            <div className={styles.formRow}>
+              <StatusMessage tone="warning">
+                Update the Pin apps to choose the temperature unit.
+              </StatusMessage>
+            </div>
+          )}
         </PaneSection>
 
         <PaneSection title="Network administration" testId="pin-server-network">
