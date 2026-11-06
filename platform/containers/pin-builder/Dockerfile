@@ -45,23 +45,32 @@ ENV JAVA_HOME=/opt/java/openjdk \
     ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk
 COPY --from=android_jdk_native /opt/java/openjdk /opt/java/openjdk
+# CA roots before the first apt: the snapshot archive is fetched over https
+# (Debian's http front has gone unavailable for whole days at a time), and the
+# slim base ships none. Temurin's Mozilla bundle covers it; apt still verifies
+# every package against the signed InRelease below.
+COPY --from=android_jdk_native /etc/ssl/certs /etc/ssl/certs
 RUN set -eux; \
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
     printf '%s\n' \
       'Types: deb' \
-      'URIs: http://snapshot-cloudflare.debian.org/archive/debian/20260803T000000Z' \
+      'URIs: https://snapshot.debian.org/archive/debian/20260803T000000Z' \
       'Suites: bookworm bookworm-updates' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       '' \
       'Types: deb' \
-      'URIs: http://snapshot-cloudflare.debian.org/archive/debian-security/20260803T000000Z' \
+      'URIs: https://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
       'Suites: bookworm-security' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       > /etc/apt/sources.list.d/debian.sources; \
+    printf '%s\n' \
+      'Acquire::Retries "10";' \
+      'Acquire::https::Timeout "30";' \
+      > /etc/apt/apt.conf.d/80-snapshot-resilience; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl tar unzip; \
     rm -rf /var/lib/apt/lists/*
@@ -204,19 +213,23 @@ RUN set -eux; \
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
     printf '%s\n' \
       'Types: deb' \
-      'URIs: http://snapshot-cloudflare.debian.org/archive/debian/20260803T000000Z' \
+      'URIs: https://snapshot.debian.org/archive/debian/20260803T000000Z' \
       'Suites: bookworm bookworm-updates' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       '' \
       'Types: deb' \
-      'URIs: http://snapshot-cloudflare.debian.org/archive/debian-security/20260803T000000Z' \
+      'URIs: https://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
       'Suites: bookworm-security' \
       'Components: main' \
       'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
       'Check-Valid-Until: no' \
       > /etc/apt/sources.list.d/debian.sources; \
+    printf '%s\n' \
+      'Acquire::Retries "10";' \
+      'Acquire::https::Timeout "30";' \
+      > /etc/apt/apt.conf.d/80-snapshot-resilience; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates \

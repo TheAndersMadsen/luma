@@ -17,12 +17,16 @@ RUN set -eux; \
       rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
       printf '%s\n' \
         'Types: deb' \
-        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+        'URIs: https://snapshot.debian.org/archive/debian/20260803T000000Z' \
         'Suites: bookworm bookworm-updates' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         'Check-Valid-Until: no' \
         > /etc/apt/sources.list.d/debian.sources; \
+      printf '%s\n' \
+        'Acquire::Retries "10";' \
+        'Acquire::https::Timeout "30";' \
+        > /etc/apt/apt.conf.d/80-snapshot-resilience; \
       apt-get update; \
       apt-get install --no-install-recommends --yes ${cross_packages}; \
       rm -rf /var/lib/apt/lists/*; \
@@ -57,22 +61,32 @@ RUN --mount=type=cache,id=center-iroh-cargo-registry-${TARGETARCH},target=/usr/l
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
+# CA roots before the first apt: the slim base ships none and the snapshot
+# archive is fetched over https (Debian's http front has gone unavailable for
+# whole days at a time). The build stage's Mozilla bundle covers it; apt still
+# verifies every package against the signed InRelease below.
+COPY --from=build /etc/ssl/certs /etc/ssl/certs
+
 RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
         'Types: deb' \
-        'URIs: http://snapshot.debian.org/archive/debian/20260803T000000Z' \
+        'URIs: https://snapshot.debian.org/archive/debian/20260803T000000Z' \
         'Suites: bookworm bookworm-updates' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         'Check-Valid-Until: no' \
         '' \
         'Types: deb' \
-        'URIs: http://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
+        'URIs: https://snapshot.debian.org/archive/debian-security/20260803T000000Z' \
         'Suites: bookworm-security' \
         'Components: main' \
         'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
         'Check-Valid-Until: no' \
         > /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+        'Acquire::Retries "10";' \
+        'Acquire::https::Timeout "30";' \
+        > /etc/apt/apt.conf.d/80-snapshot-resilience \
     && apt-get update \
     && apt-get install --no-install-recommends --yes ca-certificates curl \
     && install -d --owner=65532 --group=65532 --mode=0700 /var/lib/center-iroh-bridge \
