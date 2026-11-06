@@ -107,3 +107,42 @@ test("save logging keeps field names but no values", () => {
   ]);
   assert.doesNotMatch(JSON.stringify(fields), /private-token|Private name/);
 });
+
+// The weather card's unit is the one weather setting a Pin owns. Ways it could
+// fail: an older Pin that never reports `units` is sent one and Center says
+// "Saved" for a field it ignored; a malformed unit passes the boundary; the
+// provider's `weather` settings ride along with it.
+test("the temperature unit is written only to a Pin that reports one", () => {
+  const older = normalizeSettingsResponse({ server: {} });
+  assert.equal(older.capabilities.temperatureUnit, false);
+  assert.equal(older.settings.units, undefined);
+  assert.deepEqual(
+    filterSettingsRequestByCapabilities(
+      { units: { temperature_unit: "fahrenheit" } },
+      older.capabilities,
+    ),
+    {},
+  );
+
+  const current = normalizeSettingsResponse({
+    server: {},
+    units: { temperature_unit: "celsius" },
+  });
+  assert.equal(current.capabilities.temperatureUnit, true);
+  assert.deepEqual(current.settings.units, { temperature_unit: "celsius" });
+  assert.deepEqual(
+    filterSettingsRequestByCapabilities(
+      {
+        units: { temperature_unit: "fahrenheit" },
+        weather: { pirate_weather_api_key: "secret" },
+      },
+      current.capabilities,
+    ),
+    { units: { temperature_unit: "fahrenheit" } },
+  );
+
+  assert.throws(
+    () => normalizeSettingsResponse({ server: {}, units: { temperature_unit: "kelvin" } }),
+    /settings\.units\.temperature_unit must be "celsius" or "fahrenheit"/,
+  );
+});

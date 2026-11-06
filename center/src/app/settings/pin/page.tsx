@@ -36,7 +36,7 @@ const CONSOLE_PANES: ReadonlyArray<{ href: string; label: string; desc: string }
   {
     href: "/settings/pin/server",
     label: "Connection settings",
-    desc: "Display name and local network access.",
+    desc: "Display name, temperature unit, and local network access.",
   },
   {
     href: "/settings/pin/esim",

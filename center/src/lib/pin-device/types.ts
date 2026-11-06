@@ -130,7 +130,14 @@ export interface Settings {
   dev?: {
     apk_install_enabled?: boolean;
   };
+  /** Absent on Pins older than the temperature unit setting. */
+  units?: {
+    temperature_unit: TemperatureUnit;
+  };
 }
+
+/** How the Pin's weather card shows the temperature. */
+export type TemperatureUnit = "celsius" | "fahrenheit";
 
 /** Partial update request, only include fields you want to change. */
 export interface UpdateSettingsRequest {
@@ -147,6 +154,9 @@ export interface UpdateSettingsRequest {
   };
   dev?: {
     apk_install_enabled?: boolean;
+  };
+  units?: {
+    temperature_unit?: TemperatureUnit;
   };
 }
 
