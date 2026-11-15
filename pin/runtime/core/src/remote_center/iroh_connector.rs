@@ -581,6 +581,31 @@ fn typed_dispatch_request(
                 ApiOperation::FeatureFlagsRead => {
                     (Method::GET, "/api/feature-flags".to_owned(), None)
                 }
+                ApiOperation::GesturesRead => (Method::GET, "/api/gestures".to_owned(), None),
+                ApiOperation::GestureObservation => {
+                    (Method::GET, "/api/gestures/observation".to_owned(), None)
+                }
+                ApiOperation::GesturesUpdate => (
+                    Method::PUT,
+                    "/api/gestures".to_owned(),
+                    Some("application/json".to_owned()),
+                ),
+                ApiOperation::ClipRead => (Method::GET, "/api/gestures/clip".to_owned(), None),
+                ApiOperation::ClipStage => (
+                    Method::PUT,
+                    "/api/gestures/clip".to_owned(),
+                    Some("application/json".to_owned()),
+                ),
+                ApiOperation::ClipCancel => (
+                    Method::DELETE,
+                    "/api/gestures/clip".to_owned(),
+                    Some("application/json".to_owned()),
+                ),
+                ApiOperation::ClipResult => (
+                    Method::PUT,
+                    "/api/gestures/clip/result".to_owned(),
+                    Some("application/json".to_owned()),
+                ),
                 ApiOperation::MusicEgress => {
                     crate::api::music::validate_egress_payload(&body)?;
                     (

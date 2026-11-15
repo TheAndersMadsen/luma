@@ -614,13 +614,41 @@ fn reviewed_route_allowed(
         && *method == Method::GET
         && matches!(
             path,
-            "/api/health" | "/api/device" | "/api/feature-flags" | "/api/spotify/status"
+            "/api/health"
+                | "/api/device"
+                | "/api/feature-flags"
+                | "/api/spotify/status"
+                | "/api/gestures"
+                | "/api/gestures/observation"
+                | "/api/gestures/clip"
         )
     {
         return true;
     }
 
     match (method, path, uri.query()) {
+        (&Method::PUT, "/api/gestures", None) => {
+            body_bytes <= 8 * 1024
+                && headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("application/json")
+        }
+        (&Method::PUT, "/api/gestures/clip", None) => {
+            body_bytes <= 64 * 1024
+                && headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("application/json")
+        }
+        (&Method::PUT, "/api/gestures/clip/result", None)
+        | (&Method::DELETE, "/api/gestures/clip", None) => {
+            body_bytes <= 256
+                && headers
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    == Some("application/json")
+        }
         (&Method::POST, "/api/music/egress", None) => {
             body_bytes <= MAX_MUSIC_EGRESS_BODY_BYTES
                 && headers
@@ -1292,6 +1320,9 @@ mod tests {
             (Method::GET, "/api/health"),
             (Method::GET, "/api/device"),
             (Method::GET, "/api/feature-flags"),
+            (Method::GET, "/api/gestures"),
+            (Method::GET, "/api/gestures/observation"),
+            (Method::GET, "/api/gestures/clip"),
         ] {
             assert!(reviewed_route_allowed(
                 &method,
@@ -1306,5 +1337,20 @@ mod tests {
             &headers,
             0,
         ));
+        let mut json = HeaderMap::new();
+        json.insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        for (method, path, limit) in [
+            (Method::PUT, "/api/gestures/clip", 64 * 1024),
+            (Method::PUT, "/api/gestures/clip/result", 256),
+            (Method::DELETE, "/api/gestures/clip", 256),
+        ] {
+            let uri = path.parse().unwrap();
+            assert!(reviewed_route_allowed(&method, &uri, &json, limit));
+            assert!(!reviewed_route_allowed(&method, &uri, &json, limit + 1));
+            assert!(!reviewed_route_allowed(&method, &uri, &headers, 0));
+        }
     }
 }

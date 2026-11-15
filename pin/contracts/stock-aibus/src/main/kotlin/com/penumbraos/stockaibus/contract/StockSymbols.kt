@@ -25,7 +25,7 @@ package com.penumbraos.stockaibus.contract
  * (the file that declares them is already their single source of truth), the
  * eSIM ACTION strings (`EsimOperationGate` builds them from a prefix while
  * `EsimEventStore` spells them out, and the two sets are asymmetric, see the
- * follow-up note in the architecture docs), and the seven `<package>` entries in
+ * follow-up note in the architecture docs), and the stock `<package>` entries in
  * `runtime/android/src/main/AndroidManifest.xml` (AGP-merged manifest attributes cannot
  * reference a Kotlin const; [serverQueriedPackages] plus the server module's
  * `StockManifestParityTest` are the only defence there).
@@ -115,7 +115,7 @@ object StockSymbols {
      * `<queries>`.
      *
      * AGP-merged manifest attributes cannot reference a Kotlin const, so those
-     * seven values are necessarily duplicated in XML. This set is the only
+     * package entries are necessarily duplicated in XML. This set is the only
      * thing that can notice when they drift: `StockManifestParityTest` (in the
      * server module) parses the manifest and asserts the non-`com.penumbraos.*`
      * `<package>` entries are exactly this set, so adding a stock package to the
@@ -134,5 +134,8 @@ object StockSymbols {
         Food.PACKAGE,
         Krypto.PACKAGE,
         Ironman.PACKAGE,
+        // INFERRED: GestureBridgeService resolves the stock Home launcher's UID
+        // before admitting its Binder reports. Use the recovered package symbol.
+        TierASymbols.Packages.SYSTEM_NAVIGATION,
     )
 }

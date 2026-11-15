@@ -227,6 +227,7 @@ tasks.named("preBuild") {
 }
 
 dependencies {
+    implementation(project(":gesture-sdk"))
     implementation(project(":contracts:stock-aibus"))
     implementation(project(":contracts:penumbra-ipc"))
     implementation("org.jmdns:jmdns:3.6.3")

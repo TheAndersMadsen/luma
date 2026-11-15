@@ -279,6 +279,9 @@ checkout. They are the specification every stock behaviour cites:
 Five apps, one signed set, built in the pinned container:
 [docs/developers.md#build-the-pin-apps](docs/developers.md#build-the-pin-apps).
 
+Experimental finger shortcuts, browser Clip, and the source SDK:
+[docs/gestures.md](docs/gestures.md).
+
 ### Publish a release
 
 `./luma release publish` builds, signs, and publishes a tagged release from

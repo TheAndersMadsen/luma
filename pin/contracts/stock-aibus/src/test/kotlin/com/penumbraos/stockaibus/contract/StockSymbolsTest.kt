@@ -138,6 +138,7 @@ class StockSymbolsTest {
             StockSymbols.Settings.PACKAGE,
             StockSymbols.Tickle.PACKAGE,
             StockSymbols.EsimLpa.PACKAGE,
+            TierASymbols.Packages.SYSTEM_NAVIGATION,
         )
         assertEquals(packages.size, packages.toSet().size)
         assertTrue(StockSymbols.serverQueriedPackages.all { it in packages })
@@ -154,6 +155,7 @@ class StockSymbolsTest {
                 TierASymbols.Packages.FOOD,
                 TierASymbols.Packages.KRYPTO,
                 TierASymbols.Packages.IRONMAN,
+                TierASymbols.Packages.SYSTEM_NAVIGATION,
             ),
             StockSymbols.serverQueriedPackages,
         )

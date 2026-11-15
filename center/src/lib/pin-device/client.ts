@@ -1,4 +1,6 @@
 import type { PinTransport } from "./transport";
+import { clipResponseSchema, type ClipArticle } from "@/lib/contracts/clips";
+import { gestureSettingsSchema, gestureObservationResponseSchema, type GestureConfig } from "@/lib/contracts/gestures";
 import type {
   CellularServiceStatusResponse,
   ConfirmSetupAcceptanceRequest,
@@ -102,6 +104,39 @@ export class PinClient {
 
   get mode() {
     return this.transport.mode;
+  }
+
+  async getGestures(signal?: AbortSignal) {
+    return gestureSettingsSchema.parse(await this.request<unknown>("/api/gestures", undefined, signal));
+  }
+
+  async getClip(signal?: AbortSignal) {
+    return clipResponseSchema.parse(await this.request<unknown>("/api/gestures/clip", undefined, signal));
+  }
+  async stageClip(article: ClipArticle, signal?: AbortSignal) {
+    return clipResponseSchema.parse(await this.request<unknown>("/api/gestures/clip", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(article),
+    }, signal));
+  }
+  async finishClip(id: string, outcome: "saved" | "failed", signal?: AbortSignal) {
+    return clipResponseSchema.parse(await this.request<unknown>("/api/gestures/clip/result", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, outcome }),
+    }, signal));
+  }
+  async cancelClip(id: string, signal?: AbortSignal) {
+    return clipResponseSchema.parse(await this.request<unknown>("/api/gestures/clip", {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+    }, signal));
+  }
+
+  async updateGestures(revision: string, config: GestureConfig, signal?: AbortSignal) {
+    return gestureSettingsSchema.parse(await this.request<unknown>("/api/gestures", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision, config }),
+    }, signal));
+  }
+
+  async getGestureObservation(signal?: AbortSignal) {
+    return gestureObservationResponseSchema.parse(await this.request<unknown>("/api/gestures/observation", undefined, signal));
   }
 
   private authorizedOptions(

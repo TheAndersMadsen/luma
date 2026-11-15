@@ -12,6 +12,8 @@
 //!
 //! Luma adds `GET /capture/note/{uuid}` and `DELETE /capture/notes/{uuid}` for
 //! Center's per-note page and its Forget control.
+//! INFERRED `PUT /capture/clips/{uuid}` saves an explicit browser handoff after
+//! a Pin copy request. Its immutable UUID makes retries idempotent per wearer.
 //!
 //! Cosmos holds every note it can read in the wearer's own words: `body` and
 //! `title` for the notes it writes itself, the device envelope for the rest.
@@ -28,7 +30,7 @@ use axum::{
     extract::{Path, Query, State, rejection::JsonRejection},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -46,6 +48,10 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/capture/notes", get(list_notes).delete(delete_all_notes))
         .route("/capture/notes/:uuid", delete(delete_note))
         .route("/capture/note/create", post(create_note))
+        .route(
+            "/capture/clips/:uuid",
+            put(copy_clip).layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
         .route("/capture/note/:uuid", get(get_note).post(edit_note))
         .with_state(state)
 }
@@ -61,6 +67,89 @@ const DEFAULT_NOTE_TEXT: &str = "New note.";
 const MAX_TITLE_CHARS: usize = 256;
 const MAX_TEXT_CHARS: usize = 32_768;
 const MAX_QUERY_CHARS: usize = 256;
+
+/// INFERRED: a browser hands off explicit article metadata; Cosmos never fetches
+/// the URL or infers content from a camera image. Clip is stored as a normal note.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipWrite {
+    title: String,
+    publisher: String,
+    url: String,
+    selection: String,
+}
+
+async fn copy_clip(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<ClipWrite>, JsonRejection>,
+) -> Response {
+    let account = match state.web_account_for(&headers) {
+        Ok(account) => account.account,
+        Err(status) => return status.into_response(),
+    };
+    let Ok(uuid) = uuid::Uuid::parse_str(&id) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if uuid.get_version() != Some(uuid::Version::Random)
+        || uuid.get_variant() != uuid::Variant::RFC4122
+        || uuid.to_string() != id
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Json(article) = match body {
+        Ok(body) => body,
+        Err(error) => return error.status().into_response(),
+    };
+    if article.title.chars().count() > 256
+        || article.publisher.chars().count() > 100
+        || article.url.len() > 2048
+        || article.selection.chars().count() > 12_000
+    {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+    let valid_url = reqwest::Url::parse(&article.url).ok().is_some_and(|url| {
+        matches!(url.scheme(), "https" | "http")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+    });
+    if !valid_url
+        || article.url.chars().any(char::is_whitespace)
+        || article.title.trim().is_empty()
+        || [
+            &article.title,
+            &article.publisher,
+            &article.url,
+            &article.selection,
+        ]
+        .iter()
+        .any(|text| has_nul(text))
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let text = format!(
+        "{}\n{}\n\n{}",
+        article.publisher, article.url, article.selection
+    );
+    let mut new = NewNote::text(NoteSource::Web, &text);
+    new.request_id = Some(uuid);
+    new.title = Some(article.title.clone());
+    new.tags = vec!["luma.clip".to_owned()];
+    match state.store.create_note(&account, new).await {
+        Ok(record)
+            if record.title.as_deref() == Some(article.title.as_str())
+                && record.body.as_deref() == Some(text.as_str())
+                && record.source == Some(NoteSource::Web)
+                && record.tags == ["luma.clip"] =>
+        {
+            respond_with(&state, &record).await
+        }
+        Ok(_) => StatusCode::CONFLICT.into_response(),
+        Err(_) => unavailable(),
+    }
+}
 
 /// Notable-event types the recovered client erased with every note.
 ///
@@ -678,6 +767,91 @@ mod tests {
             .create_note(principal, NewNote::text(NoteSource::QuickAction, text))
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn clip_copy_http_is_idempotent_scoped_and_durable() {
+        let mut stores = vec![fresh()];
+        if let Ok(url) = std::env::var("COSMOS_TEST_DATABASE_URL") {
+            stores.push(std::sync::Arc::new(
+                crate::store_postgres::PostgresStore::connect(&url)
+                    .await
+                    .unwrap(),
+            ));
+        }
+        for store in stores {
+            let owner = format!("clip-{}", uuid::Uuid::new_v4());
+            let app = app(store.clone());
+            let id = uuid::Uuid::new_v4().to_string();
+            let path = format!("/capture/clips/{id}");
+            let article = json!({"title":"A small discovery", "publisher":"Example", "url":"https://example.org/article", "selection":"The selected passage."});
+            let (first, retry) = tokio::join!(
+                as_wearer(&app, &owner, Method::PUT, &path, Some(article.clone())),
+                as_wearer(&app, &owner, Method::PUT, &path, Some(article.clone()))
+            );
+            assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+            assert_eq!(retry.0, StatusCode::OK, "{}", retry.1);
+            assert_eq!(first.1["uuid"], id);
+            assert_eq!(retry.1, first.1);
+            assert_eq!(store.count_notes(&format!("U:{owner}")).await.unwrap(), 1);
+            assert!(
+                first.1["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("https://example.org/article")
+            );
+            // Build a distinct body without changing the stable transaction ID.
+            let mut conflict = article.clone();
+            conflict["title"] = json!("Different article");
+            assert_eq!(
+                as_wearer(&app, &owner, Method::PUT, &path, Some(conflict))
+                    .await
+                    .0,
+                StatusCode::CONFLICT
+            );
+            assert_eq!(
+                as_wearer(
+                    &app,
+                    "other-clip-owner",
+                    Method::GET,
+                    &format!("/capture/note/{id}"),
+                    None
+                )
+                .await
+                .0,
+                StatusCode::NOT_FOUND
+            );
+            assert!(matches!(
+                send(&app, Method::PUT, &path, &[], Some(article.clone()))
+                    .await
+                    .0,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ));
+            for bad_url in [
+                "javascript:alert(1)",
+                "file:///tmp/article",
+                "https://user:password@example.org/a",
+                "https://example.org/a\n",
+            ] {
+                let mut invalid = article.clone();
+                invalid["url"] = json!(bad_url);
+                assert_eq!(
+                    as_wearer(&app, &owner, Method::PUT, &path, Some(invalid))
+                        .await
+                        .0,
+                    StatusCode::BAD_REQUEST
+                );
+            }
+            let mut oversized = article.clone();
+            oversized["selection"] = json!("x".repeat(12_001));
+            assert_eq!(
+                as_wearer(&app, &owner, Method::PUT, &path, Some(oversized))
+                    .await
+                    .0,
+                StatusCode::PAYLOAD_TOO_LARGE
+            );
+            assert_eq!(store.count_notes(&format!("U:{owner}")).await.unwrap(), 1);
+        }
     }
 
     fn event(identifier: &str, kind: &str) -> NotableEventRecord {

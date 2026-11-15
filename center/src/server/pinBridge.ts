@@ -486,13 +486,20 @@ export async function pairPinBridge(
 /**
  * The Pin requests a browser may send over the remote link, method by method.
  * This is the browser-facing part of pin/bridge `reviewed_route_allowed` (and
- * the Pin's own remote policy): status reads and the Spotify controls. The
+ * the Pin's own remote policy): status, gestures, Clip and Spotify controls. The
  * bridge refuses everything else, so Center does not ask it.
  */
 const REMOTE_PIN_ROUTES: ReadonlyArray<readonly [method: string, pathname: string]> = [
   ["GET", "/api/health"],
   ["GET", "/api/device"],
   ["GET", "/api/feature-flags"],
+  ["GET", "/api/gestures"],
+  ["GET", "/api/gestures/observation"],
+  ["PUT", "/api/gestures"],
+  ["GET", "/api/gestures/clip"],
+  ["PUT", "/api/gestures/clip"],
+  ["DELETE", "/api/gestures/clip"],
+  ["PUT", "/api/gestures/clip/result"],
   ["GET", "/api/spotify/status"],
   ["GET", "/api/spotify/search"],
   ["PUT", "/api/spotify/settings"],
@@ -514,6 +521,7 @@ const DEVICE_LOCAL_NAMESPACES = [
   "/api/settings",
   "/api/setup",
   "/api/feature-flags",
+  "/api/gestures",
   "/api/fitness",
   "/api/spotify",
   "/api/iroh",

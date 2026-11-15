@@ -50,6 +50,7 @@ describe("public discovery middleware", () => {
       "/captures", "/captures/id", "/notes", "/notes/id", "/my-data/music",
       "/settings", "/settings/account/music", "/settings/account/services", "/settings/account/security", "/settings/pin/activity",
       "/settings/pin/conversations/id", "/settings/pin/gallery/id", "/talk",
+      "/settings/pin/gestures", "/settings/pin/clip",
       // The stock /devices link and the food page, like every other settings page.
       "/devices", "/settings/food",
     ];
@@ -64,12 +65,14 @@ describe("public discovery middleware", () => {
   });
 
   it("adds current RateLimit fields to public API requests", async () => {
-    const response = await middleware(new NextRequest("https://center.example.test/api/version", {
+    for (const path of ["/api/version", "/api/downloads/luma-clip"]) {
+    const response = await middleware(new NextRequest(`https://center.example.test${path}`, {
       headers: { "cf-connecting-ip": crypto.randomUUID(), "x-real-ip": "127.0.0.1" },
     }));
     expect(response.headers.get("x-middleware-next")).toBe("1");
     expect(response.headers.get("ratelimit-policy")).toBe('"public-read";q=120;w=60');
     expect(response.headers.get("ratelimit")).toMatch(/^"public-read";r=119;t=60$/);
+    }
   });
 
   it("serves the stock share-link path without a session, privately and rate-limited", async () => {

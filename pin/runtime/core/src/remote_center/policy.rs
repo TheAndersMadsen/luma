@@ -116,6 +116,10 @@ pub enum Capability {
     MusicEgress = 4,
     /// Read bounded, provider-neutral playback history for the wearer.
     MusicActivityRead = 5,
+    /// Pin-owned gesture preferences and bounded, ephemeral hand observations.
+    GesturesRead = 6,
+    /// Declarative allowlisted bindings, validated by the installed Pin SDK.
+    GesturesManage = 7,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +160,8 @@ pub const fn operator_bridge_capabilities() -> Capabilities {
         .with(Capability::SpotifyManage)
         .with(Capability::MusicEgress)
         .with(Capability::MusicActivityRead)
+        .with(Capability::GesturesRead)
+        .with(Capability::GesturesManage)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +184,13 @@ pub enum ApiOperation {
     Health,
     DeviceMetadata,
     FeatureFlagsRead,
+    GesturesRead,
+    GestureObservation,
+    GesturesUpdate,
+    ClipRead,
+    ClipStage,
+    ClipCancel,
+    ClipResult,
     SpotifyStatus,
     SpotifySettingsUpdate,
     SpotifyPairingStart,
@@ -618,6 +631,55 @@ fn classify(
             required_capability: Some(Capability::FeatureFlagsRead),
             max_body_bytes: 0,
             content_type: ContentTypeRule::Forbidden,
+        },
+        (HttpMethod::Get, "/api/gestures", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::GesturesRead),
+            scope: SENSITIVE_READ,
+            required_capability: Some(Capability::GesturesRead),
+            max_body_bytes: 0,
+            content_type: ContentTypeRule::Forbidden,
+        },
+        (HttpMethod::Get, "/api/gestures/observation", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::GestureObservation),
+            scope: SENSITIVE_READ,
+            required_capability: Some(Capability::GesturesRead),
+            max_body_bytes: 0,
+            content_type: ContentTypeRule::Forbidden,
+        },
+        (HttpMethod::Put, "/api/gestures", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::GesturesUpdate),
+            scope: SENSITIVE_WRITE,
+            required_capability: Some(Capability::GesturesManage),
+            max_body_bytes: 8 * 1024,
+            content_type: ContentTypeRule::JsonRequired,
+        },
+        (HttpMethod::Get, "/api/gestures/clip", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::ClipRead),
+            scope: SENSITIVE_READ,
+            required_capability: Some(Capability::GesturesRead),
+            max_body_bytes: 0,
+            content_type: ContentTypeRule::Forbidden,
+        },
+        (HttpMethod::Put, "/api/gestures/clip", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::ClipStage),
+            scope: SENSITIVE_WRITE,
+            required_capability: Some(Capability::GesturesManage),
+            max_body_bytes: 64 * 1024,
+            content_type: ContentTypeRule::JsonRequired,
+        },
+        (HttpMethod::Delete, "/api/gestures/clip", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::ClipCancel),
+            scope: SENSITIVE_WRITE,
+            required_capability: Some(Capability::GesturesManage),
+            max_body_bytes: 256,
+            content_type: ContentTypeRule::JsonRequired,
+        },
+        (HttpMethod::Put, "/api/gestures/clip/result", None) => RouteRule {
+            operation: ApprovedOperation::Api(ApiOperation::ClipResult),
+            scope: SENSITIVE_WRITE,
+            required_capability: Some(Capability::GesturesManage),
+            max_body_bytes: 256,
+            content_type: ContentTypeRule::JsonRequired,
         },
         (HttpMethod::Post, "/api/music/egress", None) => RouteRule {
             operation: ApprovedOperation::Api(ApiOperation::MusicEgress),
@@ -1574,6 +1636,81 @@ mod tests {
             authorize(&envelope("GET", "/api/spotify/status"), &manage_policy,).unwrap_err(),
             PolicyError::CapabilityRequired(Capability::SpotifyRead)
         );
+    }
+
+    #[test]
+    fn gesture_routes_require_exact_read_and_write_grants() {
+        let assets = catalog();
+        let none = context(&assets, Capabilities::none());
+        let reads = context(&assets, Capabilities::none().with(Capability::GesturesRead));
+        let operator = context(&assets, operator_bridge_capabilities());
+        for path in [
+            "/api/gestures",
+            "/api/gestures/observation",
+            "/api/gestures/clip",
+        ] {
+            assert_eq!(
+                authorize(&envelope("GET", path), &none).unwrap_err(),
+                PolicyError::CapabilityRequired(Capability::GesturesRead)
+            );
+            assert_eq!(
+                authorize(&envelope("GET", path), &reads).unwrap().scope(),
+                SENSITIVE_READ
+            );
+        }
+        let mut update = envelope("PUT", "/api/gestures");
+        update.content_type = Some("application/json");
+        update.header_count = 1;
+        update.header_bytes = 28;
+        update.body_bytes = 512;
+        update.declared_body_bytes = Some(512);
+        update.idempotency_key = Some("gesture-settings-001");
+        assert_eq!(
+            authorize(&update, &reads).unwrap_err(),
+            PolicyError::CapabilityRequired(Capability::GesturesManage)
+        );
+        assert_eq!(
+            authorize(&update, &operator).unwrap().scope(),
+            SENSITIVE_WRITE
+        );
+        update.body_bytes = 8193;
+        update.declared_body_bytes = Some(8193);
+        assert!(authorize(&update, &operator).is_err());
+        for (method, path, limit) in [
+            ("PUT", "/api/gestures/clip", 64 * 1024),
+            ("PUT", "/api/gestures/clip/result", 256),
+            ("DELETE", "/api/gestures/clip", 256),
+        ] {
+            let mut clip = envelope(method, path);
+            clip.content_type = Some("application/json");
+            clip.header_count = 1;
+            clip.header_bytes = 28;
+            clip.body_bytes = limit;
+            clip.declared_body_bytes = Some(limit);
+            clip.idempotency_key = Some("clip-request-001");
+            assert_eq!(
+                authorize(&clip, &reads).unwrap_err(),
+                PolicyError::CapabilityRequired(Capability::GesturesManage)
+            );
+            assert_eq!(
+                authorize(&clip, &operator).unwrap().scope(),
+                SENSITIVE_WRITE
+            );
+            clip.body_bytes += 1;
+            clip.declared_body_bytes = Some(clip.body_bytes);
+            assert!(authorize(&clip, &operator).is_err());
+        }
+        for (method, path) in [
+            ("POST", "/api/gestures"),
+            ("PUT", "/api/gestures/observation"),
+            ("GET", "/api/gestures?raw=1"),
+            ("GET", "/api/gestures/execute"),
+            ("GET", "/api/gestures/clip?article=other"),
+            ("POST", "/api/gestures/clip"),
+            ("GET", "/api/gestures/clip/result"),
+        ] {
+            assert!(authorize(&envelope(method, path), &operator).is_err());
+        }
     }
 
     #[test]

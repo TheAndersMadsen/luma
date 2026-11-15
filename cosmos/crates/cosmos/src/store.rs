@@ -774,6 +774,9 @@ impl NoteSource {
 /// what is indexed: the search text is the opened device envelope when there is
 /// one, and otherwise the server-held title and body.
 pub struct NewNote {
+    /// INFERRED: optional Luma Clip transaction UUID. Repeated creates return
+    /// the existing row unchanged; callers compare its content before acking.
+    pub request_id: Option<Uuid>,
     pub source: NoteSource,
     pub title: Option<String>,
     /// Plaintext body in the wearer's original case.
@@ -795,6 +798,7 @@ impl NewNote {
     ) -> Self {
         Self {
             source: NoteSource::Device,
+            request_id: None,
             title: None,
             body: None,
             opened_text: None,
@@ -841,7 +845,7 @@ impl NoteRecord {
     pub(crate) fn from_new(new: NewNote, created: SyncTime) -> Self {
         let indexed_text = new.index();
         Self {
-            uuid: Uuid::new_v4().to_string(),
+            uuid: new.request_id.unwrap_or_else(Uuid::new_v4).to_string(),
             indexed_text,
             encrypted_note: new.encrypted_note,
             encrypted_location: new.encrypted_location,
@@ -1267,7 +1271,8 @@ pub trait Store: Send + Sync + 'static {
     // --- notes ------------------------------------------------------------
 
     /// Store one note and its search index in the same durable write, and
-    /// return it with its server-minted uuid.
+    /// return it with its UUID (server-minted unless an explicit Clip request ID
+    /// was supplied). An existing (principal, request_id) returns unchanged.
     ///
     /// A device note's body is an opaque `EncryptedData` blob stored verbatim;
     /// its index is the text the caller opened from it ([`NewNote::sealed`]
@@ -2477,6 +2482,12 @@ impl Store for MemoryStore {
     async fn create_note(&self, principal: &str, new: NewNote) -> Written<NoteRecord> {
         let record = NoteRecord::from_new(new, SyncTime::now());
         let mut guard = self.captures.lock().expect("capture store poisoned");
+        if let Some(existing) = guard
+            .get(principal)
+            .and_then(|captures| captures.notes.iter().find(|note| note.uuid == record.uuid))
+        {
+            return Ok(existing.clone());
+        }
         guard
             .entry(principal.to_owned())
             .or_default()

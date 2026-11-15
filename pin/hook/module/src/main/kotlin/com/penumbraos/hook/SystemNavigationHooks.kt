@@ -51,6 +51,8 @@ object SystemNavigationHooks {
 
         installWeatherTemperatureUnit(cl)
 
+        LauncherGestureHooks.install(cl)
+
         Log.w(TAG, "System navigation hooks installed")
     }
 

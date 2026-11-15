@@ -49,6 +49,16 @@ const CONSOLE_PANES: ReadonlyArray<{ href: string; label: string; desc: string }
     desc: "Advanced behavior for this Pin.",
   },
   {
+    href: "/settings/pin/gestures",
+    label: "Gestures",
+    desc: "Finger shortcuts and a live hand inspector.",
+  },
+  {
+    href: "/settings/pin/clip",
+    label: "Clip",
+    desc: "Pinch to save an article from your browser.",
+  },
+  {
     href: "/settings/pin/diagnostics",
     label: "Help & diagnostics",
     desc: "Logs and software diagnostics.",

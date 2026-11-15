@@ -303,6 +303,7 @@ const PIN_COMPILE_SDK_FILES = Object.freeze([
   "pin/contracts/stock-aibus/build.gradle.kts",
   "pin/hook/loader/build.gradle.kts",
   "pin/hook/module/build.gradle.kts",
+  "pin/gesture-sdk/build.gradle.kts",
   "pin/device-installer/common/build.gradle.kts",
   "pin/device-installer/bootstrap/build.gradle.kts",
   "pin/device-installer/installer/build.gradle.kts",

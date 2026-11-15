@@ -305,11 +305,23 @@ async fn run_settings_global_bridge_command(
     let token = std::env::var(SETTINGS_GLOBAL_BRIDGE_TOKEN_ENV)
         .map_err(|_| "Settings.Global bridge authentication is unavailable".to_string())?;
     let request = settings_global_bridge_request(&command, &token)?;
+    let line =
+        settings_global_bridge_exchange(&request, SETTINGS_GLOBAL_BRIDGE_MAX_LINE_BYTES).await?;
+    parse_settings_global_bridge_response(&command, &line)
+}
+
+// Shared authenticated Android transport. Feature flags retain their existing
+// 2 KiB schema/response limit; gestures have a separate bounded SDK payload.
+#[cfg(target_os = "android")]
+async fn settings_global_bridge_exchange(
+    request: &[u8],
+    max_response: usize,
+) -> Result<Vec<u8>, String> {
     let mut stream = TcpStream::connect(SETTINGS_GLOBAL_BRIDGE_ADDR)
         .await
         .map_err(|_| "Settings.Global bridge is unavailable".to_string())?;
     stream
-        .write_all(&request)
+        .write_all(request)
         .await
         .map_err(|_| "Settings.Global bridge request failed".to_string())?;
     stream
@@ -329,7 +341,7 @@ async fn run_settings_global_bridge_command(
         }
         let newline = buffer[..read].iter().position(|byte| *byte == b'\n');
         let chunk = &buffer[..newline.unwrap_or(read)];
-        if line.len() + chunk.len() > SETTINGS_GLOBAL_BRIDGE_MAX_LINE_BYTES {
+        if line.len() + chunk.len() > max_response {
             return Err("Settings.Global bridge response is too large".into());
         }
         line.extend_from_slice(chunk);
@@ -340,7 +352,54 @@ async fn run_settings_global_bridge_command(
     if line.last() == Some(&b'\r') {
         line.pop();
     }
-    parse_settings_global_bridge_response(&command, &line)
+    Ok(line)
+}
+
+pub(super) async fn gesture_bridge_command(
+    op: &str,
+    update: Option<serde_json::Value>,
+) -> Result<serde_json::Value, ()> {
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (op, update);
+        Err(())
+    }
+    #[cfg(target_os = "android")]
+    {
+        if !matches!(
+            op,
+            "gestures_get"
+                | "gestures_put"
+                | "gestures_observation"
+                | "clip_get"
+                | "clip_stage"
+                | "clip_result"
+                | "clip_cancel"
+        ) {
+            return Err(());
+        }
+        let token = std::env::var(SETTINGS_GLOBAL_BRIDGE_TOKEN_ENV).map_err(|_| ())?;
+        if !valid_settings_global_bridge_token(&token) {
+            return Err(());
+        }
+        let mut request = serde_json::json!({"version": 1, "token": token, "op": op});
+        if let Some(update) = update {
+            request["update"] = update;
+        }
+        let mut bytes = serde_json::to_vec(&request).map_err(|_| ())?;
+        if bytes.len() > 64 * 1024 {
+            return Err(());
+        }
+        bytes.push(b'\n');
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            settings_global_bridge_exchange(&bytes, 64 * 1024),
+        )
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())?;
+        serde_json::from_slice(&response).map_err(|_| ())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

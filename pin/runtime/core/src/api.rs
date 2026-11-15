@@ -13,6 +13,7 @@ mod dev;
 pub mod device;
 mod esim;
 mod feature_flags;
+mod gestures;
 pub(crate) mod setup;
 #[cfg(target_os = "android")]
 pub(crate) use feature_flags::{maintain_food_runtime_gate, request_startup_feature_flag_sync};
@@ -129,6 +130,7 @@ pub enum Event {
 pub fn router(state: ApiState) -> Router {
     let fitness_router = fitness::router(state.fitness.clone());
     let router = Router::new()
+        .merge(gestures::router())
         .merge(contacts::internal_router())
         .route("/api/health", get(health))
         .route("/api/memories", get(list_memories))

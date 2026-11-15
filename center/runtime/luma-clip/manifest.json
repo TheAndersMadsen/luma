@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Luma Clip",
+  "version": "1.0.0",
+  "description": "Hand an article to your Ai Pin and pinch to save it to Luma Notes.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "action": { "default_title": "Luma Clip", "default_popup": "popup.html" }
+}

@@ -1,0 +1,10 @@
+.controls { border: 0; margin: 0; padding: 1rem; min-width: 0; display: grid; gap: 1rem; }
+.controls label { display: grid; gap: .4rem; font-size: .85rem; }
+.controls select, .controls input { font: inherit; color: inherit; background: var(--surface, transparent); border: 1px solid var(--border, #8885); border-radius: .5rem; padding: .65rem; min-width: 0; }
+.binding { display: grid; grid-template-columns: 1.2fr 1.5fr .8fr auto; gap: .8rem; align-items: end; padding-top: 1rem; border-top: 1px solid var(--border, #8883); }
+.actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.inspector { display: grid; grid-template-columns: minmax(140px, 240px) 1fr; align-items: center; gap: 1.5rem; padding: 1rem; }
+.hand { width: 100%; color: var(--text-secondary, #888); background: #111; border-radius: 1rem; }
+.curled { color: #58dfc3; }
+.state { font-weight: 600; }
+@media (max-width: 640px) { .binding { grid-template-columns: 1fr 1fr; } .inspector { grid-template-columns: 1fr; } .hand { max-width: 220px; margin-inline: auto; } }

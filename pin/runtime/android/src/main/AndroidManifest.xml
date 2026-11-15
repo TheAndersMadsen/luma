@@ -37,6 +37,7 @@
     -->
 
     <queries>
+        <package android:name="${tierAPackageSystemNavigation}" />
         <package android:name="${tierAPackageDialer}" />
         <package android:name="${tierAPackageMessages}" />
         <package android:name="${tierAPackageMusic}" />
@@ -103,6 +104,13 @@
         -->
         <service
             android:name=".FeatureFlagApplyAckBridgeService"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="true" />
+
+        <!-- Exact launcher UID/process admitted on every Binder transaction. -->
+        <service
+            android:name=".GestureBridgeService"
             android:directBootAware="false"
             android:enabled="true"
             android:exported="true" />

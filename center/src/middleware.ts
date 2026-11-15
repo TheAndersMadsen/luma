@@ -32,6 +32,7 @@ const PUBLIC_MACHINE_PATHS = new Set([
 ]);
 
 const RATE_LIMITED_PUBLIC_API_PATHS = new Set([
+  "/api/downloads/luma-clip",
   "/api/version",
   "/api/pin/releases/current",
 ]);
@@ -45,7 +46,7 @@ const PROTECTED_PAGE_PATTERNS = [
   /^\/settings\/account(?:\/(?:details|devices|features|music|orders|security|services))?$/u,
   /^\/devices$/u,
   /^\/settings\/pin$/u,
-  /^\/settings\/pin\/(?:activity|contacts|diagnostics|esim|fitness|flags|gallery|install|llm|provision|server|services|setup)$/u,
+  /^\/settings\/pin\/(?:activity|clip|contacts|diagnostics|esim|fitness|flags|gallery|gestures|install|llm|provision|server|services|setup)$/u,
   /^\/settings\/pin\/conversations(?:\/[^/]+)?$/u,
   /^\/settings\/pin\/gallery\/[^/]+$/u,
   /^\/admin$/u,

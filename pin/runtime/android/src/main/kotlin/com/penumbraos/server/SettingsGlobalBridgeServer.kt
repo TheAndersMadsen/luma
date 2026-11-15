@@ -3,6 +3,8 @@ package com.penumbraos.server
 import android.content.ContentResolver
 import android.content.Context
 import android.provider.Settings
+import android.os.SystemClock
+import dev.luma.gestures.GestureConfig
 import android.util.Log
 import com.penumbraos.stockaibus.contract.TierASymbols
 import java.io.BufferedReader
@@ -51,7 +53,12 @@ internal object SettingsGlobalBridgeServer {
             val socket = ServerSocket(TCP_PORT, MAX_ACTIVE_CONNECTIONS, InetAddress.getByName("127.0.0.1"))
             serverSocket = socket
             val store = AndroidSettingsGlobalStore(context.applicationContext.contentResolver)
-            acceptThread = Thread({ acceptLoop(socket, authToken, store) }, "penumbra-settings-global").apply {
+            val resolver = context.applicationContext.contentResolver
+            val gestures = GestureSettings(object : GestureSettingsStore {
+                override fun read(): String? = Settings.Global.getString(resolver, GestureConfig.SETTING)
+                override fun write(value: String): Boolean = Settings.Global.putString(resolver, GestureConfig.SETTING, value)
+            })
+            acceptThread = Thread({ acceptLoop(socket, authToken, store, gestures) }, "penumbra-settings-global").apply {
                 isDaemon = true
                 uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { thread, error ->
                     Log.e(TAG, "Uncaught on ${thread.name} (${error.javaClass.simpleName})")
@@ -87,6 +94,7 @@ internal object SettingsGlobalBridgeServer {
         listener: ServerSocket,
         authToken: String,
         store: SettingsGlobalStore,
+        gestures: GestureSettings,
     ) {
         // A stopped listener can overlap briefly with a replacement listener
         // during an Android service restart. Tie this loop to the exact socket
@@ -110,7 +118,7 @@ internal object SettingsGlobalBridgeServer {
             activeSockets.add(socket)
             try {
                 Thread(
-                    { handleClient(socket, authToken, store) },
+                    { handleClient(socket, authToken, store, gestures) },
                     "penumbra-settings-global-client",
                 ).apply {
                     isDaemon = true
@@ -133,6 +141,7 @@ internal object SettingsGlobalBridgeServer {
         socket: Socket,
         authToken: String,
         store: SettingsGlobalStore,
+        gestures: GestureSettings,
     ) {
         try {
             socket.soTimeout = SOCKET_TIMEOUT_MS
@@ -142,7 +151,7 @@ internal object SettingsGlobalBridgeServer {
                     val response = if (line == null) {
                         SettingsGlobalBridgeProtocol.error("invalid_request")
                     } else {
-                        SettingsGlobalBridgeProtocol.process(line, authToken, store)
+                        SettingsGlobalBridgeProtocol.process(line, authToken, store, gestures)
                     }
                     writer.write(response.toString())
                     writer.write('\n'.code)
@@ -187,7 +196,7 @@ private class AndroidSettingsGlobalStore(
 
 internal object SettingsGlobalBridgeProtocol {
     const val VERSION = 1
-    const val MAX_REQUEST_LINE_CHARS = 2 * 1024
+    const val MAX_REQUEST_LINE_CHARS = 64 * 1024
 
     val STOCK_FEATURE_GATE_KEYS = setOf(
         TierASymbols.FeatureFlags.SettingsGlobal.PHOTO_SHARING_ENABLED,
@@ -209,7 +218,7 @@ internal object SettingsGlobalBridgeProtocol {
     val ALLOWED_KEYS =
         STOCK_FEATURE_GATE_KEYS + PRIVATE_PREFERENCE_KEYS + LUMA_FEATURE_GATE_KEYS
 
-    fun process(line: String, authToken: String, store: SettingsGlobalStore): JSONObject {
+    fun process(line: String, authToken: String, store: SettingsGlobalStore, gestures: GestureSettings? = null): JSONObject {
         val request = try {
             parse(line, authToken)
         } catch (_: UnauthorizedRequest) {
@@ -220,6 +229,19 @@ internal object SettingsGlobalBridgeProtocol {
 
         return try {
             when (request.operation) {
+                Operation.CLIP_GET -> success().put("value", clipResponse())
+                Operation.CLIP_STAGE -> success().put("value", JSONObject().put("clip",
+                    GestureBridgeService.clips.stage(requireNotNull(request.update), SystemClock.elapsedRealtime())))
+                Operation.CLIP_RESULT -> success().put("value", JSONObject().put("clip",
+                    GestureBridgeService.clips.result(requireNotNull(request.update), SystemClock.elapsedRealtime())))
+                Operation.CLIP_CANCEL -> {
+                    GestureBridgeService.clips.cancel(requireNotNull(request.update), SystemClock.elapsedRealtime())
+                    success().put("value", clipResponse())
+                }
+                Operation.GESTURES_GET -> success().put("value", requireNotNull(gestures).read())
+                Operation.GESTURES_PUT -> success().put("value", requireNotNull(gestures).update(requireNotNull(request.update)))
+                Operation.GESTURES_OBSERVATION -> success().put("value", JSONObject().put("observation",
+                    GestureBridgeService.observations.read(SystemClock.elapsedRealtime()) ?: JSONObject.NULL))
                 Operation.GET -> success().put("value", store.get(request.key) ?: JSONObject.NULL)
                 Operation.PUT -> {
                     val value = checkNotNull(request.value)
@@ -245,6 +267,8 @@ internal object SettingsGlobalBridgeProtocol {
                     } ?: JSONObject.NULL,
                 )
             }
+        } catch (error: GestureRequestException) {
+            error(error.code)
         } catch (_: Throwable) {
             error("operation_failed")
         }
@@ -268,6 +292,9 @@ internal object SettingsGlobalBridgeProtocol {
         .put("ok", false)
         .put("error", code)
 
+    private fun clipResponse(): JSONObject = JSONObject().put("clip",
+        GestureBridgeService.clips.read(SystemClock.elapsedRealtime()) ?: JSONObject.NULL)
+
     private fun success(): JSONObject = JSONObject()
         .put("version", VERSION)
         .put("ok", true)
@@ -280,12 +307,23 @@ internal object SettingsGlobalBridgeProtocol {
             "put" -> Operation.PUT
             "delete" -> Operation.DELETE
             "feature_flag_ack" -> Operation.FEATURE_FLAG_ACK
+            "gestures_get" -> Operation.GESTURES_GET
+            "gestures_put" -> Operation.GESTURES_PUT
+            "gestures_observation" -> Operation.GESTURES_OBSERVATION
+            "clip_get" -> Operation.CLIP_GET
+            "clip_stage" -> Operation.CLIP_STAGE
+            "clip_result" -> Operation.CLIP_RESULT
+            "clip_cancel" -> Operation.CLIP_CANCEL
             else -> throw IllegalArgumentException("unsupported operation")
         }
         val expectedKeys = when (operation) {
             Operation.PUT -> setOf("version", "token", "op", "key", "value")
             Operation.GET, Operation.DELETE -> setOf("version", "token", "op", "key")
             Operation.FEATURE_FLAG_ACK -> setOf("version", "token", "op")
+            Operation.GESTURES_GET, Operation.GESTURES_OBSERVATION -> setOf("version", "token", "op")
+            Operation.GESTURES_PUT -> setOf("version", "token", "op", "update")
+            Operation.CLIP_GET -> setOf("version", "token", "op")
+            Operation.CLIP_STAGE, Operation.CLIP_RESULT, Operation.CLIP_CANCEL -> setOf("version", "token", "op", "update")
         }
         require(message.keys().asSequence().toSet() == expectedKeys)
         require(message.get("version") is Int && message.getInt("version") == VERSION)
@@ -296,8 +334,8 @@ internal object SettingsGlobalBridgeProtocol {
             throw UnauthorizedRequest()
         }
 
-        if (operation == Operation.FEATURE_FLAG_ACK) {
-            return Request(operation, "", null)
+        if (operation !in setOf(Operation.GET, Operation.PUT, Operation.DELETE)) {
+            return Request(operation, "", null, if ("update" in expectedKeys) message.getJSONObject("update") else null)
         }
 
         val key = message.get("key") as? String
@@ -310,12 +348,13 @@ internal object SettingsGlobalBridgeProtocol {
         return Request(operation, key, value)
     }
 
-    private enum class Operation { GET, PUT, DELETE, FEATURE_FLAG_ACK }
+    private enum class Operation { GET, PUT, DELETE, FEATURE_FLAG_ACK, GESTURES_GET, GESTURES_PUT, GESTURES_OBSERVATION, CLIP_GET, CLIP_STAGE, CLIP_RESULT, CLIP_CANCEL }
 
     private data class Request(
         val operation: Operation,
         val key: String,
         val value: Boolean?,
+        val update: JSONObject? = null,
     )
 
     private class UnauthorizedRequest : Exception()

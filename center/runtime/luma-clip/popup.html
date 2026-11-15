@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Luma Clip</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><span class="mark" aria-hidden="true">↗</span><h1>Luma Clip</h1></header>
+  <p>Hand this article to your Pin. Raise your hand on Home, then pinch to save it.</p>
+  <label for="center">Your Center address</label>
+  <div class="connection"><input id="center" type="url" placeholder="https://center.example.com" autocomplete="off" spellcheck="false"><button id="connect" type="button">Connect</button></div>
+  <p class="hint">Keep Pin → Clip open in Center with browser handoff enabled. Select text in the article if you want to save an excerpt.</p>
+  <button id="handoff" type="button" class="primary">Hand off to Pin</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+.steps { margin: 0 0 1rem; padding-left: 1.4rem; line-height: 1.6; }
+.steps li + li { margin-top: .65rem; }
+.steps a, .url { color: inherit; text-decoration: underline; text-underline-offset: .2em; }
+.publisher { margin: 0 0 .5rem; font-size: .8rem; opacity: .7; }
+.url { display: block; margin-top: .75rem; overflow-wrap: anywhere; font-size: .85rem; }
+.selection { margin: 1rem 0; padding-left: 1rem; border-left: 2px solid currentColor; white-space: pre-wrap; max-height: 12rem; overflow: auto; }
+.phase { margin-top: 1rem; font-weight: 500; }

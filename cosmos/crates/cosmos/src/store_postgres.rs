@@ -1427,12 +1427,13 @@ impl Store for PostgresStore {
         // `let _ = ...` here meant the handler acked CREATE_SUCCESS with a uuid
         // for a row that was never written, and the device keeps no copy of the
         // note to retry from, so the wearer's note was simply gone.
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO cosmos_note
                 (principal, uuid, indexed_text, encrypted_note, encrypted_location,
                  created_seconds, created_nanos, source, title, body,
                  modified_seconds, modified_nanos, time_zone, location, tags)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+             ON CONFLICT (principal, uuid) DO NOTHING",
         )
         .bind(principal)
         .bind(&record.uuid)
@@ -1452,6 +1453,12 @@ impl Store for PostgresStore {
         .execute(&self.pool)
         .await
         .map_err(|_| StoreError::Unavailable)?;
+        if inserted.rows_affected() == 0 {
+            return self
+                .note(principal, &record.uuid)
+                .await?
+                .ok_or(StoreError::Unavailable);
+        }
         Ok(record)
     }
 

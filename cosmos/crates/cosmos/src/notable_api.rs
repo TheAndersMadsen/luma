@@ -2088,6 +2088,7 @@ mod tests {
                     &account,
                     NewNote {
                         source: NoteSource::Web,
+                        request_id: None,
                         title: Some(format!("Title {n}")),
                         body: Some(format!("Body {n}")),
                         opened_text: None,

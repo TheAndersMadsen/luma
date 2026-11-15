@@ -25,6 +25,8 @@ interoperability identifiers.
 - [Configure services](docs/services.md): assistant, speech, search, maps, music, OS3
 - [Run your server](docs/operations.md): update, back up, restore, sessions, Traefik
 - [For developers](docs/developers.md): configuration, stock reference, builds, releases
+- [Gesture SDK](docs/gestures.md): finger shortcuts, browser Clip, SDK/API contracts, native evidence and physical validation
+- [Try Gestures and Clip](guides/gestures-and-clip.md): Mac extension installation, Pin configuration and physical acceptance
 - [Source control and Scion agents](docs/source-control.md): sparse workspaces, GitHub publication, agent tasks and recovery
 - [Connect a Pin (USB/ADB)](docs/connect-a-pin.md): Linux permissions and ADB checks
 - [Troubleshooting](docs/troubleshooting.md): symptoms, causes, fixes

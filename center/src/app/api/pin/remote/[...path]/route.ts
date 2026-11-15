@@ -147,14 +147,14 @@ async function handle(request: Request, context: RouteContext): Promise<Response
       "usb_only",
     );
   }
-  // Only the reviewed status and music routes cross the bridge (pin/bridge
+  // Only the reviewed status, gesture, Clip and music routes cross the bridge (pin/bridge
   // `reviewed_route_allowed`). The bridge refuses the rest of the Pin's
   // device-local API, so it is answered here without asking.
   if (!isRemotePinRequest(request.method, pathname)) {
     return isUsbOnlyPinPath(pathname)
       ? jsonError(
           409,
-          "Connect this Pin over USB for this. Remote access carries status and music controls only.",
+          "Connect this Pin over USB for this. This function requires USB.",
           "usb_only",
         )
       : // Captures, contacts and history are read from Cosmos, never from the
@@ -211,7 +211,7 @@ async function handle(request: Request, context: RouteContext): Promise<Response
       await upstream.body?.cancel().catch(() => undefined);
       return jsonError(
         409,
-        "Connect this Pin over USB for this. Remote access carries status and music controls only.",
+        "Connect this Pin over USB for this. This function requires USB.",
         "usb_only",
       );
     }

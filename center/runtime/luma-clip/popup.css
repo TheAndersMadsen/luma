@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; color: #171717; background: #faf9f6; }
+body { width: 340px; margin: 0; padding: 24px; }
+header { display: flex; align-items: center; gap: 10px; }
+h1 { margin: 0; font-size: 21px; font-weight: 550; letter-spacing: -.5px; }
+.mark { background: #222; color: white; border-radius: 50%; width: 30px; height: 30px; display: grid; place-items: center; }
+p { margin: 14px 0; }
+label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.connection { display: flex; gap: 6px; }
+input, button { font: inherit; border: 1px solid #ccc9c4; border-radius: 7px; padding: 9px 11px; }
+input { min-width: 0; flex: 1; background: white; color: #171717; }
+button { cursor: pointer; background: transparent; color: inherit; }
+button:disabled { opacity: .5; cursor: wait; }
+.primary { width: 100%; background: #222; color: #fff; border-color: #222; }
+.hint { font-size: 12px; color: #605c55; }
+#status { min-height: 1.5em; margin-bottom: 0; }
+#status[data-error="true"] { color: #a62920; }
+@media (prefers-color-scheme: dark) {
+  :root { color: #f0eeea; background: #181818; }
+  input { color: #f0eeea; background: #252525; }
+  input, button { border-color: #555; }
+  .primary, .mark { background: #e8e5df; color: #181818; }
+  .hint { color: #b7b2a9; }
+  #status[data-error="true"] { color: #ffb0a7; }
+}

@@ -248,6 +248,7 @@ gradle.taskGraph.whenReady {
 }
 
 dependencies {
+    implementation(project(":gesture-sdk"))
     implementation(project(":contracts:stock-aibus"))
     implementation(project(":contracts:penumbra-ipc"))
     implementation("com.aliucord:Aliuhook:1.1.4")
