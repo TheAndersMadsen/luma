@@ -670,6 +670,10 @@ impl BidiSession {
         // A locked Pin gets none, as on the legacy engine: stock refuses the
         // notes read on the keyguard (`ManageMemoryAction`).
         let mut messages = build_history(&req, &self.tools.instructions);
+        // The vision gesture reaches the model as the legacy engine states it.
+        if let Some(vision) = super::engine::vision_line(&req, &tools) {
+            messages.push(ChatMessage::system(vision));
+        }
         if !request_locked
             && let Ok(Some(memory)) =
                 tokio::time::timeout(run.context_timeout(), wearer_memory(&self.tools)).await
@@ -905,6 +909,7 @@ impl BidiSession {
             // device must not run anything here, so neither event requires a
             // response.
             if !tools.iter().any(|t| t.name == tc.name) {
+                super::engine::trace_unoffered_tool(&tc.name);
                 let action_id = self.next_id();
                 if self
                     .emit(
@@ -1127,6 +1132,12 @@ impl BidiSession {
 
                 messages.push(tool_result(&tc, &obs.observation));
                 device_observed_in_run = true;
+                // One look per run. On the legacy transport the replayed look
+                // withholds the camera from the next call; here the run goes on
+                // in this loop, so retire it now.
+                if tc.name == super::engine::VISION_ACTION {
+                    tools.retain(|tool| tool.name != tc.name);
+                }
                 // Mid-stream, the device's answer to `GetCurrentLocation` is
                 // the position: no new request envelope follows on this
                 // transport to carry it.
@@ -1691,6 +1702,7 @@ fn resolve_catalog(
     if !super::intents::explicit_playback_request(super::engine::current_utterance(req)) {
         tools.retain(|tool| tool.name != "music_discover");
     }
+    super::engine::withhold_vision_unless_offered(&mut tools, req);
     tools
 }
 

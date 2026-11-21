@@ -43,6 +43,9 @@ use tonic::{Request, Response, Status};
 use crate::assistant::catalog;
 use crate::assistant::llm::{ChatMessage, ChatModel, ConfiguredChatModel};
 #[cfg(test)]
+#[path = "aibus_look_tests.rs"]
+mod look_tests;
+#[cfg(test)]
 #[path = "aibus_privacy_tests.rs"]
 mod privacy_tests;
 #[cfg(test)]

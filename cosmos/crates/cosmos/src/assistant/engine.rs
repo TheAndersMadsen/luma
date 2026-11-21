@@ -541,9 +541,6 @@ impl Engine {
         let mut tools = resolve_catalog(&req, self.entitlement.is_subscribed());
         let request_locked = super::policy::request_is_locked(&req);
         let utterance = current_utterance(&req).to_owned();
-        if !active_vision_request(&req) {
-            tools.retain(|tool| tool.name != VISION_ACTION);
-        }
         catalog::scope_tickle_to_exact_request(&mut tools, &utterance);
         catalog::scope_explanation_to_non_device_tools(&mut tools, &utterance);
 
@@ -947,6 +944,7 @@ impl Engine {
                 // and LOOP so the model can correct itself (cosmos's device does
                 // exactly this, tagged source=DEVICE).
                 if !tools.iter().any(|t| t.name == tc.name) {
+                    trace_unoffered_tool(&tc.name);
                     run.note_tool_call(&tc.name);
                     let action_id = new_id();
                     if send(
@@ -1648,6 +1646,7 @@ fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> V
     if !explicit_playback_request(current_utterance(req)) {
         tools.retain(|tool| tool.name != "music_discover");
     }
+    withhold_vision_unless_offered(&mut tools, req);
     // Content-free: which gates applied and how many tools survived them, so
     // "the Pin was not offered that tool" can be answered from the log.
     tracing::info!(
@@ -1659,6 +1658,7 @@ fn resolve_catalog(req: &pb::SynapseUnderstandingRequest, subscribed: bool) -> V
             .iter()
             .filter(|tool| crate::mcp::is_tool_name(&tool.name))
             .count(),
+        vision_offered = tools.iter().any(|tool| tool.name == VISION_ACTION),
         "assistant catalog resolved"
     );
     tools
@@ -1764,29 +1764,70 @@ pub(super) fn current_utterance(req: &pb::SynapseUnderstandingRequest) -> &str {
         .unwrap_or("")
 }
 
-fn active_vision_request(req: &pb::SynapseUnderstandingRequest) -> bool {
+/// Whether this run may look through the Pin's camera, that is, whether
+/// `UnderstandScene` is offered at all. Both transports resolve their catalog
+/// through [`withhold_vision_unless_offered`].
+///
+/// Stock `IntentRecognitionAction.visionRequested()` marks every spoken
+/// request: `VISION` after the vision gesture, `NO_VISION` when there was no
+/// gesture and the wearer turned on "Vision with Gesture only"
+/// (`ProtoSettings.VISION_ONLY_WITH_GESTURE`, off by default), and
+/// `UNSPECIFIED` otherwise. Only `NO_VISION` rules the camera out. An
+/// `UNSPECIFIED` request leaves the look to the assistant, which is how a
+/// spoken "what do you see?" reaches the camera. Offering the camera only after
+/// the gesture left that request with no way to look, and a model told to look
+/// anyway was bounced as an unrecognized tool before anything reached the Pin.
+///
+/// A run looks once. When the current run already holds an `UnderstandScene`,
+/// its observation is the answer, and offering the camera again would let a
+/// model capture frame after frame up to the action limit.
+fn vision_offered(req: &pb::SynapseUnderstandingRequest) -> bool {
+    let gesture_only = newest_user_request(req).is_some_and(|request| {
+        request.vision_requested() == pb::synapse_user_request_content::VisionRequested::NoVision
+    });
+    !gesture_only && !looked_in_current_run(req)
+}
+
+/// Remove `UnderstandScene` from a resolved catalog unless [`vision_offered`].
+pub(super) fn withhold_vision_unless_offered(
+    tools: &mut Vec<ToolDef>,
+    req: &pb::SynapseUnderstandingRequest,
+) {
+    if !vision_offered(req) {
+        tools.retain(|tool| tool.name != VISION_ACTION);
+    }
+}
+
+/// Whether the current run, as the device replayed it, already looked.
+fn looked_in_current_run(req: &pb::SynapseUnderstandingRequest) -> bool {
+    req.device_context
+        .as_ref()
+        .is_some_and(|context| current_run_contains_action(&context.turns, VISION_ACTION))
+}
+
+/// Whether the wearer aimed the Pin with the vision gesture, or the Pin
+/// prefetched a frame, on a run that has not looked yet.
+fn vision_gesture_request(req: &pb::SynapseUnderstandingRequest) -> bool {
     let Some(request) = newest_user_request(req) else {
         return false;
     };
-    let requested = request.vision_requested()
-        == pb::synapse_user_request_content::VisionRequested::Vision
-        || !request.image_data.is_empty();
-    requested
-        && !req
-            .device_context
-            .as_ref()
-            .is_some_and(|context| current_run_contains_action(&context.turns, VISION_ACTION))
+    (request.vision_requested() == pb::synapse_user_request_content::VisionRequested::Vision
+        || !request.image_data.is_empty())
+        && !looked_in_current_run(req)
 }
 
 /// The system line for a vision-gesture turn, or `None` when the wearer did not
-/// aim the pin at anything.
+/// aim the pin at anything. Both transports push it after the history.
 ///
 /// Keyed off the RESOLVED catalog so the guidance can never point the model at a
 /// tool this caller does not have, a text-only caller excludes every device
 /// action, `UnderstandScene` included, and telling that model to call it would
 /// buy a bounced `Unrecognized function name and/or arguments` and a wasted step.
-fn vision_line(req: &pb::SynapseUnderstandingRequest, tools: &[ToolDef]) -> Option<String> {
-    if !active_vision_request(req) {
+pub(super) fn vision_line(
+    req: &pb::SynapseUnderstandingRequest,
+    tools: &[ToolDef],
+) -> Option<String> {
+    if !vision_gesture_request(req) {
         return None;
     }
     let request = newest_user_request(req)?;
@@ -1806,7 +1847,20 @@ fn vision_line(req: &pb::SynapseUnderstandingRequest, tools: &[ToolDef]) -> Opti
 }
 
 /// The device action that looks at the wearer's camera view.
-const VISION_ACTION: &str = "UnderstandScene";
+pub(super) const VISION_ACTION: &str = "UnderstandScene";
+
+/// Log a model's call to a tool this run did not offer, before it is bounced as
+/// unrecognized. A model can name a real tool the run withheld (on a locked
+/// Pin, after an exclusion, or the camera on a gesture-only request), and the
+/// spoken result, such as "I can't get a view from your camera right now",
+/// otherwise leaves no server-side line to read. Content-free: only catalog
+/// names are logged ([`catalog::loggable_tool_name`]).
+pub(super) fn trace_unoffered_tool(name: &str) {
+    tracing::info!(
+        tool = catalog::loggable_tool_name(name),
+        "assistant tool call not offered"
+    );
+}
 
 /// turn's utterance. cosmos's legacy server is stateless per call and reconstructs
 /// conversation state exactly this way.

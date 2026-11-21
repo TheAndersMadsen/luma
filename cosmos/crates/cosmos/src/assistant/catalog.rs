@@ -84,6 +84,15 @@ pub fn system_prompt() -> &'static str {
      anything else. Device actions (set a timer, play music, search contacts, \
      take a photo, and so on) run on the pin itself.\n\
      \n\
+     `UnderstandScene` is how you see: it looks through the pin's camera. When \
+     the wearer asks about what is in front of them right now — what you see, \
+     what this is, what something says, or to look at, read, or describe \
+     something — call it with their question and answer from what it reports. \
+     `CapturePhotograph` only saves a photo to their gallery and shows you \
+     nothing, so use it only when they want a picture kept. If you have neither \
+     `UnderstandScene` nor a camera result for the request, say briefly that you \
+     cannot look right now. Never describe anything the camera did not report.\n\
+     \n\
      For a ranked or subjective music question, use the one offered research tool \
      for the requested criterion. If the wearer only asks what the song is, \
      answer from that research and do not touch their music provider. If they \
@@ -718,7 +727,9 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
     ),
     (
         "UnderstandScene",
-        "Answer a question about what the wearer is currently looking at.",
+        "Look through the pin's camera at what is in front of the wearer and answer their \
+         question about it: what you see, what something is, what it says, or what to do with \
+         it. Question is the wearer's question in their own words.",
     ),
     (
         "ExplainFailure",
@@ -775,7 +786,11 @@ const DEVICE_TOOL_SET: &[(&str, &str)] = &[
         "Build a new playlist matching a description; never use for an existing playlist.",
     ),
     // --- capture -----------------------------------------------------------
-    ("CapturePhotograph", "Take a photo."),
+    (
+        "CapturePhotograph",
+        "Take a photo and save it to the wearer's gallery. You never see the photo, so it \
+         cannot answer a question about what is in front of the wearer.",
+    ),
     ("CaptureVideo", "Start recording video."),
     ("StopVideo", "Stop recording video."),
     ("OpenRecentPhotos", "Show recently captured photos."),
@@ -1545,6 +1560,18 @@ pub fn is_server_tool(name: &str) -> bool {
 
 pub fn is_device_tool(name: &str) -> bool {
     catalog_generated::find(name).is_some() && !SERVER_TOOLS.iter().any(|t| t.name == name)
+}
+
+/// A tool name safe for a content-free log line: a recovered device action or
+/// one of this deployment's fixed server tools. Any other name a model produced,
+/// an MCP-prefixed one included, may carry text it made up, so it is reported
+/// as `unlisted`.
+pub fn loggable_tool_name(name: &str) -> &str {
+    if catalog_generated::find(name).is_some() || SERVER_TOOLS.iter().any(|t| t.name == name) {
+        name
+    } else {
+        "unlisted"
+    }
 }
 
 /// Device actions cannot be represented by the text-only
