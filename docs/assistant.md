@@ -67,6 +67,36 @@ closed. New accounts use stock defaults.
 Opt-in diagnostics save only the latest content-free outcome, within the same
 turn deadline. No background work continues in order to save them.
 
+## Camera
+
+When the wearer asks about what is in front of them, such as "tell me what you
+see", "what is this?", or "read this sign", the assistant asks the Pin to look
+with the stock `UnderstandScene` action. The Pin captures one frame, the
+assistant provider selected in Center describes it (Center's image test shows
+whether that provider accepts images), and the assistant answers from that
+description. `CapturePhotograph` only saves a photo to the gallery and the
+assistant never sees it, so a "take a picture and describe it" request looks
+instead.
+
+A stock Pin marks every spoken request in one of three ways, and both
+transports follow the mark:
+
+- After the vision gesture (tap, then hold), the assistant is told that the
+  wearer aimed the Pin, and looks.
+- With no gesture, the assistant decides from the words. This is the default.
+- With the stock **Vision with Gesture only** setting on, a request without
+  the gesture never reaches the camera.
+
+A request looks at most once. After the description comes back, the camera is
+not offered again in that run.
+
+If the Pin says it cannot look, the ai-bus log shows why.
+`assistant catalog resolved` reports `vision_offered` for each call, and
+`assistant tool call not offered` names any tool the model asked for that the
+call did not offer. On the Pin, the `PenumbraVisionTrace` log lines
+`analyze_image_start` and `analyze_image_end` bracket the image's trip to
+Cosmos. If neither appears, no frame left the Pin.
+
 ## Translation
 
 Explicit one-off requests such as `translate "hello" to Polish` keep the source

@@ -854,6 +854,36 @@ export const ASSISTANT_CASES = Object.freeze([
     route: "a1",
     terminal: "answered",
   }),
+  // A spoken request without the vision gesture arrives UNSPECIFIED (stock
+  // `IntentRecognitionAction.visionRequested()`), which leaves the look to the
+  // assistant: the Pin's camera answers it, never a refusal or a saved photo
+  // the assistant cannot see.
+  ...[
+    ["vision-spoken-look", "Tell me what you see."],
+    ["vision-describe-picture", "Take a picture and describe it."],
+    ["vision-look-at-this", "Look at this and tell me what it is."],
+  ].map(([id, prompt]) => Object.freeze({
+    id,
+    prompt,
+    requiredActions: ["UnderstandScene"],
+    forbiddenActions: ["Respond", "CapturePhotograph", "CaptureVideo"],
+    exactActionCounts: { UnderstandScene: 1 },
+    expectedActionInputPatterns: { UnderstandScene: { Question: /\w/u } },
+    route: "a1",
+    terminal: "device_action",
+  })),
+  Object.freeze({
+    // Keeping a photo stays the photo action; the camera guidance must not
+    // turn it into a look.
+    id: "photo-capture-plain",
+    prompt: "Take a photo.",
+    requiredActions: ["CapturePhotograph"],
+    forbiddenActions: ["Respond", "UnderstandScene", "CaptureVideo"],
+    exactActionCounts: { CapturePhotograph: 1 },
+    expectedActionInputs: { CapturePhotograph: {} },
+    route: "a1",
+    terminal: "device_action",
+  }),
   ...[
     [
       "music-control-hypothetical",
